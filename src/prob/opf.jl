@@ -164,9 +164,9 @@ constraints are active in the data model.
 """
 function solve_opf_ptdf(file, model_type::Type, optimizer; full_inverse=false, kwargs...)
     if !full_inverse
-        return solve_model(file, model_type, optimizer, build_opf_ptdf; ref_extensions=[ref_add_connected_components!,ref_add_sm!], kwargs...)
+        return solve_model(file, model_type, optimizer, build_opf_ptdf; ref_extensions=[ref_add_connected_components!, ref_add_sm!], kwargs...)
     else
-        return solve_model(file, model_type, optimizer, build_opf_ptdf; ref_extensions=[ref_add_connected_components!,ref_add_sm_inv!], kwargs...)
+        return solve_model(file, model_type, optimizer, build_opf_ptdf; ref_extensions=[ref_add_connected_components!, ref_add_sm_inv!], kwargs...)
     end
 end
 
@@ -213,25 +213,25 @@ end
 
 
 ""
-function ref_add_sm!(ref::Dict{Symbol, <:Any}, data::Dict{String, <:Any})
+function ref_add_sm!(ref::Dict{Symbol,<:Any}, data::Dict{String,<:Any})
     apply_pm!(_ref_add_sm!, ref, data)
 end
 
 
 ""
-function _ref_add_sm!(ref::Dict{Symbol, <:Any}, data::Dict{String, <:Any})
+function _ref_add_sm!(ref::Dict{Symbol,<:Any}, data::Dict{String,<:Any})
     reference_bus(data) # throws an error if an incorrect number of reference buses are defined
     ref[:sm] = calc_susceptance_matrix(data)
 end
 
 
 ""
-function ref_add_sm_inv!(ref::Dict{Symbol, <:Any}, data::Dict{String, <:Any})
+function ref_add_sm_inv!(ref::Dict{Symbol,<:Any}, data::Dict{String,<:Any})
     apply_pm!(_ref_add_sm_inv!, ref, data)
 end
 
 
 ""
-function _ref_add_sm_inv!(ref::Dict{Symbol, <:Any}, data::Dict{String, <:Any})
+function _ref_add_sm_inv!(ref::Dict{Symbol,<:Any}, data::Dict{String,<:Any})
     ref[:sm] = calc_susceptance_matrix_inv(data)
 end
