@@ -28,12 +28,14 @@ function variable_bus_voltage_angle(pm::AbstractPowerModel; nw::Int=nw_id_defaul
     report && sol_component_value(pm, nw, :bus, :va, ids(pm, nw, :bus), va)
 end
 
+
 "variable: `v[i]` for `i` in `bus`es"
 function variable_bus_voltage_magnitude(pm::AbstractPowerModel; nw::Int=nw_id_default, bounded::Bool=true, report::Bool=true)
     vm = var(pm, nw)[:vm] = JuMP.@variable(pm.model,
         [i in ids(pm, nw, :bus)], base_name="$(nw)_vm",
         start = comp_start_value(ref(pm, nw, :bus, i), "vm_start", 1.0)
     )
+    
 
     if bounded
         for (i, bus) in ref(pm, nw, :bus)
@@ -44,13 +46,57 @@ function variable_bus_voltage_magnitude(pm::AbstractPowerModel; nw::Int=nw_id_de
 
     report && sol_component_value(pm, nw, :bus, :vm, ids(pm, nw, :bus), vm)
 end
+function variable_Khi(pm::AbstractPowerModel; nw::Int=nw_id_default, bounded::Bool=true, report::Bool=true)
+            Khi_c_i = var(pm, nw)[:Khi_c_i] = JuMP.@variable(pm.model,
+            [i in ids(pm, nw, :bus)], base_name="$(nw)_Khi_c_i",
+            start = comp_start_value(ref(pm, nw, :bus, i), "Khi_c_i_start",1000.0)
+            )
+            # for i in ids(pm, nw, :bus)
+            #     if !haskey(ref(pm, nw, :bus,i), :Khi_c_i)
+                   
+            #         ref(pm, nw, :bus, i)["Khi_c_i"]=0.0
+            #     end
+            # end 
+            # for i in ids(pm, nw, :branch)   
+            #     if !haskey(ref(pm, nw, :branch,i), :Khi_c_ij)
+                   
+            #         ref(pm, nw, :branch, i)["Khi_c_ij"]=0.0
+            #         ref(pm, nw, :branch, i)["Khi_s_ij"]=0.0
+            #     end
+            # end 
 
+
+            Khi_c_ij = var(pm, nw)[:Khi_c_ij] = JuMP.@variable(pm.model,
+            [bp in ids(pm, nw, :buspairs)], base_name="$(nw)_Khi_c_ij",
+            start = comp_start_value(ref(pm,nw,:branch,ref(pm, nw, :buspairs, bp)["branch"]), "Khi_c_ij_start", 1000.0)
+            )
+            Khi_s_ij = var(pm, nw)[:Khi_s_ij] = JuMP.@variable(pm.model,
+            [bp in ids(pm, nw, :buspairs)], base_name="$(nw)_Khi_s_ij",
+            start = comp_start_value(ref(pm,nw,:branch,ref(pm, nw, :buspairs, bp)["branch"]), "Khi_s_ij_start",1000.0)
+            )
+            if bounded
+                for (i, bus) in ref(pm, nw, :bus)
+                    JuMP.set_lower_bound(Khi_c_i[i], 0)
+                end
+                for bp in ids(pm, nw, :buspairs)
+                    JuMP.set_lower_bound(Khi_c_ij[bp], 0)
+                    JuMP.set_lower_bound(Khi_s_ij[bp], 0)
+                    # JuMP.set_upper_bound(Khi_c_ij[bp], 0.001)
+                    # JuMP.set_upper_bound(Khi_s_ij[bp], 0.001)
+                end
+            end
+
+            
+            report && sol_component_value_buspair(pm, nw, :buspairs, :Khi_c_ij, ids(pm, nw, :buspairs), Khi_c_ij)
+            report && sol_component_value_buspair(pm, nw, :buspairs, :Khi_s_ij, ids(pm, nw, :buspairs), Khi_s_ij)
+            report && sol_component_value(pm, nw, :bus, :Khi_c_i, ids(pm, nw, :bus), Khi_c_i)
+end
 
 "real part of the voltage variable `i` in `bus`es"
 function variable_bus_voltage_real(pm::AbstractPowerModel; nw::Int=nw_id_default, bounded::Bool=true, report::Bool=true)
     vr = var(pm, nw)[:vr] = JuMP.@variable(pm.model,
         [i in ids(pm, nw, :bus)], base_name="$(nw)_vr",
-        start = comp_start_value(ref(pm, nw, :bus, i), "vr_start", 1.0)
+        start = comp_start_value(ref(pm, nw, :bus, i), "vr_start", 5.0)
     )
 
     if bounded
@@ -120,6 +166,8 @@ function variable_bus_voltage_magnitude_sqr(pm::AbstractPowerModel; nw::Int=nw_i
         lower_bound = 0.0,
         start = comp_start_value(ref(pm, nw, :bus, i), "w_start", 1.001)
     )
+
+    
 
     if bounded
         for (i, bus) in ref(pm, nw, :bus)
@@ -214,11 +262,11 @@ end
 function variable_buspair_voltage_product(pm::AbstractPowerModel; nw::Int=nw_id_default, bounded::Bool=true, report::Bool=true)
     wr = var(pm, nw)[:wr] = JuMP.@variable(pm.model,
         [bp in ids(pm, nw, :buspairs)], base_name="$(nw)_wr",
-        start = comp_start_value(ref(pm, nw, :buspairs, bp), "wr_start", 1.0)
+        start = comp_start_value(ref(pm,nw,:branch,ref(pm, nw, :buspairs, bp)["branch"]), "wr_start", 1.0)
     )
     wi = var(pm, nw)[:wi] = JuMP.@variable(pm.model,
         [bp in ids(pm, nw, :buspairs)], base_name="$(nw)_wi",
-        start = comp_start_value(ref(pm, nw, :buspairs, bp), "wi_start")
+        start = comp_start_value(ref(pm,nw,:branch,ref(pm, nw, :buspairs, bp)["branch"]), "wi_start",1.0)
     )
 
     if bounded

@@ -70,6 +70,7 @@ include("form/bf.jl")
 include("form/wr.jl")
 include("form/wrm.jl")
 include("form/shared.jl")
+include("form/QCAP.jl")  
 
 include("prob/opb.jl")
 include("prob/pf.jl")

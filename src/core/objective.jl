@@ -2,20 +2,45 @@
 function objective_min_fuel_and_flow_cost(pm::AbstractPowerModel; kwargs...)
     expression_pg_cost(pm; kwargs...)
     expression_p_dc_cost(pm; kwargs...)
-
-    return JuMP.@objective(pm.model, Min,
-        sum(
+    # for (n, nw_ref) in nws(pm)
+    #     for (i,branch) in nw_ref[:buspairs]
+    #         println(i,branch)
+    #     end
+    # end
+    Rho=1
+    println("Rho: ", Rho)
+    if typeof(pm) == "QCAPPowerModel"
+        println(typeof(pm))
+        temp=JuMP.@objective(pm.model, Min,
+    sum(
+        sum( var(pm, n,   :pg_cost, i) for (i,gen) in nw_ref[:gen]) +
+        sum( var(pm, n, :p_dc_cost, i) for (i,dcline) in nw_ref[:dcline])+
+        (sum( Rho*var(pm, n, :Khi_c_i, i) for (i,bus) in nw_ref[:bus])+
+        sum( Rho*var(pm, n, :Khi_c_ij, i) for (i,buspairs) in nw_ref[:buspairs])+
+        sum( Rho*var(pm, n, :Khi_s_ij, i) for (i,buspairs) in nw_ref[:buspairs]))
+    for (n, nw_ref) in nws(pm))
+        )
+    else
+        temp=JuMP.@objective(pm.model, Min,sum(
             sum( var(pm, n,   :pg_cost, i) for (i,gen) in nw_ref[:gen]) +
             sum( var(pm, n, :p_dc_cost, i) for (i,dcline) in nw_ref[:dcline])
         for (n, nw_ref) in nws(pm))
     )
+    end
+    
+    return temp
 end
 
 
 ""
 function objective_min_fuel_cost(pm::AbstractPowerModel; kwargs...)
     expression_pg_cost(pm; kwargs...)
-
+    # if Rho!=1.0
+    #     Khi_c_i = var(pm, nw)[:Khi_c_i]
+    #     Khi_c_ij = var(pm, nw)[:Khi_c_ij]
+    #     Khi_s_ij = var(pm, nw)[:Khi_s_ij]
+    # end
+    Rho=1e6
     return JuMP.@objective(pm.model, Min,
         sum(
             sum( var(pm, n, :pg_cost, i) for (i,gen) in nw_ref[:gen])
@@ -116,6 +141,7 @@ end
 "adds pg_cost variables and constraints"
 function expression_pg_cost(pm::AbstractPowerModel; report::Bool=true)
     for (n, nw_ref) in nws(pm)
+ 
         pg_cost = var(pm, n)[:pg_cost] = Dict{Int,Any}()
 
         for (i,gen) in ref(pm, n, :gen)

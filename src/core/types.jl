@@ -80,6 +80,7 @@ mutable struct ACPPowerModel <: AbstractACPModel @pm_fields end
 abstract type AbstractACRModel <: AbstractPowerModel end
 
 
+
 """
 AC power flow Model with rectangular bus voltage variables.
 
@@ -95,6 +96,10 @@ AC power flow Model with rectangular bus voltage variables.
 """
 mutable struct ACRPowerModel <: AbstractACRModel @pm_fields end
 
+
+abstract type AbstractQCAPModel <: AbstractPowerModel end
+
+mutable struct QCAPPowerModel <: AbstractQCAPModel @pm_fields end
 
 ""
 abstract type AbstractACTModel <: AbstractPowerModel end
