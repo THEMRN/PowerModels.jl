@@ -2,12 +2,14 @@
 function objective_min_fuel_and_flow_cost(pm::AbstractPowerModel; kwargs...)
     expression_pg_cost(pm; kwargs...)
     expression_p_dc_cost(pm; kwargs...)
+    # println("pm type: $(typeof(pm))")
+    # println("pm var: $(pm.var)")
 
     return JuMP.@objective(pm.model, Min,
         sum(
-            sum( var(pm, n,   :pg_cost, i) for (i,gen) in nw_ref[:gen]) +
-            sum( var(pm, n, :p_dc_cost, i) for (i,dcline) in nw_ref[:dcline])
-        for (n, nw_ref) in nws(pm))
+            sum(var(pm, n, :pg_cost, i) for (i, gen) in nw_ref[:gen]) + 0
+            # sum(var(pm, n, :p_dc_cost, i) for (i, dcline) in nw_ref[:dcline])
+            for (n, nw_ref) in nws(pm))
     )
 end
 
@@ -18,8 +20,8 @@ function objective_min_fuel_cost(pm::AbstractPowerModel; kwargs...)
 
     return JuMP.@objective(pm.model, Min,
         sum(
-            sum( var(pm, n, :pg_cost, i) for (i,gen) in nw_ref[:gen])
-        for (n, nw_ref) in nws(pm))
+            sum(var(pm, n, :pg_cost, i) for (i, gen) in nw_ref[:gen])
+            for (n, nw_ref) in nws(pm))
     )
 end
 
@@ -33,7 +35,7 @@ The key mathematical properties,
 """
 function calc_pwl_points(ncost::Int, cost::Vector{<:Real}, pmin::Real, pmax::Real; tolerance=1e-2)
     @assert ncost >= 1 && length(cost) >= 2
-    @assert 2*ncost == length(cost)
+    @assert 2 * ncost == length(cost)
     @assert pmin <= pmax
 
     if isinf(pmin) || isinf(pmax)
@@ -57,7 +59,7 @@ function calc_pwl_points(ncost::Int, cost::Vector{<:Real}, pmin::Real, pmax::Rea
 
     last_active = 0
     for i in 1:(ncost-1)
-        mw_0 = points[end - i].mw
+        mw_0 = points[end-i].mw
         #mw_1 = points[end - i + 1].mw
         last_active = ncost - i + 1
         if pmax >= mw_0
@@ -65,7 +67,7 @@ function calc_pwl_points(ncost::Int, cost::Vector{<:Real}, pmin::Real, pmax::Rea
         end
     end
 
-    points = points[first_active : last_active]
+    points = points[first_active:last_active]
 
 
     x1 = points[1].mw
@@ -76,10 +78,10 @@ function calc_pwl_points(ncost::Int, cost::Vector{<:Real}, pmin::Real, pmax::Rea
     if x1 > pmin
         x0 = pmin - tolerance
 
-        m = (y2 - y1)/(x2 - x1)
+        m = (y2 - y1) / (x2 - x1)
 
         if !isnan(m)
-            y0 = y2 - m*(x2 - x0)
+            y0 = y2 - m * (x2 - x0)
             points[1] = (mw=x0, cost=y0)
         else
             points[1] = (mw=x0, cost=y1)
@@ -97,10 +99,10 @@ function calc_pwl_points(ncost::Int, cost::Vector{<:Real}, pmin::Real, pmax::Rea
     if x2 < pmax
         x3 = pmax + tolerance
 
-        m = (y2 - y1)/(x2 - x1)
+        m = (y2 - y1) / (x2 - x1)
 
         if !isnan(m)
-            y3 = m*(x3 - x1) + y1
+            y3 = m * (x3 - x1) + y1
 
             points[end] = (mw=x3, cost=y3)
         else
@@ -118,7 +120,7 @@ function expression_pg_cost(pm::AbstractPowerModel; report::Bool=true)
     for (n, nw_ref) in nws(pm)
         pg_cost = var(pm, n)[:pg_cost] = Dict{Int,Any}()
 
-        for (i,gen) in ref(pm, n, :gen)
+        for (i, gen) in ref(pm, n, :gen)
             pg_terms = [var(pm, n, :pg, i)]
 
             if gen["model"] == 1
@@ -152,7 +154,7 @@ function expression_p_dc_cost(pm::AbstractPowerModel; report::Bool=true)
     for (n, nw_ref) in nws(pm)
         p_dc_cost = var(pm, n)[:p_dc_cost] = Dict{Int,Any}()
 
-        for (i,dcline) in ref(pm, n, :dcline)
+        for (i, dcline) in ref(pm, n, :dcline)
             arc = (i, dcline["f_bus"], dcline["t_bus"])
 
             p_dc_terms = [var(pm, n, :p_dc, arc)]
@@ -185,7 +187,7 @@ end
 
 function _pwl_cost_expression(pm::AbstractPowerModel, x_list::Array{JuMP.VariableRef}, points; nw=0, id=1, var_name="x")
     cost_lambda = JuMP.@variable(pm.model,
-        [i in 1:length(points)], base_name="$(nw)_$(var_name)_cost_lambda_$(id)",
+        [i in 1:length(points)], base_name = "$(nw)_$(var_name)_cost_lambda_$(id)",
         lower_bound = 0.0,
         upper_bound = 1.0
     )
@@ -193,9 +195,9 @@ function _pwl_cost_expression(pm::AbstractPowerModel, x_list::Array{JuMP.Variabl
 
     expr = 0.0
     cost_expr = 0.0
-    for (i,point) in enumerate(points)
-        expr += point.mw*cost_lambda[i]
-        cost_expr += point.cost*cost_lambda[i]
+    for (i, point) in enumerate(points)
+        expr += point.mw * cost_lambda[i]
+        cost_expr += point.cost * cost_lambda[i]
     end
     JuMP.@constraint(pm.model, expr == sum(x_list))
 
@@ -204,7 +206,7 @@ end
 
 function _pwl_cost_expression(pm::AbstractPowerModel, x_list, points; nw=0, id=1, var_name="x")
     cost_lambda = JuMP.@variable(pm.model,
-        [i in 1:length(points)], base_name="$(nw)_$(var_name)_cost_lambda_$(id)",
+        [i in 1:length(points)], base_name = "$(nw)_$(var_name)_cost_lambda_$(id)",
         lower_bound = 0.0,
         upper_bound = 1.0
     )
@@ -212,9 +214,9 @@ function _pwl_cost_expression(pm::AbstractPowerModel, x_list, points; nw=0, id=1
 
     expr = 0.0
     cost_expr = 0.0
-    for (i,point) in enumerate(points)
-        expr += point.mw*cost_lambda[i]
-        cost_expr += point.cost*cost_lambda[i]
+    for (i, point) in enumerate(points)
+        expr += point.mw * cost_lambda[i]
+        cost_expr += point.cost * cost_lambda[i]
     end
     JuMP.@constraint(pm.model, expr == sum(x for x in x_list))
 
@@ -231,12 +233,12 @@ function _polynomial_cost_expression(pm::AbstractPowerModel, x_list::Array{JuMP.
     elseif length(cost_terms) == 1
         return cost_terms[1]
     elseif length(cost_terms) == 2
-        return cost_terms[1] + cost_terms[2]*x
+        return cost_terms[1] + cost_terms[2] * x
     elseif length(cost_terms) == 3
-        return cost_terms[1] + cost_terms[2]*x + cost_terms[3]*x^2
+        return cost_terms[1] + cost_terms[2] * x + cost_terms[3] * x^2
     else # length(cost_terms) >= 4
         cost_nl = cost_terms[4:end]
-        return JuMP.@expression(pm.model, cost_terms[1] + cost_terms[2]*x + cost_terms[3]*x^2 + sum( v*x^(d+2) for (d,v) in enumerate(cost_nl)) )
+        return JuMP.@expression(pm.model, cost_terms[1] + cost_terms[2] * x + cost_terms[3] * x^2 + sum(v * x^(d + 2) for (d, v) in enumerate(cost_nl)))
     end
 end
 
@@ -248,7 +250,7 @@ function _polynomial_cost_expression(pm::AbstractConicModels, x_list::Array{JuMP
     elseif length(cost_terms) == 1
         return cost_terms[1]
     elseif length(cost_terms) == 2
-        return cost_terms[1] + cost_terms[2]*x
+        return cost_terms[1] + cost_terms[2] * x
     elseif length(cost_terms) == 3
         x_lb = sum(JuMP.lower_bound.(x_list))
         x_ub = sum(JuMP.upper_bound.(x_list))
@@ -263,14 +265,14 @@ function _polynomial_cost_expression(pm::AbstractConicModels, x_list::Array{JuMP
         end
 
         x_sqr = JuMP.@variable(pm.model,
-            base_name="$(nw)_$(var_name)_sqr_$(id)",
+            base_name = "$(nw)_$(var_name)_sqr_$(id)",
             lower_bound = x_sqr_lb,
             upper_bound = x_sqr_ub,
             start = 0.0
         )
         JuMP.@constraint(pm.model, [0.5, x_sqr, x] in JuMP.RotatedSecondOrderCone())
 
-        return cost_terms[1] + cost_terms[2]*x + cost_terms[3]*x_sqr
+        return cost_terms[1] + cost_terms[2] * x + cost_terms[3] * x_sqr
     else # length(cost_terms) >= 4
         Memento.error(_LOGGER, "the network cost data features a polynomial cost function that is not compatible with conic mathematical programs.")
     end
@@ -284,12 +286,12 @@ function _polynomial_cost_expression(pm::AbstractPowerModel, x_list, cost_terms;
     elseif length(cost_terms) == 1
         return cost_terms[1]
     elseif length(cost_terms) == 2
-        return JuMP.@expression(pm.model, cost_terms[1] + cost_terms[2]*x)
+        return JuMP.@expression(pm.model, cost_terms[1] + cost_terms[2] * x)
     elseif length(cost_terms) == 3
-        return JuMP.@expression(pm.model, cost_terms[1] + cost_terms[2]*x + cost_terms[3]*x^2)
+        return JuMP.@expression(pm.model, cost_terms[1] + cost_terms[2] * x + cost_terms[3] * x^2)
     else # length(cost_terms) >= 4
         cost_nl = cost_terms[4:end]
-        return JuMP.@expression(pm.model, cost_terms[1] + cost_terms[2]*x + cost_terms[3]*x^2 + sum( v*x^(d+2) for (d,v) in enumerate(cost_nl)) )
+        return JuMP.@expression(pm.model, cost_terms[1] + cost_terms[2] * x + cost_terms[3] * x^2 + sum(v * x^(d + 2) for (d, v) in enumerate(cost_nl)))
     end
 end
 
@@ -306,20 +308,20 @@ function objective_max_loadability(pm::AbstractPowerModel)
     time_elapsed = Dict(n => get(ref(pm, n), :time_elapsed, 1) for n in nws)
 
     load_weight = Dict(n =>
-        Dict(i => get(load, "weight", 1.0) for (i,load) in ref(pm, n, :load)) 
-    for n in nws)
+        Dict(i => get(load, "weight", 1.0) for (i, load) in ref(pm, n, :load))
+                       for n in nws)
 
     #println(load_weight)
 
     return JuMP.@objective(pm.model, Max,
-        sum( 
-            ( 
-            time_elapsed[n]*(
-                sum(z_shunt[n][i] for (i,shunt) in ref(pm, n, :shunt)) +
-                sum(load_weight[n][i]*abs(load["pd"])*z_demand[n][i] for (i,load) in ref(pm, n, :load))
+        sum(
+            (
+                time_elapsed[n] * (
+                    sum(z_shunt[n][i] for (i, shunt) in ref(pm, n, :shunt)) +
+                    sum(load_weight[n][i] * abs(load["pd"]) * z_demand[n][i] for (i, load) in ref(pm, n, :load))
                 )
             )
             for n in nws)
-        )
+    )
 end
 
