@@ -1,18 +1,57 @@
+"""
+Objective: sum of active power flow in specified branches.
+"""
+function objective_sum_branch_flows(pm::AbstractPowerModel; kwargs...)
+    branch_ids = pm.data["target_ids"]
+    is_ac = pm.data["opf_model"] == "AC"
+
+    expr = 0.0
+    for i in branch_ids
+        p_term = var(pm, :p)[(i, ref(pm, :branch, i, "f_bus"), ref(pm, :branch, i, "t_bus"))]
+        q_term = is_ac ? var(pm, :q)[(i, ref(pm, :branch, i, "f_bus"), ref(pm, :branch, i, "t_bus"))] : 0.0
+        expr += p_term^2 + q_term^2
+    end
+
+    return JuMP.@objective(pm.model, Min, expr)
+end
+
 ""
 function objective_min_fuel_and_flow_cost(pm::AbstractPowerModel; kwargs...)
     expression_pg_cost(pm; kwargs...)
     expression_p_dc_cost(pm; kwargs...)
-    # println("pm type: $(typeof(pm))")
-    # println("pm var: $(pm.var)")
 
     return JuMP.@objective(pm.model, Min,
         sum(
             sum(var(pm, n, :pg_cost, i) for (i, gen) in nw_ref[:gen]) + 0
             # sum(var(pm, n, :p_dc_cost, i) for (i, dcline) in nw_ref[:dcline])
-            for (n, nw_ref) in nws(pm))
+            for (n, nw_ref) in nws(pm)
+        )
     )
 end
 
+function objective_sum_branch_flows_and_cost(pm::AbstractPowerModel; kwargs...)
+    expression_pg_cost(pm; kwargs...)
+    expression_p_dc_cost(pm; kwargs...)
+
+    expr1 = sum(
+        sum(var(pm, n, :pg_cost, i) for (i, gen) in nw_ref[:gen])
+        for (n, nw_ref) in nws(pm)
+    )
+
+    branch_ids = pm.data["target_ids"]
+    is_ac = pm.data["opf_model"] == "AC"
+    expr2 = 0.0
+    for i in branch_ids
+        p_term = var(pm, :p)[(i, ref(pm, :branch, i, "f_bus"), ref(pm, :branch, i, "t_bus"))]
+        q_term = is_ac ? var(pm, :q)[(i, ref(pm, :branch, i, "f_bus"), ref(pm, :branch, i, "t_bus"))] : 0.0
+        expr2 += p_term^2 + q_term^2
+    end
+
+    lambda = pm.data["lambda"]
+    expr = expr1 + lambda * expr2
+
+    return JuMP.@objective(pm.model, Min, expr)
+end
 
 ""
 function objective_min_fuel_cost(pm::AbstractPowerModel; kwargs...)

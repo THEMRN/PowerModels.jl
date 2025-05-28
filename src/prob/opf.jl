@@ -1,4 +1,3 @@
-""
 function solve_ac_opf(file, optimizer; kwargs...)
     return solve_opf(file, ACPPowerModel, optimizer; kwargs...)
 end
@@ -14,6 +13,53 @@ function solve_opf(file, model_type::Type, optimizer; kwargs...)
 end
 
 ""
+function solve_custom_opf(file, model_type::Type, optimizer; kwargs...)
+    return solve_model(file, model_type, optimizer, build_custom_pf; kwargs...)
+end
+""
+
+function build_custom_pf(pm::AbstractPowerModel)
+    variable_bus_voltage(pm)
+    variable_gen_power(pm)
+    variable_branch_power(pm)
+    variable_dcline_power(pm)
+
+    obj = get(pm.data, "objective", "opf")
+    if obj == "opf"
+        objective_min_fuel_and_flow_cost(pm)
+    elseif obj == "flow"
+        objective_sum_branch_flows(pm)
+    elseif obj == "opf_flow"
+        objective_sum_branch_flows_and_cost(pm)
+    end
+
+    constraint_model_voltage(pm)
+
+    for i in ids(pm, :ref_buses)
+        constraint_theta_ref(pm, i)
+    end
+
+    for i in ids(pm, :bus)
+        constraint_power_balance(pm, i)
+    end
+
+    for i in ids(pm, :branch)
+        constraint_ohms_yt_from(pm, i)
+        constraint_ohms_yt_to(pm, i)
+
+        constraint_voltage_angle_difference(pm, i)
+
+        constraint_thermal_limit_from(pm, i)
+        constraint_thermal_limit_to(pm, i)
+    end
+
+    for i in ids(pm, :dcline)
+        constraint_dcline_power_losses(pm, i)
+    end
+end
+
+
+""
 function build_opf(pm::AbstractPowerModel)
     variable_bus_voltage(pm)
     variable_gen_power(pm)
@@ -21,7 +67,6 @@ function build_opf(pm::AbstractPowerModel)
     variable_dcline_power(pm)
 
     objective_min_fuel_and_flow_cost(pm)
-
     constraint_model_voltage(pm)
 
     for i in ids(pm, :ref_buses)
@@ -164,9 +209,9 @@ constraints are active in the data model.
 """
 function solve_opf_ptdf(file, model_type::Type, optimizer; full_inverse=false, kwargs...)
     if !full_inverse
-        return solve_model(file, model_type, optimizer, build_opf_ptdf; ref_extensions=[ref_add_connected_components!,ref_add_sm!], kwargs...)
+        return solve_model(file, model_type, optimizer, build_opf_ptdf; ref_extensions=[ref_add_connected_components!, ref_add_sm!], kwargs...)
     else
-        return solve_model(file, model_type, optimizer, build_opf_ptdf; ref_extensions=[ref_add_connected_components!,ref_add_sm_inv!], kwargs...)
+        return solve_model(file, model_type, optimizer, build_opf_ptdf; ref_extensions=[ref_add_connected_components!, ref_add_sm_inv!], kwargs...)
     end
 end
 
@@ -213,25 +258,25 @@ end
 
 
 ""
-function ref_add_sm!(ref::Dict{Symbol, <:Any}, data::Dict{String, <:Any})
+function ref_add_sm!(ref::Dict{Symbol,<:Any}, data::Dict{String,<:Any})
     apply_pm!(_ref_add_sm!, ref, data)
 end
 
 
 ""
-function _ref_add_sm!(ref::Dict{Symbol, <:Any}, data::Dict{String, <:Any})
+function _ref_add_sm!(ref::Dict{Symbol,<:Any}, data::Dict{String,<:Any})
     reference_bus(data) # throws an error if an incorrect number of reference buses are defined
     ref[:sm] = calc_susceptance_matrix(data)
 end
 
 
 ""
-function ref_add_sm_inv!(ref::Dict{Symbol, <:Any}, data::Dict{String, <:Any})
+function ref_add_sm_inv!(ref::Dict{Symbol,<:Any}, data::Dict{String,<:Any})
     apply_pm!(_ref_add_sm_inv!, ref, data)
 end
 
 
 ""
-function _ref_add_sm_inv!(ref::Dict{Symbol, <:Any}, data::Dict{String, <:Any})
+function _ref_add_sm_inv!(ref::Dict{Symbol,<:Any}, data::Dict{String,<:Any})
     ref[:sm] = calc_susceptance_matrix_inv(data)
 end
