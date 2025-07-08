@@ -4,12 +4,15 @@ Objective: sum of active power flow in specified branches.
 function objective_sum_branch_flows(pm::AbstractPowerModel; kwargs...)
     branch_ids = pm.data["target_ids"]
     is_ac = pm.data["opf_model"] == "AC"
+    p_model = pm.data["p_model"]
 
     expr = 0.0
     for i in branch_ids
         p_term = var(pm, :p)[(i, ref(pm, :branch, i, "f_bus"), ref(pm, :branch, i, "t_bus"))]
+        p_term = p_model == "normal" ? p_term : p_term^2
         q_term = is_ac ? var(pm, :q)[(i, ref(pm, :branch, i, "f_bus"), ref(pm, :branch, i, "t_bus"))] : 0.0
-        expr += p_term^2 + q_term^2
+        q_term = q_term^2
+        expr += p_term + q_term
     end
 
     return JuMP.@objective(pm.model, Min, expr)
@@ -40,11 +43,14 @@ function objective_sum_branch_flows_and_cost(pm::AbstractPowerModel; kwargs...)
 
     branch_ids = pm.data["target_ids"]
     is_ac = pm.data["opf_model"] == "AC"
+    p_model = pm.data["p_model"]
     expr2 = 0.0
     for i in branch_ids
         p_term = var(pm, :p)[(i, ref(pm, :branch, i, "f_bus"), ref(pm, :branch, i, "t_bus"))]
+        p_term = p_model == "abs" ? abs(p_term) : p_term^2
         q_term = is_ac ? var(pm, :q)[(i, ref(pm, :branch, i, "f_bus"), ref(pm, :branch, i, "t_bus"))] : 0.0
-        expr2 += p_term^2 + q_term^2
+        q_term = q_term^2
+        expr2 += p_term + q_term
     end
 
     lambda = pm.data["lambda"]
