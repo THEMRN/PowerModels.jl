@@ -16,7 +16,11 @@ end
 function solve_custom_opf(file, model_type::Type, optimizer; kwargs...)
     return solve_model(file, model_type, optimizer, build_custom_pf; kwargs...)
 end
+
 ""
+function solve_load_shedding_opf(file, model_type::Type, optimizer; kwargs...)
+    return solve_model(file, model_type, optimizer, build_opf_with_load_shedding; kwargs...)
+end
 
 function build_custom_pf(pm::AbstractPowerModel)
     variable_bus_voltage(pm)
@@ -25,12 +29,23 @@ function build_custom_pf(pm::AbstractPowerModel)
     variable_dcline_power(pm)
 
     obj = get(pm.data, "objective", "opf")
+    if contains(obj, "shedd")
+        variable_load_power_factor(pm; relax=true)
+        variable_shunt_admittance_factor(pm; relax=true)
+    end
+
     if obj == "opf"
         objective_min_fuel_and_flow_cost(pm)
     elseif obj == "flow"
         objective_sum_branch_flows(pm)
     elseif obj == "opf_flow"
         objective_sum_branch_flows_and_cost(pm)
+    elseif obj == "opf_shedd"
+        objective_min_cost_with_load_shedding_penalty(pm)
+    elseif obj == "flow_shedd"
+        objective_min_branch_flows_with_load_shedding(pm)
+    elseif obj == "opf_flow_shedd"
+        objective_min_cost_and_branch_flows_with_load_shedding(pm)
     end
 
     constraint_model_voltage(pm)
@@ -40,7 +55,48 @@ function build_custom_pf(pm::AbstractPowerModel)
     end
 
     for i in ids(pm, :bus)
-        constraint_power_balance(pm, i)
+        if contains(obj, "shedd")
+            constraint_power_balance_ls(pm, i)
+        else
+            constraint_power_balance(pm, i)
+        end
+    end
+
+    for i in ids(pm, :branch)
+        constraint_ohms_yt_from(pm, i)
+        constraint_ohms_yt_to(pm, i)
+
+        constraint_voltage_angle_difference(pm, i)
+
+        constraint_thermal_limit_from(pm, i)
+        constraint_thermal_limit_to(pm, i)
+        # constraint_power_balance_ls
+    end
+
+    for i in ids(pm, :dcline)
+        constraint_dcline_power_losses(pm, i)
+    end
+end
+
+function build_opf_with_load_shedding(pm::AbstractPowerModel)
+    variable_bus_voltage(pm)
+    variable_gen_power(pm)
+    variable_branch_power(pm)
+    variable_dcline_power(pm)
+
+    variable_load_power_factor(pm; relax=true)
+    variable_shunt_admittance_factor(pm; relax=true)
+
+    objective_min_cost_with_load_shedding_penalty(pm; load_shedding_penalty=-100)
+
+    constraint_model_voltage(pm)
+
+    for i in ids(pm, :ref_buses)
+        constraint_theta_ref(pm, i)
+    end
+
+    for i in ids(pm, :bus)
+        constraint_power_balance_ls(pm, i)
     end
 
     for i in ids(pm, :branch)
@@ -57,7 +113,6 @@ function build_custom_pf(pm::AbstractPowerModel)
         constraint_dcline_power_losses(pm, i)
     end
 end
-
 
 ""
 function build_opf(pm::AbstractPowerModel)
