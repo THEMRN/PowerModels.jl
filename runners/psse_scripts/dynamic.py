@@ -7,7 +7,11 @@ import plotly.io as pio
 from pathlib import Path
 import json
 import datetime as dt
-import re  # added for parsing load shed events
+import re
+
+# specify your PSSE installation path here, in raw string format, i.e., r"your_path_here"
+# 36.1 example path:
+PSSE_PATH = r"C:\Program Files\PTI\PSSE36\36.1"
 
 
 class Tee(object):
@@ -27,12 +31,13 @@ class Tee(object):
 print("-- Starting dynamic simulation script...")
 print(f"-- Python version: {sys.version.split()[0]}  executable: {sys.executable}")
 
+
 # set PSSE environment variables
-os.environ["PATH"] = r"C:\Program Files\PTI\PSSE36\36.1\PSSBIN;" + os.environ["PATH"]
-os.environ["PSSPY_PATH"] = r"C:\Program Files\PTI\PSSE36\36.1\PSSPY311"
+os.environ["PATH"] = f"{PSSE_PATH}\\PSSBIN;" + os.environ["PATH"]
+os.environ["PSSPY_PATH"] = f"{PSSE_PATH}\\PSSPY311"
 # add PSSE modules to the system path
-sys.path.append("C:\\Program Files\\PTI\\PSSE36\\36.1\\PSSPY311")
-sys.path.append("C:\\Program Files\\PTI\\PSSE36\\36.1\\PSSLIB")
+sys.path.append(f"{PSSE_PATH}\\PSSPY311")
+sys.path.append(f"{PSSE_PATH}\\PSSLIB")
 
 # case file paths
 try:
@@ -68,9 +73,6 @@ sys.stderr = Tee(sys.stderr, f)
 # psspy.progress_output(2, log_file, [0, 0])
 # psspy.progress_output(1, "", [0, 0])
 
-# raw_file_pth = r"D:\UofT\work\Julia\PM\PowerModels.jl\cases\psse\savnw\savnw.raw"
-# dyr_file_pth = r"D:\UofT\work\Julia\PM\PowerModels.jl\cases\psse\savnw\savnw.dyr"
-# output_dir = Path(r"D:\UofT\work\Julia\PM\PowerModels.jl\cases\psse\savnw\test")
 # read the raw file
 psspy.read(0, raw_file_pth)
 
@@ -101,6 +103,7 @@ psspy.solv([0, 0, 0, 0, 0, 0])
 psspy.solv([0, 0, 0, 0, 0, 0])
 print("-- Power flow solved successfully.")
 # ------------------------------------------------------------------
+
 # build excel report (bus, gen, load, branch)
 print("-- Building solved power flow report...")
 
@@ -298,7 +301,6 @@ for key, values in chandata_dict.items():
 
 # print(df.head())
 
-# Replace matplotlib plotting block with plotly
 keywords = ["POWR", "FREQ", "VOLT", "PLOD"]
 keywords = ["FREQ", "POWR"]
 keyword_map = {
@@ -328,7 +330,7 @@ for i, keyword in enumerate(keywords, start=1):
         fig.add_annotation(row=i, col=1, text=f"No channels found for {keyword}", showarrow=False)
         continue
 
-    # Use legend groups so items are grouped and can be toggled together
+    # use legend groups so items are grouped and can be toggled together
     for col in cols_to_plot:
         fig.add_trace(
             go.Scatter(
@@ -343,7 +345,7 @@ for i, keyword in enumerate(keywords, start=1):
         )
         first_in_group = False
 
-    # Add horizontal reference lines for frequency subplot
+    # horizontal reference lines for frequency subplot
     if keyword == "FREQ":
         freq_lines = [
             {"y": 57, "color": "red", "style": "dash", "time": 0, "width": 1},
@@ -390,14 +392,13 @@ if increase_height:
     extra_pad = 200  # legend/margins
     fig.update_layout(height=2 * per_row_height + extra_pad)
 
-# just before building the figure (ensure a renderer is set)
 pio.renderers.default = "browser"
 
 fig.show()
 print("-- Interactive Plotly window (browser) opened.")
 
 # ------------------------------------------------------------------
-# Analyze Frequency Channels
+# analyze Frequency Channels
 print("-- Analyzing Frequency channels...")
 freq_devs = {}
 max_dev_overall = -1.0
@@ -439,7 +440,7 @@ if bus_max_overall is not None:
     print(f"-- Bus with maximum frequency deviation: Bus {bus_max_overall} (Value: {val_max_overall:.4f})")
 
 # ------------------------------------------------------------------
-# Parse load shedding (LDSTBL) events from the log file
+# parse load shedding (LDSTBL) events from the log file
 try:
     events = []
     with open(log_file, "r") as lf:
