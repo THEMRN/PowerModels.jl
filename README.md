@@ -1,92 +1,82 @@
-# PowerModels.jl
+# Islanding Operation & Dynamic Simulation Project
 
-<img src="https://lanl-ansi.github.io/PowerModels.jl/dev/assets/logo.svg" align="left" width="200" alt="PowerModels logo">
+This repository is a modified fork of [PowerModels.jl](https://github.com/lanl-ansi/PowerModels.jl), customized for power system islanding optimization and dynamic validation using Siemens PSS®E.
 
-Status:
-[![CI](https://github.com/lanl-ansi/PowerModels.jl/workflows/CI/badge.svg)](https://github.com/lanl-ansi/PowerModels.jl/actions?query=workflow%3ACI)
-[![codecov](https://codecov.io/gh/lanl-ansi/PowerModels.jl/branch/master/graph/badge.svg)](https://codecov.io/gh/lanl-ansi/PowerModels.jl)
-[![Documentation](https://github.com/lanl-ansi/PowerModels.jl/workflows/Documentation/badge.svg)](https://lanl-ansi.github.io/PowerModels.jl/stable/)
-</p>
+The workflow optimizes network separation (islanding) using Julia/PowerModels and validates the stability of the result using PSS®E dynamic simulation (Python).
 
-PowerModels.jl is a Julia/JuMP package for Steady-State Power Network Optimization.
-It is designed to enable computational evaluation of emerging power network formulations and algorithms in a common platform.
-The code is engineered to decouple problem specifications (e.g. Power Flow, Optimal Power Flow, ...) from the power network formulations (e.g. AC, DC-approximation, SOC-relaxation, ...).
-This enables the definition of a wide variety of power network formulations and their comparison on common problem specifications.
+## Prerequisites
 
-**Core Problem Specifications**
-* Power Flow (pf)
-* Optimal Power Flow (opf)
-* Optimal Transmission Switching (ots)
-* Transmission Network Expansion Planning (tnep)
+Before running the simulation, ensure your system meets the following requirements:
 
-**Core Network Formulations**
-* AC (polar and rectangular coordinates)
-* DC Approximation (polar coordinates)
-* LPAC Approximation (polar coordinates)
-* SDP Relaxation (W-space)
-* SOC Relaxation (W-space)
-* QC Relaxation (W+L-space)
-* IV (rectangular coordinates)
+*   **Operating System:** Windows (Required for PSS®E)
+*   **PSS®E:** Version 36 (36.1 recommended)
+*   **Python:** Version 3.11 (Exact version required for PSS®E 36 compatibility)
+*   **Julia:** Latest stable version
 
-**Network Data Formats**
-* Matpower ".m" files
-* PTI ".raw" files (PSS(R)E v33 specification)
+## Installation & Setup
 
+### 1. Fetch the Code
+Clone the repository and switch to the `islanding` branch (if not already there):
 
-## Documentation
-
-The package [documentation](https://lanl-ansi.github.io/PowerModels.jl/stable/) includes a variety of useful information including a [quick-start guide](https://lanl-ansi.github.io/PowerModels.jl/stable/quickguide/), [network model specification](https://lanl-ansi.github.io/PowerModels.jl/stable/network-data/), and [baseline results](https://lanl-ansi.github.io/PowerModels.jl/stable/experiment-results/).
-
-Additionally, these presentations provide a brief introduction to various aspects of PowerModels,
-- [Network Model Update, v0.6](https://youtu.be/j7r4onyiNRQ)
-- [PSCC 2018](https://youtu.be/AEEzt3IjLaM)
-- [JuMP Developers Meetup 2017](https://youtu.be/W4LOKR7B4ts)
-
-
-## Development
-
-Community-driven development and enhancement of PowerModels are welcome and encouraged. Please fork this repository and share your contributions to the master with pull requests.  See [CONTRIBUTING.md](https://github.com/lanl-ansi/PowerModels.jl/blob/master/CONTRIBUTING.md) for code contribution guidelines.
-
-
-## Acknowledgments
-
-This code has been developed as part of the Advanced Network Science Initiative at Los Alamos National Laboratory.
-The primary developer is Carleton Coffrin (@ccoffrin) with support from the following contributors,
-- Per Aaslid (@peraaslid) SINTEF ER, Branch flow storage model and linear branch flow formulation
-- Juan Luis Barbería (@jbarberia) UTN-BA, PSS(R)E v33 data export, Jacobian support for basic network data
-- Russell Bent (@rb004f) LANL, Matpower export, TNEP problem specification
-- Jose Daniel Lara (@jd-lara) Berkeley, Julia v1.0 compatibility
-- Jay Dave (@jay-dave) KU Leuven, LPAC for TNEP and OTS problems
-- Hakan Ergun (@hakanergun) KU Leuven, HVDC lines
-- David Fobes (@pseudocubic) LANL, PSS(R)E v33 data support
-- Rory Finnegan (@rofinn) Invenia, Memento Logging
-- Frederik Geth (@frederikgeth) CSIRO, storage modeling advise, Branch Flow and current-voltage formulation
-- Rahmat Heidari (@hei06j) CSIRO, improved PSS(R)E data support
-- Jonas Kersulis (@kersulis) University of Michigan, Sparse SDP formulation
-- Miles Lubin (@mlubin) MIT, Julia/JuMP advise
-- Yeesian Ng (@yeesian) MIT, Documenter.jl setup
-- Kaarthik Sundar (@kaarthiksundar) LANL, OBBT utility
-- Mathieu Tanneau (@mtanneau) Georgia Tech, PTDF matrix computation, performance and memory improvements
-- Byron Tasseff (@tasseff) LANL, multi-infrastructure updates
-
-
-## Citing PowerModels
-
-If you find PowerModels useful in your work, we kindly request that you cite the following [publication](https://ieeexplore.ieee.org/document/8442948/):
+```bash
+git clone https://github.com/THEMRN/PowerModels.jl.git
+cd PowerModels.jl
+git checkout islanding
 ```
-@inproceedings{8442948,
-  author = {Carleton Coffrin and Russell Bent and Kaarthik Sundar and Yeesian Ng and Miles Lubin},
-  title = {PowerModels.jl: An Open-Source Framework for Exploring Power Flow Formulations},
-  booktitle = {2018 Power Systems Computation Conference (PSCC)},
-  year = {2018},
-  month = {June},
-  pages = {1-8},
-  doi = {10.23919/PSCC.2018.8442948}
-}
+
+### 2. Configure Python Environment
+The simulation script requires specific Python libraries. Ensure you are using **Python 3.11**.
+
+Install the required packages:
+
+```bash
+pip install pandas plotly xlsxwriter openpyxl
 ```
-Citation of the original works for problem definitions (e.g. OPF) and [power flow formulations](https://lanl-ansi.github.io/PowerModels.jl/stable/formulation-details/) (e.g. SOC) is also encouraged when publishing works that use PowerModels.
 
+### 3. Configure PSS®E Path
+You must point the simulation script to your local PSS®E installation.
 
-## License
+1.  Open the file `runners/psse_scripts/dynamic.py` in your editor.
+2.  Locate the `PSSE_PATH` variable (approx. line 15).
+3.  Update the path to match your system's PSS®E installation directory.
 
-This code is provided under a BSD license as part of the Multi-Infrastructure Control and Optimization Toolkit (MICOT) project, C15024.
+    ```python
+    # Example configuration:
+    PSSE_PATH = r"C:\Program Files\PTI\PSSE36\36.1"
+    ```
+
+### 4. Configure Julia Environment
+Initialize the Julia project and install dependencies.
+
+Open a terminal in the project root (`PowerModels.jl/`) and run:
+```bash
+julia --project=. -e "using Pkg; Pkg.instantiate(); Pkg.add(\"Ipopt\")"
+```
+*Note: `Ipopt` is required for the optimization solver but may not be in the default dependencies list.*
+
+## Usage
+
+The main entry point for the workflow is the `runners/islanding.jl` script.
+
+1.  Open `runners/islanding.jl` to review configuration settings (e.g., target cases, objective functions).
+2.  Run the islanding simulation:
+
+```bash
+julia --project=. runners/islanding.jl
+```
+
+### What This Script Does
+1.  **Optimization:** Uses PowerModels.jl to determine optimal generation dispatch and load shedding for the islanded network.
+2.  **Report Generation:** Creates detailed Excel reports of the steady-state solution.
+3.  **Dynamic Simulation:** Automatically calls `runners/psse_scripts/dynamic.py` to:
+    *   Load the case in PSS®E.
+    *   Perform dynamic stability simulation (e.g., line tripping).
+    *   Plot results (Frequency, Voltage, etc.) using Plotly.
+
+## Project Structure
+
+*   **`src/`**: Core PowerModels.jl source code (modified).
+*   **`runners/`**: Custom scripts for this project.
+    *   `islanding.jl`: Main driver script.
+    *   `psse_scripts/dynamic.py`: Python driver for PSS®E.
+*   **`cases/`**: Network data files (matpower/psse).
