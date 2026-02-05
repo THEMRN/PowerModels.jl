@@ -10,3 +10,7 @@ docs/.documenter
 .project
 .tags
 .vscode/
+*.xlsx
+cases/
+raw/
+results/

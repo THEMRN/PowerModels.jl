@@ -5,6 +5,8 @@ repo = "https://github.com/lanl-ansi/PowerModels.jl"
 version = "0.21.3"
 
 [deps]
+Combinatorics = "861a8166-3701-5b0c-9a16-15d98fcdc6aa"
+Graphs = "86223c79-3864-5bf0-83f7-82e725a168b6"
 InfrastructureModels = "2030c09a-7f63-5d83-885d-db604e0e9cc0"
 JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
 JSON3 = "0f8b85d8-7281-11e9-16c2-39a750bddbf1"
@@ -17,6 +19,8 @@ SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 XLSX = "fdbf4ff8-1666-58a4-91e7-1b58723a45e0"
 
 [compat]
+Combinatorics = "1.0.3"
+Graphs = "1.13.1"
 HiGHS = "~1"
 InfrastructureModels = "~0.6, ~0.7"
 Ipopt = "~1"
