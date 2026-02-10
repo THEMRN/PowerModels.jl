@@ -75,16 +75,9 @@ function objective_min_branch_flows_with_load_shedding(pm::AbstractPowerModel; k
 
     # branch flow penalty
     branch_ids = pm.data["target_ids"]
-    is_ac = pm.data["opf_model"] == "AC"
+    # is_ac = pm.data["opf_model"] == "AC"
     p_model = pm.data["p_model"]
-    branch_flow_penalty = 0.0
-    for i in branch_ids
-        p_term = var(pm, :p)[(i, ref(pm, :branch, i, "f_bus"), ref(pm, :branch, i, "t_bus"))]
-        p_term = p_model == "abs_sum" ? p_term : p_term^2
-        q_term = is_ac ? var(pm, :q)[(i, ref(pm, :branch, i, "f_bus"), ref(pm, :branch, i, "t_bus"))] : 0.0
-        q_term = q_term^2
-        branch_flow_penalty += p_term + q_term
-    end
+    lambda = pm.data["lambda"]
 
     # load shedding penalty
     load_shed_penalty_cost = 0.0
@@ -95,9 +88,36 @@ function objective_min_branch_flows_with_load_shedding(pm::AbstractPowerModel; k
         end
     end
 
-    # combine all 
-    lambda = pm.data["lambda"]
-    expr = lambda * branch_flow_penalty + load_shed_penalty_cost
+    # branch flow expression
+    flow_expr = 0.0
+    for i in branch_ids
+        p_term = var(pm, :p)[(i, ref(pm, :branch, i, "f_bus"), ref(pm, :branch, i, "t_bus"))]
+        if p_model == "abs_sum"
+            flow_expr += p_term
+            # elseif p_model == "sum_abs"
+            #     t = JuMP.@variable(pm.model, base_name = "abs_flow_$(i)", lower_bound = 0.0)
+            #     JuMP.@constraint(pm.model, p_term <= t)
+            #     JuMP.@constraint(pm.model, p_term >= -t)
+            #     flow_expr += t
+        elseif p_model == "squared"
+            flow_expr += p_term^2
+        else
+            Memento.error(_LOGGER, "unknown p_model type: $(p_model)")
+        end
+    end
+
+
+    if p_model == "abs_sum"
+        # Linearize absolute value: min t such that -t <= expr <= t
+        t = JuMP.@variable(pm.model, base_name = "abs_sum_flow", lower_bound = 0.0)
+        JuMP.@constraint(pm.model, flow_expr <= t)
+        JuMP.@constraint(pm.model, flow_expr >= -t)
+        expr = lambda * t + load_shed_penalty_cost
+    elseif p_model == "squared"
+        expr = lambda * flow_expr + load_shed_penalty_cost
+    else
+        Memento.error(_LOGGER, "unknown p_model type: $(p_model)")
+    end
 
     return JuMP.@objective(pm.model, Min, expr)
 end

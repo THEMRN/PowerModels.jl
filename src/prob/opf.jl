@@ -29,7 +29,7 @@ function build_custom_pf(pm::AbstractPowerModel)
     variable_dcline_power(pm)
 
     obj = get(pm.data, "objective", "opf")
-    if contains(obj, "shedd")
+    if contains(obj, "shed")
         variable_load_power_factor(pm; relax=true)
         variable_shunt_admittance_factor(pm; relax=true)
     end
@@ -40,11 +40,11 @@ function build_custom_pf(pm::AbstractPowerModel)
         objective_sum_branch_flows(pm)
     elseif obj == "opf_flow"
         objective_sum_branch_flows_and_cost(pm)
-    elseif obj == "opf_shedd"
+    elseif obj == "opf_shed"
         objective_min_cost_with_load_shedding_penalty(pm)
-    elseif obj == "flow_shedd"
+    elseif obj == "flow_shed"
         objective_min_branch_flows_with_load_shedding(pm)
-    elseif obj == "opf_flow_shedd"
+    elseif obj == "opf_flow_shed"
         objective_min_cost_and_branch_flows_with_load_shedding(pm)
     end
 
@@ -55,7 +55,7 @@ function build_custom_pf(pm::AbstractPowerModel)
     end
 
     for i in ids(pm, :bus)
-        if contains(obj, "shedd")
+        if contains(obj, "shed")
             constraint_power_balance_ls(pm, i)
         else
             constraint_power_balance(pm, i)
