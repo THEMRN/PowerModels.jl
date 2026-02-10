@@ -12,6 +12,23 @@ function prepare_for_pti_export(network_data)
         else
             load["status"] = 1  # Default to connected if no status is provided
         end
+        if haskey(load, "pd") && abs(load["pd"]) < 1e-3
+            load["pd"] = 0.0
+        end
+        if haskey(load, "qd") && abs(load["qd"]) < 1e-3
+            load["qd"] = 0.0
+        end
+    end
+
+    # prevent negative active power generation
+    for (i, gen) in network_data["gen"]
+        if haskey(gen, "pg") && gen["pg"] < 0
+            warning("Generator $i has negative active power generation (pg=$(gen["pg"])). Setting pg to 0 for PTI export.")
+            gen["pg"] = 0.0
+        end
+        # if haskey(gen, "qg") && gen["qg"] < 0
+        #     gen["qg"] = 0.0
+        # end
     end
 
     return network_data
@@ -69,13 +86,16 @@ function add_load_shedding_penalty(network_data; uniform=false, uniform_penalty=
     else
         # Apply specific penalties to each load based on the provided list
         # println("Applying specific load shedding penalties:")
+        # iterate over penalties, find components at the bus, and apply the penalty
+        # and also apply a default penalty to loads not in the list
         for (i, load) in network["load"]
-            if haskey(penalties, i)
-                # println("---------------------------------------------------------------------")
-                # println("Applying shedding penalty of $(penalties[i]) to load $i")
-                load["shed_penalty"] = penalties[i]
+            load_bus = load["load_bus"]
+            if haskey(penalties, string(load_bus))
+                penalty = penalties[string(load_bus)]
+                # println("  Load at bus $(load_bus) (load $i): penalty = $penalty")
+                load["shed_penalty"] = penalty
             else
-                load["shed_penalty"] = 1e5   # Zero penalty if not specified
+                load["shed_penalty"] = lambda^2   # Default penalty if not specified
             end
         end
     end

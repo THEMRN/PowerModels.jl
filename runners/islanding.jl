@@ -8,83 +8,145 @@ include("line_flow.jl")
 include("utils.jl")
 
 
-# Load the network data ------------------------ACTIVSg200
-src_case_path = "cases/psse/savnw"
-case_name = basename(src_case_path)
-network_data = PowerModels.parse_file("$(src_case_path)/$(case_name).raw", import_all=true);
+# ==================== Configuration Mode =====================
+# Set to true to read all settings from an external JSON config file.
+# Set to false to use the hardcoded values defined below.
+use_config_file = false
+config_file_path = joinpath(@__DIR__, "config.json")
+# =============================================================
 
-# settings ------------------------------------
-objective = "flow"    # "opf", "flow", "opf_flow", "flow_shedd", "opf_flow_shedd"
-# if objective contains flow minimization
-# target_lines = find_branches_by_bus_pairs(network_data, [(202, 152), (202, 201), (202, 203)])  # bus 202
-# target_lines = find_branches_by_bus_pairs(network_data, [(3004, 152), (3004, 3002), (3004, 3005)]) # bus 3004
-
-# target_lines = find_branches_by_bus_pairs(network_data, [(3001, 3002), (3005, 3004), (3005, 3006), (3005, 3008), (3005, 3007)]) # island on top
-# target_lines = find_branches_by_bus_pairs(network_data, [(3007, 3008), (154, 3008), (3005, 3008)]) # island on left
-# target_lines = find_branches_by_bus_pairs(network_data, [(201, 151), (201, 202), (205, 203), (205, 154)]) # island on bottom
-# target_lines = find_branches_by_bus_pairs(network_data, [(201, 151), (202, 152), (203, 154), (205, 154)]) # another island on bottom with 2 loads
-target_lines = find_branches_by_bus_pairs(network_data, [(154, 3008), (154, 153), (152, 153), (152, 3004)]) # north-south seperation    
-
-lambda = 50000                  # for the flow minimization weight
-
-# more settings -------------------------------
-opf_model = "AC"
-p_model = "squared"  # "abs_sum", "squared"
-uniform_penalty = 10
-uniform_shedding = false
-load_shedding_penalties = Dict(
-# "8" => 1,
-# "5" => 10
-)
-
-run_psse = true
+function load_config(path::String)
+    raw = read(path, String)
+    return JSON3.read(raw, Dict{String,Any})
+end
 
 
-# network modifications ------------------------
-modified_network_data = add_load_shedding_penalty(
-    network_data;
-    uniform=uniform_shedding,
-    uniform_penalty=uniform_penalty,
-    penalties=load_shedding_penalties
-)
+if use_config_file
+    println("Loading configuration from: $config_file_path")
+    cfg = load_config(config_file_path)
 
-# bus-gen map: bus_id => [gen_id, pmax, qmax] 
-# {101: [1, 8.1, 6], 102: [2, 8.1, 6],  206: [3, 9, 6], 211: [4, 6.16, 4], 3011: [5, 9, 6], 3018: [6, 1.17, 0.8]}
-# bus-load map: bus_id => [load_id, pd, qd]
-# {153: [1, 2, 1], 154: [[2, 6, 4.5], [3, 4, 3.5]], 203: [4, 3, 1.5], 205: [5, 12, 7], 3005: [6, 1, 0.5], 3007: [7, 2, 0.75], 3008: [8, 2, 0.75]}
+    # load the network data
+    src_case_path = cfg["src_case_path"]
+    case_name = basename(src_case_path)
+    network_data = PowerModels.parse_file("$(src_case_path)/$(case_name).raw", import_all=true)
 
-# island on top ------------------------------------
-# modified_network_data["load"]["6"]["pd"] = 4.0    # for the top island case make it more stable       load default: 1.0, pmax: 9.0 
-# island on left -----------------------------------
-# modified_network_data["load"]["8"]["pd"] = 1.0      # for the left side case, so the gen can supply   load default: 2.0, pmax: 1.17
-# island on bottom (one load) ----------------------
-# modified_network_data["load"]["5"]["pd"] = 5.0    # for the bottom side case                          load default: 12.0, pmax: 15.16
-# island on bottom (two loads) ---------------------
-# modified_network_data["load"]["5"]["pd"] = 8.0    # for the bottom side second case                     load default: 12.0, pmax: 15.16
-# modified_network_data["load"]["4"]["pd"] = 2.5    # for the bottom side second case                     load default: 3.0, pmax: 15.16
-# north south seperation --------------------------
-scaling_buses = [3005, 3007, 3008, 153]
-scale_percent = 60
-scale_loads!(modified_network_data, scale_percent, scaling_buses)
+    # settings
+    objective = get(cfg, "objective", "flow")
+    bus_pairs = [(Int(p[1]), Int(p[2])) for p in cfg["target_bus_pairs"]]
+    target_lines = find_branches_by_bus_pairs(network_data, bus_pairs)
+    lambda = get(cfg, "lambda", 50000.0)
+    run_psse = get(cfg, "run_psse", true)
+    uniform_shedding = get(cfg, "uniform_shedding", false)
+    uniform_penalty = get(cfg, "uniform_penalty", lambda / 10)
+    opf_model = get(cfg, "opf_model", "AC")
+    p_model = get(cfg, "p_model", "squared")
 
-# # modified_network_data["load"]["2"]["qd"] = 6.0
-# # modified_network_data["load"]["3"]["qd"] = 4.0
-# modified_network_data["gen"]["5"]["qmax"] = 10.0
-# modified_network_data["gen"]["6"]["qmax"] = 10.0
-# for load in keys(modified_network_data["load"])
-#     modified_network_data["load"][load]["qd"] *= 1.17
-# end
-# # modified_network_data["load"]["4"]["qd"] = 1.5
+    # load shedding penalties
+    raw_penalties = get(cfg, "load_shedding_penalties", Dict())
+    load_shedding_penalties = Dict{String,Float64}(string(k) => Float64(v) for (k, v) in raw_penalties)
+
+    # network modifications
+    modified_network_data = add_load_shedding_penalty(
+        network_data;
+        uniform=uniform_shedding,
+        uniform_penalty=uniform_penalty,
+        penalties=load_shedding_penalties
+    )
+
+    # apply load modifications from config  (load_id => {field => value})
+    # raw_load_mods = get(cfg, "load_modifications", Dict())
+    # for (load_id, mods) in raw_load_mods
+    #     for (field, value) in mods
+    #         modified_network_data["load"][string(load_id)][string(field)] = Float64(value)
+    #     end
+    # end
+
+    # apply load scaling from config
+    if haskey(cfg, "load_scaling")
+        sc = cfg["load_scaling"]
+        scaling_buses = Int[Int(b) for b in sc["buses"]]
+        scale_percent = sc["scale_percent"]
+        scale_loads!(modified_network_data, scale_percent, scaling_buses)
+    end
+
+else
+    # ------------------- Hardcoded settings ----------------------
+
+    # Load the network data ------------------------ACTIVSg200
+    src_case_path = "cases/psse/savnw"
+    case_name = basename(src_case_path)
+    network_data = PowerModels.parse_file("$(src_case_path)/$(case_name).raw", import_all=true)
+
+    # settings ------------------------------------
+    objective = "flow_shed"    # "opf", "flow", "opf_flow", "flow_shed", "opf_flow_shed"
+    # if objective contains flow minimization
+    # target_lines = find_branches_by_bus_pairs(network_data, [(202, 152), (202, 201), (202, 203)])  # bus 202
+    # target_lines = find_branches_by_bus_pairs(network_data, [(3004, 152), (3004, 3002), (3004, 3005)]) # bus 3004
+
+    # target_lines = find_branches_by_bus_pairs(network_data, [(3001, 3002), (3005, 3004), (3005, 3006), (3005, 3008), (3005, 3007)]) # island on top
+    # target_lines = find_branches_by_bus_pairs(network_data, [(3007, 3008), (154, 3008), (3005, 3008)]) # island on left
+    # target_lines = find_branches_by_bus_pairs(network_data, [(201, 151), (201, 202), (205, 203), (205, 154)]) # island on bottom
+    # target_lines = find_branches_by_bus_pairs(network_data, [(201, 151), (202, 152), (203, 154), (205, 154)]) # another island on bottom with 2 loads
+    target_lines = find_branches_by_bus_pairs(network_data, [(154, 3008), (154, 153), (152, 153), (152, 3004)]) # north-south seperation    
+
+    lambda = 50000                  # for the flow minimization weight
+
+    # more settings -------------------------------
+    opf_model = "AC"
+    p_model = "squared"  # "abs_sum", "squared"
+    uniform_penalty = 10
+    uniform_shedding = false
+    load_shedding_penalties = Dict(
+        # "3005" => 10000.0,  # bus 3005 load
+        # "3007" => 10000.0,  
+        # "3008" => lambda / 2,
+        # "153" => 100.0,  
+        #------
+        "205" => lambda / 2,
+    )
+
+    run_psse = true
+
+
+    # network modifications ------------------------
+    modified_network_data = add_load_shedding_penalty(
+        network_data;
+        uniform=uniform_shedding,
+        uniform_penalty=uniform_penalty,
+        penalties=load_shedding_penalties
+    )
+
+    # bus-gen map: bus_id => [gen_id, pmax, qmax] 
+    # {101: [1, 8.1, 6], 102: [2, 8.1, 6],  206: [3, 9, 6], 211: [4, 6.16, 4], 3011: [5, 9, 6], 3018: [6, 1.17, 0.8]}
+    # bus-load map: bus_id => [load_id, pd, qd]
+    # {153: [1, 2, 1], 154: [[2, 6, 4.5], [3, 4, 3.5]], 203: [4, 3, 1.5], 205: [5, 12, 7], 3005: [6, 1, 0.5], 3007: [7, 2, 0.75], 3008: [8, 2, 0.75]}
+
+    # island on top ------------------------------------
+    # modified_network_data["load"]["6"]["pd"] = 4.0    # for the top island case make it more stable       load default: 1.0, pmax: 9.0 
+    # island on left -----------------------------------
+    # modified_network_data["load"]["8"]["pd"] = 1.0      # for the left side case, so the gen can supply   load default: 2.0, pmax: 1.17
+    # island on bottom (one load) ----------------------
+    # modified_network_data["load"]["5"]["pd"] = 5.0    # for the bottom side case                          load default: 12.0, pmax: 15.16
+    # island on bottom (two loads) ---------------------
+    # modified_network_data["load"]["5"]["pd"] = 8.0    # for the bottom side second case                     load default: 12.0, pmax: 15.16
+    # modified_network_data["load"]["4"]["pd"] = 2.5    # for the bottom side second case                     load default: 3.0, pmax: 15.16
+    # north south seperation --------------------------
+    scaling_buses = [3005, 3007, 3008, 153]
+    scale_percent = 60
+    scale_loads!(modified_network_data, scale_percent, scaling_buses)
+
+end  # use_config_file
 
 
 # define objectives and power model modes 
 const ObjectiveType = Dict(
+    "pf" => "opf",
     "opf" => "opf",
     "flow" => "flow",
     "opf_flow" => "opf_flow",
-    "opf_shedd" => "opf_shedd",
-    "flow_shedd" => "flow_shedd",
-    "opf_flow_shedd" => "opf_flow_shedd",
+    "opf_shed" => "opf_shed",
+    "flow_shed" => "flow_shed",
+    "opf_flow_shed" => "opf_flow_shed",
 )
 const PowerModelType = Dict(
     "DC" => DCPPowerModel,
@@ -120,6 +182,30 @@ for line in target_lines
 end
 println("Total flow through target lines: $flow_sum")
 println("Total absolute flow through target lines: $abs_flow_sum")
+if occursin("shed", objective)
+    println("\n--- Load Serving Status ---")
+    println("Bus \t PDn \t PD \t Shed \t Shed Percentage")
+    for (i, load) in modified_network_data["load"]
+        if haskey(result["solution"]["load"][i], "status")
+            status = result["solution"]["load"][i]["status"]
+            if status >= 1.0
+                continue
+            end
+            load_bus = load["load_bus"]
+            original_pd = load["pd"]
+            served_pd = result["solution"]["load"][i]["pd"]
+            shed_amount = original_pd - served_pd
+            shed_percentage = (shed_amount / original_pd) * 100
+
+            println("$(load_bus) \t $(original_pd) \t $(round(served_pd, digits=2)) \t $(round(shed_amount, digits=2)) \t $(round(shed_percentage, digits=2))%")
+
+            # println("Load $i:")
+            # println("  Original demand: $(original_pd)")
+            # println("  Served demand: $(round(served_pd, digits=2))")
+            # println("  Load shed: $(round(shed_percentage, digits=2))%")
+        end
+    end
+end
 println("---------------------------")
 # PowerModels.print_summary(result["solution"])
 # if occursin("shedd", objective)
