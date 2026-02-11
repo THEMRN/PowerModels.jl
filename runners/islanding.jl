@@ -27,15 +27,16 @@ if use_config_file
 
     # load the network data
     src_case_path = cfg["src_case_path"]
+    run_psse = get(cfg, "run_psse", true)
+    case_files = find_case_files(src_case_path; require_dyr=run_psse)
     case_name = basename(src_case_path)
-    network_data = PowerModels.parse_file("$(src_case_path)/$(case_name).raw", import_all=true)
+    network_data = PowerModels.parse_file(case_files.raw, import_all=true)
 
     # settings
     objective = get(cfg, "objective", "flow")
     bus_pairs = [(Int(p[1]), Int(p[2])) for p in cfg["target_bus_pairs"]]
     target_lines = find_branches_by_bus_pairs(network_data, bus_pairs)
     lambda = get(cfg, "lambda", 50000.0)
-    run_psse = get(cfg, "run_psse", true)
     uniform_shedding = get(cfg, "uniform_shedding", false)
     uniform_penalty = get(cfg, "uniform_penalty", lambda / 10)
     opf_model = get(cfg, "opf_model", "AC")
@@ -72,10 +73,13 @@ if use_config_file
 else
     # ------------------- Hardcoded settings ----------------------
 
-    # Load the network data ------------------------ACTIVSg200
+    # Load the network data ------------------------
     src_case_path = "cases/psse/savnw"
+    run_psse = true
+
+    case_files = find_case_files(src_case_path; require_dyr=run_psse)
     case_name = basename(src_case_path)
-    network_data = PowerModels.parse_file("$(src_case_path)/$(case_name).raw", import_all=true)
+    network_data = PowerModels.parse_file(case_files.raw, import_all=true)
 
     # settings ------------------------------------
     objective = "flow_shed"    # "opf", "flow", "opf_flow", "flow_shed", "opf_flow_shed"
@@ -164,53 +168,17 @@ modified_network_data["lambda"] = lambda
 
 # solve the power flow
 result = PowerModels.solve_custom_opf(modified_network_data, power_model, Ipopt.Optimizer)
-
 println("---------------------------")
 println("Power Flow Solved")
 println("objective:", result["objective"])
-flow_sum = 0.0
-abs_flow_sum = 0.0
-for line in target_lines
-    global flow_sum
-    global abs_flow_sum
-    flow = result["solution"]["branch"][string(line)]["pf"]
-    flow_sum += flow
-    abs_flow_sum += abs(flow)
-    fr = modified_network_data["branch"][string(line)]["source_id"][2]
-    to = modified_network_data["branch"][string(line)]["source_id"][3]
-    println("Line $line (Bus $fr -> Bus $to) flow: $flow")
-end
-println("Total flow through target lines: $flow_sum")
-println("Total absolute flow through target lines: $abs_flow_sum")
+
+# log flow results and load shedding status
+print_branch_flows(result, modified_network_data, target_lines)
 if occursin("shed", objective)
-    println("\n--- Load Serving Status ---")
-    println("Bus \t PDn \t PD \t Shed \t Shed Percentage")
-    for (i, load) in modified_network_data["load"]
-        if haskey(result["solution"]["load"][i], "status")
-            status = result["solution"]["load"][i]["status"]
-            if status >= 1.0
-                continue
-            end
-            load_bus = load["load_bus"]
-            original_pd = load["pd"]
-            served_pd = result["solution"]["load"][i]["pd"]
-            shed_amount = original_pd - served_pd
-            shed_percentage = (shed_amount / original_pd) * 100
-
-            println("$(load_bus) \t $(original_pd) \t $(round(served_pd, digits=2)) \t $(round(shed_amount, digits=2)) \t $(round(shed_percentage, digits=2))%")
-
-            # println("Load $i:")
-            # println("  Original demand: $(original_pd)")
-            # println("  Served demand: $(round(served_pd, digits=2))")
-            # println("  Load shed: $(round(shed_percentage, digits=2))%")
-        end
-    end
+    print_load_shedding_status(result, modified_network_data)
+    # analyze_load_shedding_results(result, network_data)
 end
 println("---------------------------")
-# PowerModels.print_summary(result["solution"])
-# if occursin("shedd", objective)
-#     analyze_load_shedding_results(result, network_data)
-# end
 
 # generate excel report
 output_path = "results/psse/$(case_name)_$(objective)"
@@ -247,12 +215,12 @@ if run_psse
     end
     println("Line outage file created successfully!")
 
-    # check if there are dyr files available
-    dyr_file = joinpath(src_case_path, "$(case_name).dyr")
-    if isfile(dyr_file)
+    # copy dyr file if available
+    if case_files.dyr !== nothing
         dest = joinpath(output_path, "$(case_name)_$(objective).dyr")
-        cp(dyr_file, dest, force=true)
+        cp(case_files.dyr, dest, force=true)
         println("Dyr file copied successfully!")
+        dyr_file = dest
     else
         println("No dyr file found, skipping dynamic simulation.")
         dyr_file = ""

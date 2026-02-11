@@ -2,6 +2,23 @@ using Dates
 using Graphs
 using Combinatorics
 
+function find_case_files(src_case_path::AbstractString; require_dyr::Bool=false)
+    isdir(src_case_path) || error("Directory does not exist: $src_case_path")
+    files = readdir(src_case_path; join=true)
+
+    raw_files = filter(f -> endswith(lowercase(f), ".raw"), files)
+    dyr_files = filter(f -> endswith(lowercase(f), ".dyr"), files)
+
+    isempty(raw_files) && error("No .raw file found in $src_case_path")
+    if require_dyr && isempty(dyr_files)
+        error("No .dyr file found in $src_case_path (required when run_psse=true)")
+    end
+
+    raw_file = first(raw_files)
+    dyr_file = isempty(dyr_files) ? nothing : first(dyr_files)
+    return (raw=raw_file, dyr=dyr_file)
+end
+
 function prepare_for_pti_export(network_data)
     # Ensure the network data is in the correct format for PTI export
 
@@ -294,4 +311,44 @@ function reduce_graph(graph)
         end
     end
     return graph
+end
+
+function print_branch_flows(result, modified_network_data, target_lines)
+    println("---------------------------")
+    flow_sum = 0.0
+    abs_flow_sum = 0.0
+    for line in target_lines
+        flow = result["solution"]["branch"][string(line)]["pf"]
+        flow_sum += flow
+        abs_flow_sum += abs(flow)
+        fr = modified_network_data["branch"][string(line)]["source_id"][2]
+        to = modified_network_data["branch"][string(line)]["source_id"][3]
+        println("Line $line (Bus $fr -> Bus $to) flow: $flow")
+    end
+    println("Total flow through target lines: $flow_sum")
+    println("Total absolute flow through target lines: $abs_flow_sum")
+end
+
+function print_load_shedding_status(result, modified_network_data)
+    println("Preemtive load shedding results:")
+    println("\n---  Load Serving Status ---")
+    println("Bus \t PDn \t PD \t Shed \t Shed Percentage")
+    total_shed = 0.0
+    for (i, load) in modified_network_data["load"]
+        if haskey(result["solution"]["load"][i], "status")
+            status = result["solution"]["load"][i]["status"]
+            if status >= 1.0
+                continue
+            end
+            load_bus = load["load_bus"]
+            original_pd = load["pd"]
+            served_pd = result["solution"]["load"][i]["pd"]
+            shed_amount = original_pd - served_pd
+            shed_percentage = (shed_amount / original_pd) * 100
+            total_shed += shed_amount
+
+            println("$(load_bus) \t $(original_pd) \t $(round(served_pd, digits=2)) \t $(round(shed_amount, digits=2)) \t $(round(shed_percentage, digits=2))%")
+        end
+    end
+    println("Total load shed: $(round(total_shed, digits=2)) MW")
 end

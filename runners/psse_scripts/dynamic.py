@@ -254,7 +254,7 @@ psspy.chsb(0, 1, [-1, -1, -1, 1, 13, 0])  # bus voltage    (VOLT)
 psspy.chsb(0, 1, [-1, -1, -1, 1, 25, 0])  # p load         (PLOD)
 psspy.chsb(0, 1, [-1, -1, -1, 1, 26, 0])  # q load         (QLOD)
 
-output_file = f"{output_dir}/output_pm_{now}.out"
+output_file = f"{output_dir}/output_psse_{now}.out"
 if Path(output_file).exists():
     os.remove(output_file)
 print(f"-- output file: {output_file}")
@@ -481,7 +481,7 @@ try:
     ptot = sum(e["p"] for e in events)
     qtot = sum(e["q"] for e in events)
 
-    print(f"-- Parsed {len(events)} load shed events. Totals: P={ptot:.2f} MW, Q={qtot:.2f} Mvar.")
+    print(f"-- Parsed {len(events)} load shed events (UFLS). Totals: P={ptot:.2f} MW, Q={qtot:.2f} Mvar.")
     for e in events:
         print(f"   Bus {e['bus']} Load {e['load']} Time {e['time']}s P {e['p']} MW Q {e['q']} Mvar")
 
