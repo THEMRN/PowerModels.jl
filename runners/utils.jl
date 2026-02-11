@@ -40,7 +40,7 @@ function prepare_for_pti_export(network_data)
     # prevent negative active power generation
     for (i, gen) in network_data["gen"]
         if haskey(gen, "pg") && gen["pg"] < 0
-            warning("Generator $i has negative active power generation (pg=$(gen["pg"])). Setting pg to 0 for PTI export.")
+            println("Generator $i has negative active power generation (pg=$(gen["pg"])). Setting pg to 0 for PTI export.")
             gen["pg"] = 0.0
         end
         # if haskey(gen, "qg") && gen["qg"] < 0
