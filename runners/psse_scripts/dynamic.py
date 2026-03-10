@@ -11,7 +11,8 @@ import re
 
 # specify your PSSE installation path here, in raw string format, i.e., r"your_path_here"
 # 36.1 example path:
-PSSE_PATH = r"C:\Program Files\PTI\PSSE36\36.1"
+PSSE_PATH = r"C:\Program Files\PTI\PSSE36\36.5"
+PYTHON_VERSION = "14"
 
 
 class Tee(object):
@@ -34,9 +35,9 @@ print(f"-- Python version: {sys.version.split()[0]}  executable: {sys.executable
 
 # set PSSE environment variables
 os.environ["PATH"] = f"{PSSE_PATH}\\PSSBIN;" + os.environ["PATH"]
-os.environ["PSSPY_PATH"] = f"{PSSE_PATH}\\PSSPY311"
+os.environ["PSSPY_PATH"] = f"{PSSE_PATH}\\PSSPY3{PYTHON_VERSION}"
 # add PSSE modules to the system path
-sys.path.append(f"{PSSE_PATH}\\PSSPY311")
+sys.path.append(f"{PSSE_PATH}\\PSSPY3{PYTHON_VERSION}")
 sys.path.append(f"{PSSE_PATH}\\PSSLIB")
 
 # case file paths
@@ -51,7 +52,7 @@ except IndexError:
 
 
 # initialize PSSE
-import psse3601
+import psse3605
 import psspy  # type: ignore
 import dyntools  # type: ignore
 
@@ -67,6 +68,8 @@ now = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
 print("-- Initializing PSSE...")
 psspy.psseinit()
 log_file = f"{output_dir}/log_{now}.txt"
+_orig_stdout = sys.stdout
+_orig_stderr = sys.stderr
 f = open(log_file, "w")
 sys.stdout = Tee(sys.stdout, f)
 sys.stderr = Tee(sys.stderr, f)
@@ -82,25 +85,60 @@ xls = pd.read_excel(excel_file_pth, sheet_name=None)
 bus_df = xls["buses"]
 gen_df = xls["generators"]
 
-# set up the generator vsched
-print("-- Setting up generator scheduled voltages...")
-for idx, row in gen_df.iterrows():
-    bus = int(row["bus number"])
-    v_sched = bus_df.loc[bus_df["bus number"] == bus, "vm"].values[0]
-    ierr = psspy.plant_data_4(bus, 0, [0, 0], [v_sched])
-    print(f"Setting generator at bus {bus} with scheduled voltage {v_sched}")
+# set up the generator vsched (now done in raw export, leaving it here for reference)
+# print("-- Setting up generator scheduled voltages...")
+# for idx, row in gen_df.iterrows():
+#     bus = int(row["bus number"])
+#     v_sched = bus_df.loc[bus_df["bus number"] == bus, "vm"].values[0]
+#     ierr = psspy.plant_data_4(bus, 0, [0, 0], [v_sched])
+#     print(f"Setting generator at bus {bus} with scheduled voltage {v_sched}")
 
-# scaling loads
-# print("-- Scaling loads...")
-# scale_percent = 5.0
-# psspy.scal_4(0, 1, 1, [0, 0, 0, 0, 0, 0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
-# psspy.scal_4(0, 1, 2, [0, 0, 0, 2, 0, 1], [scale_percent, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+# check mismatch for all buses before solving power flow
+print("-- Checking initial bus mismatches...")
+ierr, bus_nums = psspy.abusint(-1, 2, ["NUMBER"])
+ierr, bus_msmtch = psspy.abusreal(-1, 2, ["MISMATCH"])
+initial_mismatches = {b: m for b, m in zip(bus_nums[0], bus_msmtch[0])}
+for b, m in initial_mismatches.items():
+    if abs(m) > 1.0:
+        print(f"Warning: Bus {b} has high initial mismatch of {m:.2f} MW")
 
 # solve the power flow
 print("-- Solving power flow...")
-psspy.solv([0, 0, 0, 0, 0, 0])
-psspy.solv([0, 0, 0, 0, 0, 0])
-psspy.solv([0, 0, 0, 0, 0, 0])
+default_pf_params_intgar = [100, 20, 20, 100, 10, 20, 4, 20, 0]
+newton_pf_max_iters_idx = 1
+N = 0.1  # default newton mismatch tol
+default_pf_params_realar = [
+    1.6,
+    1.6,
+    1.0,
+    0.0001,
+    1.0,
+    N,
+    1.0,
+    0.00001,
+    5.0,
+    0.7,
+    0.0001,
+    0.005,
+    1.0,
+    0.05,
+    0.99,
+    0.99,
+    N,
+    0.00001,
+    100.0,
+    0.01,
+    0.3,
+]
+newton_pf_mismatch_tol_idx = 5
+default_pf_params_realar[newton_pf_mismatch_tol_idx] = 0.001
+psspy.solution_parameters_5(default_pf_params_intgar, default_pf_params_realar)
+
+# psspy.solv([0, 0, 0, 0, 0, 0])  # Gauss-Seidel solve, default settings (no flat start)
+ierr = psspy.fnsl()  # Newton-Raphson, default options
+if ierr != 0:
+    print(f"-- Power flow did not converge, error code: {ierr}")
+    sys.exit(1)
 print("-- Power flow solved successfully.")
 # ------------------------------------------------------------------
 
@@ -121,6 +159,7 @@ try:
                 "volt (pu)": bus_v[0][i],
                 "angle (d)": bus_ang[0][i],
                 "mismatch (MW)": bus_msmtch[0][i],
+                "initial mismatch (MW)": initial_mismatches.get(b, None),
             }
         )
     bus_report_df = pd.DataFrame(bus_records)
@@ -260,7 +299,7 @@ if Path(output_file).exists():
 print(f"-- output file: {output_file}")
 psspy.strt_2([0, 0], output_file)
 psspy.run(0, -0.02, 100, 1, 1)
-psspy.run(0, 15.0, 100, 1, 1)
+psspy.run(0, 10.0, 100, 1, 1)
 
 # reading the line outages from the file
 try:
@@ -287,22 +326,20 @@ except Exception as e:
     print(f"-- Error processing outage file: {e}")
 
 # ----------------------------------------------
-psspy.run(0, 100.0, 100, 1, 1)
+psspy.run(0, 30.0, 100, 1, 1)
 
 # read the channel data
 ch_data = dyntools.CHNF(output_file)
 # extract channel data
 short_title, chanid_dict, chandata_dict = ch_data.get_data()
 # build the channel data DataFrame
-df = pd.DataFrame()
-for key, values in chandata_dict.items():
-    col_name = chanid_dict[key]
-    df[col_name] = values
+df = pd.DataFrame({chanid_dict[key]: values for key, values in chandata_dict.items()})
 
 # print(df.head())
 
 keywords = ["POWR", "FREQ", "VOLT", "PLOD"]
-keywords = ["FREQ", "POWR"]
+# keywords = ["FREQ", "POWR"]
+# keywords = ["POWR"]
 keyword_map = {
     "POWR": {"title": "Generator Electrical Power (MW)", "yaxis": "Power (MW)"},
     "FREQ": {"title": "Bus Frequency Deviation (pu)", "yaxis": "Freq. Deviation (pu)"},
@@ -488,5 +525,7 @@ try:
 except Exception as e:
     print(f"-- Failed to parse load shed events: {e}")
 
-sys.exit(0)
+sys.stdout = _orig_stdout
+sys.stderr = _orig_stderr
+f.close()
 sys.exit(0)
