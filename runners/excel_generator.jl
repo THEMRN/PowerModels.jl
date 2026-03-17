@@ -32,12 +32,68 @@ function create_excel_report(result, network_data, filepth="results.xlsx"; power
         sheet1[XLSX.CellRef(row, 2)] = network_data["baseMVA"]
 
         sheet2 = XLSX.addsheet!(xf, "buses")
-        bus_headers = ["bus number", "bus type", "vmax", "vmin", "vm", "va (rad)", "va (deg)"]
+        bus_headers = ["bus number", "bus type", "vmax", "vmin", "vm", "va (rad)", "va (deg)", "p mismatch (MW)", "mva mismatch (MVA)"]
 
         # Write bus headers
         for (i, header) in enumerate(bus_headers)
             sheet2[XLSX.CellRef(1, i)] = header
         end
+
+        # --- Precompute per-bus power balance for mismatch columns ---
+        _base_mva = network_data["baseMVA"]
+        _bus_p_gen   = Dict(k => 0.0 for k in keys(network_data["bus"]))
+        _bus_q_gen   = Dict(k => 0.0 for k in keys(network_data["bus"]))
+        _bus_p_load  = Dict(k => 0.0 for k in keys(network_data["bus"]))
+        _bus_q_load  = Dict(k => 0.0 for k in keys(network_data["bus"]))
+        _bus_p_branch = Dict(k => 0.0 for k in keys(network_data["bus"]))
+        _bus_q_branch = Dict(k => 0.0 for k in keys(network_data["bus"]))
+        _bus_gs = Dict(k => 0.0 for k in keys(network_data["bus"]))
+        _bus_bs = Dict(k => 0.0 for k in keys(network_data["bus"]))
+
+        _has_shunt_sol = haskey(result["solution"], "shunt")
+        for (shunt_id, shunt_net) in network_data["shunt"]
+            if shunt_net["status"] != 0
+                bid = string(shunt_net["shunt_bus"])
+                if _has_shunt_sol && haskey(result["solution"]["shunt"], shunt_id)
+                    shunt_sol = result["solution"]["shunt"][shunt_id]
+                    _bus_gs[bid] += get(shunt_sol, "gs", shunt_net["gs"])
+                    _bus_bs[bid] += get(shunt_sol, "bs", shunt_net["bs"])
+                else
+                    _bus_gs[bid] += shunt_net["gs"]
+                    _bus_bs[bid] += shunt_net["bs"]
+                end
+            end
+        end
+
+        for (gen_id, gen_sol) in result["solution"]["gen"]
+            bid = string(network_data["gen"][gen_id]["gen_bus"])
+            _bus_p_gen[bid] += get(gen_sol, "pg", 0.0)
+            _bus_q_gen[bid] += get(gen_sol, "qg", 0.0)
+        end
+
+        _has_load_sol = haskey(result["solution"], "load")
+        for (load_id, load_net) in network_data["load"]
+            bid = string(load_net["load_bus"])
+            if _has_load_sol && haskey(result["solution"]["load"], load_id)
+                load_sol = result["solution"]["load"][load_id]
+                _bus_p_load[bid] += get(load_sol, "pd", 0.0)
+                _bus_q_load[bid] += get(load_sol, "qd", 0.0)
+            else
+                _bus_p_load[bid] += load_net["pd"]
+                _bus_q_load[bid] += load_net["qd"]
+            end
+        end
+
+        for (branch_id, branch_sol) in result["solution"]["branch"]
+            branch_net = network_data["branch"][branch_id]
+            fbid = string(branch_net["f_bus"])
+            tbid = string(branch_net["t_bus"])
+            _bus_p_branch[fbid] += get(branch_sol, "pf", 0.0)
+            _bus_q_branch[fbid] += get(branch_sol, "qf", 0.0)
+            _bus_p_branch[tbid] += get(branch_sol, "pt", 0.0)
+            _bus_q_branch[tbid] += get(branch_sol, "qt", 0.0)
+        end
+        # ------------------------------------------------------------------
 
         row = 2
         sorted_buses = sort(collect(result["solution"]["bus"]), by=x -> parse(Int, x[1]))
@@ -52,6 +108,15 @@ function create_excel_report(result, network_data, filepth="results.xlsx"; power
             sheet2[XLSX.CellRef(row, 5)] = round(get(bus_sol, "vm", 0), digits=4)
             sheet2[XLSX.CellRef(row, 6)] = round(get(bus_sol, "va", 0), digits=4)
             sheet2[XLSX.CellRef(row, 7)] = round(rad2deg(get(bus_sol, "va", 0)), digits=4)
+
+            # Power mismatch: generation - load - shunt - net branch flow out
+            vm = get(bus_sol, "vm", 1.0)
+            gs = _bus_gs[bus_id]
+            bs = _bus_bs[bus_id]
+            delta_p = _bus_p_gen[bus_id] - _bus_p_load[bus_id] - gs * vm^2  - _bus_p_branch[bus_id]
+            delta_q = _bus_q_gen[bus_id] - _bus_q_load[bus_id] + bs * vm^2  - _bus_q_branch[bus_id]
+            sheet2[XLSX.CellRef(row, 8)] = round(delta_p * _base_mva, digits=4)
+            sheet2[XLSX.CellRef(row, 9)] = round(sqrt(delta_p^2 + delta_q^2) * _base_mva, digits=4)
 
             row += 1
         end
