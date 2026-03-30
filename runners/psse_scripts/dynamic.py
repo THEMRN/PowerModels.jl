@@ -1,13 +1,14 @@
 import sys
 import os
 import pandas as pd
-from plotly.subplots import make_subplots
+import numpy as np
 import plotly.graph_objects as go
 import plotly.io as pio
 from pathlib import Path
 import json
 import datetime as dt
 import re
+import webbrowser
 
 # specify your PSSE installation path here, in raw string format, i.e., r"your_path_here"
 # 36.1 example path:
@@ -55,6 +56,7 @@ except IndexError:
 import psse3605
 import psspy  # type: ignore
 import dyntools  # type: ignore
+from utils import get_buses_in_zone
 
 base_freq = 60.0
 
@@ -337,11 +339,12 @@ df = pd.DataFrame({chanid_dict[key]: values for key, values in chandata_dict.ite
 
 # print(df.head())
 
-keywords = ["POWR", "FREQ", "VOLT", "PLOD"]
+keywords = ["POWR", "VARS", "FREQ", "VOLT", "PLOD"]
 # keywords = ["FREQ", "POWR"]
 # keywords = ["POWR"]
 keyword_map = {
     "POWR": {"title": "Generator Electrical Power (MW)", "yaxis": "Power (MW)"},
+    "VARS": {"title": "Generator Reactive Power (MVar)", "yaxis": "Reactive Power (MVar)"},
     "FREQ": {"title": "Bus Frequency Deviation (pu)", "yaxis": "Freq. Deviation (pu)"},
     "VOLT": {"title": "Bus Voltage (pu)", "yaxis": "Voltage (pu)"},
     "PLOD": {"title": "Load Active Power (MW)", "yaxis": "Load P (MW)"},
@@ -352,44 +355,52 @@ if time_col not in df.columns:
     print(f"-- Time column '{time_col}' not found; available columns: {list(df.columns)}")
     sys.exit(1)
 
+# midlands zone buses
+# midlands_buses = get_buses_in_zone(5)
 
-fig = make_subplots(
-    rows=len(keywords),
-    cols=1,
-    shared_xaxes=True,
-    subplot_titles=[keyword_map[k]["title"] for k in keywords],
-    vertical_spacing=0.08,
-)
-
-for i, keyword in enumerate(keywords, start=1):
+plot_blocks = []
+for keyword in keywords:
+    fig = go.Figure()
     cols_to_plot = [col for col in df.columns if keyword in col and col != time_col]
+
     if not cols_to_plot:
-        fig.add_annotation(row=i, col=1, text=f"No channels found for {keyword}", showarrow=False)
-        continue
+        fig.add_annotation(text=f"No channels found for {keyword}", showarrow=False)
+    else:
+        for col in cols_to_plot:
 
-    # use legend groups so items are grouped and can be toggled together
-    for col in cols_to_plot:
-        fig.add_trace(
-            go.Scatter(
-                x=df[time_col],
-                y=df[col],
-                mode="lines",
-                name=col,
-                hovertemplate="Time: %{x:.4f}s<br>Value: %{y:.4f}<extra>" + col + "</extra>",
-            ),
-            row=i,
-            col=1,
-        )
-        first_in_group = False
+            # # only plot buses in the midlands zone, bus number in the column name should be in the midlands_buses list
+            # bus_num = int(re.search(r"(\d+)", col).group(1))
+            # if bus_num not in midlands_buses:
+            #     continue
 
-    # horizontal reference lines for frequency subplot
+            if keyword == "VOLT":  # and not any(df[col].iloc[-100:].values):
+                # skip voltage channels that are all zeros at the end
+                if not any(df[col].iloc[-100:].values):
+                    continue
+                # skip voltage channels that don't exceed normal voltage range (0.9-1.1) during the whole simulation
+                if np.all((df[col].values >= 0.9) & (df[col].values <= 1.1)):
+                    continue
+
+            # skip frequency channels that are all zeros at all times
+            if keyword == "FREQ" and all(np.abs(df[col].values) < 1e-6):
+                continue
+
+            fig.add_trace(
+                go.Scatter(
+                    x=df[time_col],
+                    y=df[col],
+                    mode="lines",
+                    name=col,
+                    hovertemplate="Time: %{x:.4f}s<br>Value: %{y:.4f}<extra>" + col + "</extra>",
+                )
+            )
+
     if keyword == "FREQ":
         freq_lines = [
             {"y": 57, "color": "red", "style": "dash", "time": 0, "width": 1},
             {"y": 59, "color": "orange", "style": "dash", "time": 3, "width": 1},
             {"y": 60.5, "color": "orange", "style": "dash", "time": 8, "width": 1},
             {"y": 61.8, "color": "red", "style": "dash", "time": 0, "width": 1},
-            # UFLS steps
             {"y": 59.5, "color": "blue", "style": "dot", "time": 0.3, "width": 0.5},
             {"y": 59.3, "color": "blue", "style": "dot", "time": 0.3, "width": 0.5},
             {"y": 59.1, "color": "blue", "style": "dot", "time": 0.3, "width": 0.5},
@@ -400,39 +411,36 @@ for i, keyword in enumerate(keywords, start=1):
                 line_dash=line.get("style", "solid"),
                 line_width=line["width"],
                 line_color=line["color"],
-                # annotation_text=f"{line['y']} ({line['time']})",
-                # annotation_position="right",
-                row=i,
-                col=1,
             )
 
-    fig.update_yaxes(title_text=keyword_map[keyword]["yaxis"], row=i, col=1)
+    fig.update_layout(
+        title=keyword_map[keyword]["title"],
+        xaxis_title="Time (s)",
+        yaxis_title=keyword_map[keyword]["yaxis"],
+        legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="center", x=0.5),
+        margin=dict(b=120),
+        hovermode="closest",
+        template="plotly_white",
+        height=560,
+    )
 
-fig.update_xaxes(title_text="Time (s)", row=len(keywords), col=1)
-fig.update_layout(
-    title="Dynamic Simulation Channels",
-    legend=dict(
-        orientation="h",
-        yanchor="top",
-        y=-0.15,
-        xanchor="center",
-        x=0.5,
-    ),
-    margin=dict(b=120),  # extra bottom space for legend
-    hovermode="x unified",
-    template="plotly_white",
+    plot_blocks.append(pio.to_html(fig, include_plotlyjs=(len(plot_blocks) == 0), full_html=False))
+
+plots_path = output_dir / f"dynamic_channels_{now}.html"
+html_doc = (
+    "<html><head><meta charset='utf-8'><title>Dynamic Simulation Channels</title>"
+    "<style>body{margin:0;padding:20px;font-family:Arial,sans-serif;background:#fafafa;}"
+    ".plot{margin:0 0 24px 0;background:#fff;padding:8px;border-radius:8px;"
+    "box-shadow:0 1px 4px rgba(0,0,0,0.08);}</style></head><body>"
 )
+html_doc += "".join([f"<div class='plot'>{block}</div>" for block in plot_blocks])
+html_doc += "</body></html>"
 
-increase_height = False  # set True to increase figure height
-if increase_height:
-    per_row_height = 450  # px per row
-    extra_pad = 200  # legend/margins
-    fig.update_layout(height=2 * per_row_height + extra_pad)
+with open(plots_path, "w", encoding="utf-8") as pf:
+    pf.write(html_doc)
 
-pio.renderers.default = "browser"
-
-fig.show()
-print("-- Interactive Plotly window (browser) opened.")
+webbrowser.open(plots_path.resolve().as_uri())
+print(f"-- Interactive Plotly page opened: {plots_path}")
 
 # ------------------------------------------------------------------
 # analyze Frequency Channels
