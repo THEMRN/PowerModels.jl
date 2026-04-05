@@ -30,6 +30,17 @@ class Tee(object):
             f.flush()
 
 
+def get_buses_in_zone(zone_num: int) -> list[int]:
+    """
+    Get the buses in a given zone.
+    """
+    ierr, buses = psspy.abusint(-1, 2, ["NUMBER"])
+    ierr, zones = psspy.abusint(-1, 2, ["ZONE"])
+    buses = buses[0]
+    zones = zones[0]
+    return [b for b, z in zip(buses, zones) if z == zone_num]
+
+
 print("-- Starting dynamic simulation script...")
 print(f"-- Python version: {sys.version.split()[0]}  executable: {sys.executable}")
 
@@ -56,7 +67,6 @@ except IndexError:
 import psse3605
 import psspy  # type: ignore
 import dyntools  # type: ignore
-from utils import get_buses_in_zone
 
 base_freq = 60.0
 
@@ -77,6 +87,7 @@ sys.stdout = Tee(sys.stdout, f)
 sys.stderr = Tee(sys.stderr, f)
 # psspy.progress_output(2, log_file, [0, 0])
 # psspy.progress_output(1, "", [0, 0])
+psspy.progress_output(6, "", [0, 0])
 
 # read the raw file
 psspy.read(0, raw_file_pth)
@@ -100,9 +111,13 @@ print("-- Checking initial bus mismatches...")
 ierr, bus_nums = psspy.abusint(-1, 2, ["NUMBER"])
 ierr, bus_msmtch = psspy.abusreal(-1, 2, ["MISMATCH"])
 initial_mismatches = {b: m for b, m in zip(bus_nums[0], bus_msmtch[0])}
+large_mismatches = []
 for b, m in initial_mismatches.items():
     if abs(m) > 1.0:
+        large_mismatches.append(b)
         print(f"Warning: Bus {b} has high initial mismatch of {m:.2f} MW")
+if len(large_mismatches) == 0:
+    print("-- No large initial mismatches found.")
 
 # solve the power flow
 print("-- Solving power flow...")
@@ -195,7 +210,10 @@ try:
             p_act = act.real
             q_act = act.imag
             p_nom = nom.real
-            served = (p_act / p_nom) * 100.0
+            if p_nom == 0:
+                served = 0.0
+            else:
+                served = (p_act / p_nom) * 100.0
             load_rows.append(
                 {
                     "bus": load_buses[0][i],
@@ -273,21 +291,26 @@ if dyr_file_pth == "":
 
 # dynamic simulation -----------------------------------------------------
 # converting generators
+print("-- Converting generators...")
 psspy.cong(0)
 
 # convering loads
+print("-- Converting loads...")
 psspy.conl(0, 1, 1, [0, 0], [100.0, 0.0, 0.0, 100.0])
 psspy.conl(0, 1, 2, [0, 0], [100.0, 0.0, 0.0, 100.0])
 psspy.conl(0, 1, 3, [0, 0], [100.0, 0.0, 0.0, 100.0])
 
 # factorize and initialize swithing study
+print("-- Factoring and initializing switching study...")
 psspy.fact()
 psspy.tysl(0)
 
 # load the dynamic data
+print("-- Loading dynamic data...")
 psspy.dyre_new_2([1, 1, 1, 1], dyr_file_pth)
 
 # outpu channels for dynamic simulation
+print("-- Setting up output channels...")
 psspy.chsb(0, 1, [-1, -1, -1, 1, 2, 0])  # generator pelec (POWR)
 psspy.chsb(0, 1, [-1, -1, -1, 1, 3, 0])  # generator qelec (VARS)
 psspy.chsb(0, 1, [-1, -1, -1, 1, 12, 0])  # bus frequency  (FREQ)
@@ -300,8 +323,10 @@ if Path(output_file).exists():
     os.remove(output_file)
 print(f"-- output file: {output_file}")
 psspy.strt_2([0, 0], output_file)
-psspy.run(0, -0.02, 100, 1, 1)
-psspy.run(0, 10.0, 100, 1, 1)
+print("-- Initializing dynamic simulation...")
+psspy.run(0, -0.02, 1000, 1, 1)
+print("-- Running dynamic simulation... (pre-event)")
+psspy.run(0, 10.0, 1000, 1, 1)
 
 # reading the line outages from the file
 try:
@@ -318,19 +343,23 @@ try:
                     fbus = int(o["from"])
                     tbus = int(o["to"])
                     cid = str(o["id"]).strip()
-                    print(f"-- Tripping branch {fbus}-{tbus} id {cid}")
+                    # print(f"-- Tripping branch {fbus}-{tbus} id {cid}")
                     psspy.dist_branch_trip(fbus, tbus, cid)
                 except Exception as e:
                     print(f"-- Failed to trip outage entry {o}, ({fbus}, {tbus}): {e}")
+            print(f"-- Tripped {len(outages)} branches")
+
     else:
         print(f"-- No line outage file found at {outage_file}, skipping branch trips.")
 except Exception as e:
     print(f"-- Error processing outage file: {e}")
 
 # ----------------------------------------------
-psspy.run(0, 30.0, 100, 1, 1)
+print("-- Running dynamic simulation... (post-event)")
+psspy.run(0, 30.0, 1000, 1, 1)
 
 # read the channel data
+print("-- Reading channel data...")
 ch_data = dyntools.CHNF(output_file)
 # extract channel data
 short_title, chanid_dict, chandata_dict = ch_data.get_data()
@@ -339,13 +368,14 @@ df = pd.DataFrame({chanid_dict[key]: values for key, values in chandata_dict.ite
 
 # print(df.head())
 
+print("-- Plotting dynamic simulation channels...")
 keywords = ["POWR", "VARS", "FREQ", "VOLT", "PLOD"]
 # keywords = ["FREQ", "POWR"]
 # keywords = ["POWR"]
 keyword_map = {
     "POWR": {"title": "Generator Electrical Power (MW)", "yaxis": "Power (MW)"},
     "VARS": {"title": "Generator Reactive Power (MVar)", "yaxis": "Reactive Power (MVar)"},
-    "FREQ": {"title": "Bus Frequency Deviation (pu)", "yaxis": "Freq. Deviation (pu)"},
+    "FREQ": {"title": "Bus Frequency (Hz)", "yaxis": "Frequency (Hz)"},
     "VOLT": {"title": "Bus Voltage (pu)", "yaxis": "Voltage (pu)"},
     "PLOD": {"title": "Load Active Power (MW)", "yaxis": "Load P (MW)"},
 }
@@ -368,9 +398,10 @@ for keyword in keywords:
     else:
         for col in cols_to_plot:
 
-            # # only plot buses in the midlands zone, bus number in the column name should be in the midlands_buses list
+            # # only plot buses in the specifiec zone
+            # greenvil_buses = get_buses_in_zone(2)
             # bus_num = int(re.search(r"(\d+)", col).group(1))
-            # if bus_num not in midlands_buses:
+            # if bus_num not in greenvil_buses:
             #     continue
 
             if keyword == "VOLT":  # and not any(df[col].iloc[-100:].values):
@@ -383,15 +414,22 @@ for keyword in keywords:
 
             # skip frequency channels that are all zeros at all times
             if keyword == "FREQ" and all(np.abs(df[col].values) < 1e-6):
+                # print(f"-- Skipping frequency channel {col} because it is all zeros")
                 continue
+
+            series_to_plot = df[col]
+            hover_value_fmt = "%{y:.4f}"
+            if keyword == "FREQ":
+                series_to_plot = base_freq * (df[col] + 1.0)
+                hover_value_fmt = "%{y:.4f} Hz"
 
             fig.add_trace(
                 go.Scatter(
                     x=df[time_col],
-                    y=df[col],
+                    y=series_to_plot,
                     mode="lines",
                     name=col,
-                    hovertemplate="Time: %{x:.4f}s<br>Value: %{y:.4f}<extra>" + col + "</extra>",
+                    hovertemplate="Time: %{x:.4f}s<br>Value: " + hover_value_fmt + "<extra>" + col + "</extra>",
                 )
             )
 
@@ -407,7 +445,7 @@ for keyword in keywords:
         ]
         for line in freq_lines:
             fig.add_hline(
-                y=line["y"] / 60 - 1,
+                y=line["y"],
                 line_dash=line.get("style", "solid"),
                 line_width=line["width"],
                 line_color=line["color"],
@@ -480,13 +518,20 @@ for col in freq_cols:
             bus_max_overall = bus
             val_max_overall = extreme_val
 
-print(f"-- Frequency extremes per bus: {freq_devs}")
+# print(f"-- Frequency extremes per bus: {freq_devs}")
 if bus_max_overall is not None:
     print(f"-- Bus with maximum frequency deviation: Bus {bus_max_overall} (Value: {val_max_overall:.4f})")
 
 # ------------------------------------------------------------------
 # parse load shedding (LDSTBL) events from the log file
 try:
+    detailed_shedding_log = False
+    ierr, event_buses = psspy.abusint(-1, 2, ["NUMBER"])
+    ierr, event_zones = psspy.abusint(-1, 2, ["ZONE"])
+    zone_by_bus = {int(bus): int(zone) for bus, zone in zip(event_buses[0], event_zones[0])}
+    ierr, zone_names = psspy.azonechar(-1, 2, ["ZONENAME"])
+    zone_names = [name.strip() for name in zone_names[0]]
+
     events = []
     with open(log_file, "r") as lf:
         lines = lf.readlines()
@@ -520,15 +565,50 @@ try:
         fval = float(m3.group(4))
 
         events.append(
-            {"bus": bus, "load": load_id, "time": time_val, "percent": percent, "p": p, "q": q, "v": v, "f": fval}
+            {
+                "bus": bus,
+                "zone": zone_by_bus.get(bus, 0),
+                "zone_name": zone_names[zone_by_bus.get(bus, 0) - 1],
+                "load": load_id,
+                "time": time_val,
+                "percent": percent,
+                "p": p,
+                "q": q,
+                "v": v,
+                "f": fval,
+            }
         )
 
     ptot = sum(e["p"] for e in events)
     qtot = sum(e["q"] for e in events)
+    zone_totals = {}
+    for e in events:
+        zone = e.get("zone", 0)
+        if zone == 0:
+            continue
+        zone_totals.setdefault(zone, {"p": 0.0, "q": 0.0, "count": 0})
+        zone_totals[zone]["p"] += e["p"]
+        zone_totals[zone]["q"] += e["q"]
+        zone_totals[zone]["count"] += 1
 
     print(f"-- Parsed {len(events)} load shed events (UFLS). Totals: P={ptot:.2f} MW, Q={qtot:.2f} Mvar.")
-    for e in events:
-        print(f"   Bus {e['bus']} Load {e['load']} Time {e['time']}s P {e['p']} MW Q {e['q']} Mvar")
+    if zone_totals:
+        print("-- Load shed totals by zone:")
+        for zone in sorted(zone_totals):
+            totals = zone_totals[zone]
+            zone_name = zone_names[zone - 1]
+            print(f"   {zone_name}: {totals['count']} events P {totals['p']:.2f} MW Q {totals['q']:.2f} Mvar")
+    else:
+        print("-- No zone assignments found for parsed load shed events.")
+
+    if len(events) > 0 and (detailed_shedding_log or not zone_totals):
+        print("-- Detailed load shed events:")
+        for e in events:
+            zone_label = e["zone_name"] or "N/A"
+            print(
+                f"   Bus {e['bus']} Zone {zone_label} Load {e['load']} "
+                f"Time {e['time']}s P {e['p']} MW Q {e['q']} Mvar"
+            )
 
 except Exception as e:
     print(f"-- Failed to parse load shed events: {e}")
