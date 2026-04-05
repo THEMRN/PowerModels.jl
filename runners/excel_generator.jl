@@ -1,6 +1,6 @@
 using Dates
 using XLSX
-include("line_flow.jl")
+include("calc_line_flow.jl")
 
 # Create Excel file with multiple sheets
 function create_excel_report(result, network_data, filepth="results.xlsx"; powerworld=false)
@@ -41,10 +41,10 @@ function create_excel_report(result, network_data, filepth="results.xlsx"; power
 
         # --- Precompute per-bus power balance for mismatch columns ---
         _base_mva = network_data["baseMVA"]
-        _bus_p_gen   = Dict(k => 0.0 for k in keys(network_data["bus"]))
-        _bus_q_gen   = Dict(k => 0.0 for k in keys(network_data["bus"]))
-        _bus_p_load  = Dict(k => 0.0 for k in keys(network_data["bus"]))
-        _bus_q_load  = Dict(k => 0.0 for k in keys(network_data["bus"]))
+        _bus_p_gen = Dict(k => 0.0 for k in keys(network_data["bus"]))
+        _bus_q_gen = Dict(k => 0.0 for k in keys(network_data["bus"]))
+        _bus_p_load = Dict(k => 0.0 for k in keys(network_data["bus"]))
+        _bus_q_load = Dict(k => 0.0 for k in keys(network_data["bus"]))
         _bus_p_branch = Dict(k => 0.0 for k in keys(network_data["bus"]))
         _bus_q_branch = Dict(k => 0.0 for k in keys(network_data["bus"]))
         _bus_gs = Dict(k => 0.0 for k in keys(network_data["bus"]))
@@ -71,10 +71,11 @@ function create_excel_report(result, network_data, filepth="results.xlsx"; power
             _bus_q_gen[bid] += get(gen_sol, "qg", 0.0)
         end
 
-        _has_load_sol = haskey(result["solution"], "load")
+        has_load_solution = haskey(result["solution"], "load")
+        has_branch_solution = haskey(result["solution"], "branch")
         for (load_id, load_net) in network_data["load"]
             bid = string(load_net["load_bus"])
-            if _has_load_sol && haskey(result["solution"]["load"], load_id)
+            if has_load_solution && haskey(result["solution"]["load"], load_id)
                 load_sol = result["solution"]["load"][load_id]
                 _bus_p_load[bid] += get(load_sol, "pd", 0.0)
                 _bus_q_load[bid] += get(load_sol, "qd", 0.0)
@@ -84,14 +85,16 @@ function create_excel_report(result, network_data, filepth="results.xlsx"; power
             end
         end
 
-        for (branch_id, branch_sol) in result["solution"]["branch"]
-            branch_net = network_data["branch"][branch_id]
-            fbid = string(branch_net["f_bus"])
-            tbid = string(branch_net["t_bus"])
-            _bus_p_branch[fbid] += get(branch_sol, "pf", 0.0)
-            _bus_q_branch[fbid] += get(branch_sol, "qf", 0.0)
-            _bus_p_branch[tbid] += get(branch_sol, "pt", 0.0)
-            _bus_q_branch[tbid] += get(branch_sol, "qt", 0.0)
+        if has_branch_solution
+            for (branch_id, branch_sol) in result["solution"]["branch"]
+                branch_net = network_data["branch"][branch_id]
+                fbid = string(branch_net["f_bus"])
+                tbid = string(branch_net["t_bus"])
+                _bus_p_branch[fbid] += get(branch_sol, "pf", 0.0)
+                _bus_q_branch[fbid] += get(branch_sol, "qf", 0.0)
+                _bus_p_branch[tbid] += get(branch_sol, "pt", 0.0)
+                _bus_q_branch[tbid] += get(branch_sol, "qt", 0.0)
+            end
         end
         # ------------------------------------------------------------------
 
@@ -113,8 +116,8 @@ function create_excel_report(result, network_data, filepth="results.xlsx"; power
             vm = get(bus_sol, "vm", 1.0)
             gs = _bus_gs[bus_id]
             bs = _bus_bs[bus_id]
-            delta_p = _bus_p_gen[bus_id] - _bus_p_load[bus_id] - gs * vm^2  - _bus_p_branch[bus_id]
-            delta_q = _bus_q_gen[bus_id] - _bus_q_load[bus_id] + bs * vm^2  - _bus_q_branch[bus_id]
+            delta_p = _bus_p_gen[bus_id] - _bus_p_load[bus_id] - gs * vm^2 - _bus_p_branch[bus_id]
+            delta_q = _bus_q_gen[bus_id] - _bus_q_load[bus_id] + bs * vm^2 - _bus_q_branch[bus_id]
             sheet2[XLSX.CellRef(row, 8)] = round(delta_p * _base_mva, digits=4)
             sheet2[XLSX.CellRef(row, 9)] = round(sqrt(delta_p^2 + delta_q^2) * _base_mva, digits=4)
 
@@ -151,100 +154,94 @@ function create_excel_report(result, network_data, filepth="results.xlsx"; power
             row += 1
         end        # Sheet 3: Branch data
 
-        sheet4 = XLSX.addsheet!(xf, "branches")
+        if has_branch_solution
+            sheet4 = XLSX.addsheet!(xf, "branches")
 
-        # Branch sheet headers
-        branch_headers = ["id", "from bus", "to bus", "transformer", "status", "x", "r", "b from", "b to", "pf", "pt", "p loss", "qt", "qf", "q loss", "p loss expected", "q loss expected", "p loss mismatch", "q loss mismatch"]
+            # Branch sheet headers
+            branch_headers = ["id", "from bus", "to bus", "transformer", "status", "x", "r", "b from", "b to", "pf", "pt", "p loss", "qt", "qf", "q loss", "p loss expected", "q loss expected", "p loss mismatch", "q loss mismatch"]
 
-        # Write branch headers
-        for (i, header) in enumerate(branch_headers)
-            sheet4[XLSX.CellRef(1, i)] = header
-        end        # Write branch data
-        row = 2
-        # Sort branches by (from bus, to bus)
-        sorted_branches = sort(collect(result["solution"]["branch"]),
-            by=x -> (network_data["branch"][x[1]]["f_bus"],
-                network_data["branch"][x[1]]["t_bus"]))
-        for (branch_id, branch_sol) in sorted_branches
-            branch_net = network_data["branch"][branch_id]
-            f_bus = branch_net["f_bus"]
-            t_bus = branch_net["t_bus"]
+            # Write branch headers
+            for (i, header) in enumerate(branch_headers)
+                sheet4[XLSX.CellRef(1, i)] = header
+            end        # Write branch data
+            row = 2
+            # Sort branches by (from bus, to bus)
+            sorted_branches = sort(collect(result["solution"]["branch"]),
+                by=x -> (network_data["branch"][x[1]]["f_bus"],
+                    network_data["branch"][x[1]]["t_bus"]))
+            for (branch_id, branch_sol) in sorted_branches
+                branch_net = network_data["branch"][branch_id]
+                f_bus = branch_net["f_bus"]
+                t_bus = branch_net["t_bus"]
 
-            sheet4[XLSX.CellRef(row, 1)] = branch_id
-            sheet4[XLSX.CellRef(row, 2)] = f_bus
-            sheet4[XLSX.CellRef(row, 3)] = t_bus
-            sheet4[XLSX.CellRef(row, 4)] = branch_net["transformer"]
-            sheet4[XLSX.CellRef(row, 5)] = branch_net["br_status"]
-            sheet4[XLSX.CellRef(row, 6)] = branch_net["br_x"]
-            sheet4[XLSX.CellRef(row, 7)] = branch_net["br_r"]
-            sheet4[XLSX.CellRef(row, 8)] = branch_net["b_fr"]
-            sheet4[XLSX.CellRef(row, 9)] = branch_net["b_to"]            # Add solution data
-            pt = get(branch_sol, "pt", 0)
-            pf = get(branch_sol, "pf", 0)
-            qt = get(branch_sol, "qt", 0)
-            qf = get(branch_sol, "qf", 0)
-            p_loss = pf + pt
-            q_loss = qf + qt
-            sheet4[XLSX.CellRef(row, 10)] = round(pf, digits=4)
-            sheet4[XLSX.CellRef(row, 11)] = round(pt, digits=4)
-            sheet4[XLSX.CellRef(row, 12)] = round(p_loss, digits=4)
-            sheet4[XLSX.CellRef(row, 13)] = round(qt, digits=4)
-            sheet4[XLSX.CellRef(row, 14)] = round(qf, digits=4)
-            sheet4[XLSX.CellRef(row, 15)] = round(q_loss, digits=4)
-            expected_flow = power_flow(
-                result["solution"]["bus"]["$f_bus"]["vm"], result["solution"]["bus"]["$f_bus"]["va"],
-                result["solution"]["bus"]["$t_bus"]["vm"], result["solution"]["bus"]["$t_bus"]["va"],
-                branch_net["br_r"], branch_net["br_x"],  # r, x
-                branch_net["b_fr"], branch_net["b_to"]   # b_from, b_to (each already per-end)
-            )
-            expected_p_loss = expected_flow["Loss_P"]
-            expected_q_loss = expected_flow["Loss_Q"]
-            sheet4[XLSX.CellRef(row, 16)] = round(expected_p_loss, digits=4)
-            sheet4[XLSX.CellRef(row, 17)] = round(expected_q_loss, digits=4)
-            p_loss_mismatch = p_loss - expected_p_loss
-            q_loss_mismatch = q_loss - expected_q_loss
-            sheet4[XLSX.CellRef(row, 18)] = round(p_loss_mismatch, digits=4)
-            sheet4[XLSX.CellRef(row, 19)] = round(q_loss_mismatch, digits=4)
+                sheet4[XLSX.CellRef(row, 1)] = branch_id
+                sheet4[XLSX.CellRef(row, 2)] = f_bus
+                sheet4[XLSX.CellRef(row, 3)] = t_bus
+                sheet4[XLSX.CellRef(row, 4)] = branch_net["transformer"]
+                sheet4[XLSX.CellRef(row, 5)] = branch_net["br_status"]
+                sheet4[XLSX.CellRef(row, 6)] = branch_net["br_x"]
+                sheet4[XLSX.CellRef(row, 7)] = branch_net["br_r"]
+                sheet4[XLSX.CellRef(row, 8)] = branch_net["b_fr"]
+                sheet4[XLSX.CellRef(row, 9)] = branch_net["b_to"]            # Add solution data
+                pt = get(branch_sol, "pt", 0)
+                pf = get(branch_sol, "pf", 0)
+                qt = get(branch_sol, "qt", 0)
+                qf = get(branch_sol, "qf", 0)
+                p_loss = pf + pt
+                q_loss = qf + qt
+                sheet4[XLSX.CellRef(row, 10)] = round(pf, digits=4)
+                sheet4[XLSX.CellRef(row, 11)] = round(pt, digits=4)
+                sheet4[XLSX.CellRef(row, 12)] = round(p_loss, digits=4)
+                sheet4[XLSX.CellRef(row, 13)] = round(qt, digits=4)
+                sheet4[XLSX.CellRef(row, 14)] = round(qf, digits=4)
+                sheet4[XLSX.CellRef(row, 15)] = round(q_loss, digits=4)
+                expected_flow = calc_power_flow(
+                    result["solution"]["bus"]["$f_bus"]["vm"], result["solution"]["bus"]["$f_bus"]["va"],
+                    result["solution"]["bus"]["$t_bus"]["vm"], result["solution"]["bus"]["$t_bus"]["va"],
+                    branch_net["br_r"], branch_net["br_x"],  # r, x
+                    branch_net["b_fr"], branch_net["b_to"]   # b_from, b_to (each already per-end)
+                )
+                expected_p_loss = expected_flow["Loss_P"]
+                expected_q_loss = expected_flow["Loss_Q"]
+                sheet4[XLSX.CellRef(row, 16)] = round(expected_p_loss, digits=4)
+                sheet4[XLSX.CellRef(row, 17)] = round(expected_q_loss, digits=4)
+                p_loss_mismatch = p_loss - expected_p_loss
+                q_loss_mismatch = q_loss - expected_q_loss
+                sheet4[XLSX.CellRef(row, 18)] = round(p_loss_mismatch, digits=4)
+                sheet4[XLSX.CellRef(row, 19)] = round(q_loss_mismatch, digits=4)
 
-            row += 1
+                row += 1
+            end
         end
 
         # Sheet 5: Load data
-        sheet5 = XLSX.addsheet!(xf, "loads")
-
-        # Check if load solution data exists
-        has_load_solution = haskey(result["solution"], "load")
-
-        # Load sheet headers
         if has_load_solution
+            sheet5 = XLSX.addsheet!(xf, "loads")
             load_headers = ["load id", "bus number", "pd", "qd", "served (%)", "p", "q"]
-        else
-            load_headers = ["load id", "bus number", "pd", "qd"]
-        end
 
-        # Write load headers
-        for (i, header) in enumerate(load_headers)
-            sheet5[XLSX.CellRef(1, i)] = header
-        end
-
-        # Write load data
-        row = 2
-        sorted_loads = sort(collect(network_data["load"]), by=x -> parse(Int, x[1]))
-        for (load_id, load_net) in sorted_loads
-            sheet5[XLSX.CellRef(row, 1)] = load_id
-            sheet5[XLSX.CellRef(row, 2)] = load_net["load_bus"]
-            sheet5[XLSX.CellRef(row, 3)] = load_net["pd"]
-            sheet5[XLSX.CellRef(row, 4)] = load_net["qd"]
-
-            # Add solution data if available
-            if has_load_solution && haskey(result["solution"]["load"], load_id)
-                load_sol = result["solution"]["load"][load_id]
-                sheet5[XLSX.CellRef(row, 5)] = round(get(load_sol, "status", 0) * 100, digits=4)
-                sheet5[XLSX.CellRef(row, 6)] = round(get(load_sol, "pd", 0), digits=4)
-                sheet5[XLSX.CellRef(row, 7)] = round(get(load_sol, "qd", 0), digits=4)
+            # Write load headers
+            for (i, header) in enumerate(load_headers)
+                sheet5[XLSX.CellRef(1, i)] = header
             end
 
-            row += 1
+            # Write load data
+            row = 2
+            sorted_loads = sort(collect(network_data["load"]), by=x -> parse(Int, x[1]))
+            for (load_id, load_net) in sorted_loads
+                sheet5[XLSX.CellRef(row, 1)] = load_id
+                sheet5[XLSX.CellRef(row, 2)] = load_net["load_bus"]
+                sheet5[XLSX.CellRef(row, 3)] = load_net["pd"]
+                sheet5[XLSX.CellRef(row, 4)] = load_net["qd"]
+
+                if haskey(result["solution"]["load"], load_id)
+                    load_sol = result["solution"]["load"][load_id]
+                    sheet5[XLSX.CellRef(row, 5)] = round(get(load_sol, "status", 0) * 100, digits=4)
+                    sheet5[XLSX.CellRef(row, 6)] = round(get(load_sol, "pd", 0), digits=4)
+                    sheet5[XLSX.CellRef(row, 7)] = round(get(load_sol, "qd", 0), digits=4)
+                end
+
+                row += 1
+            end
         end
 
         # Conditional PowerWorld sheet
