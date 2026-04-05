@@ -14,3 +14,5 @@ docs/.documenter
 cases/
 raw/
 results/
+config.json
+samples.txt
