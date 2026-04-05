@@ -4,7 +4,7 @@ using Ipopt
 using JuMP
 using JSON3
 using Plots
-include("utils.jl")
+include("../utils.jl")
 plotly()
 # gr()
 
