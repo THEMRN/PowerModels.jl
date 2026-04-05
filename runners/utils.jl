@@ -22,7 +22,7 @@ end
 function prepare_for_pti_export(network_data)
     # Ensure the network data is in the correct format for PTI export
 
-    # Fix load status if load shed is applied
+    # fix load status if load shed is applied
     for (i, load) in network_data["load"]
         if haskey(load, "status")
             load["status"] = load["status"] > 0 ? 1 : 0
@@ -37,8 +37,17 @@ function prepare_for_pti_export(network_data)
         end
     end
 
-    # prevent negative active power generation
+    # fix shunt status if load shed is applied
+    for (i, shunt) in network_data["shunt"]
+        if haskey(shunt, "status") && shunt["status"] != 0
+            shunt["status"] = 1
+        else
+            shunt["status"] = 0
+        end
+    end
+
     for (i, gen) in network_data["gen"]
+        # prevent negative active power generation
         if haskey(gen, "pg") && gen["pg"] < 0
             println("Generator $i has negative active power generation (pg=$(gen["pg"])). Setting pg to 0 for PTI export.")
             gen["pg"] = 0.0
@@ -46,6 +55,11 @@ function prepare_for_pti_export(network_data)
         # if haskey(gen, "qg") && gen["qg"] < 0
         #     gen["qg"] = 0.0
         # end
+
+        # add scheduled voltage (vg) for each generator based on its bus voltage
+        gen_bus = string(gen["gen_bus"])
+        gen_bus_voltage = network_data["bus"][gen_bus]["vm"]
+        gen["vg"] = gen_bus_voltage
     end
 
     return network_data
@@ -92,31 +106,28 @@ function analyze_load_shedding_results(result, network_data)
 end
 
 
-function add_load_shedding_penalty(network_data; uniform=false, uniform_penalty=1e10, penalties=Dict())
-    network = deepcopy(network_data)
+function add_load_shedding_penalty!(network_data; uniform=false, uniform_penalty=1e10, penalties=Dict())
     println("=== Adding Load Shedding Penalties ===")
     if uniform
         # Apply a uniform penalty to all loads
-        for (i, load) in network["load"]
+        for (i, load) in network_data["load"]
             load["shed_penalty"] = uniform_penalty
         end
     else
         # Apply specific penalties to each load based on the provided list
-        # println("Applying specific load shedding penalties:")
         # iterate over penalties, find components at the bus, and apply the penalty
-        # and also apply a default penalty to loads not in the list
-        for (i, load) in network["load"]
+        # and also apply a large default penalty to loads not in the list
+        for (i, load) in network_data["load"]
             load_bus = load["load_bus"]
             if haskey(penalties, string(load_bus))
                 penalty = penalties[string(load_bus)]
                 # println("  Load at bus $(load_bus) (load $i): penalty = $penalty")
                 load["shed_penalty"] = penalty
             else
-                load["shed_penalty"] = lambda^2   # Default penalty if not specified
+                load["shed_penalty"] = 1e4   # Default to a large penalty if not specified
             end
         end
     end
-    return network
 end
 
 function get_timestamp()
@@ -129,6 +140,56 @@ function get_timestamp()
     sec = lpad(Dates.second(now_dt), 2, "0")
 
     return "$(yr)_$(mon)_$(dy)_$(hr)_$(min)_$(sec)"
+end
+
+function find_buses_by_zone(network_data, zone_name::AbstractString)
+    zone_index = nothing
+    for (_, zone) in network_data["zone"]
+        if lowercase(strip(zone["zoname"])) == lowercase(strip(zone_name))
+            zone_index = zone["i"]
+            break
+        end
+    end
+    zone_index === nothing && error("Zone '$zone_name' not found in network data")
+    zone_buses = Set{Int}()
+    for (_, bus) in network_data["bus"]
+        if bus["zone"] == zone_index
+            push!(zone_buses, Int(bus["bus_i"]))
+        end
+    end
+    return sort(collect(zone_buses))
+end
+
+function find_branches_by_zone(network_data, zone_name::AbstractString)
+    # Find the zone index matching the given name (trim whitespace for comparison)
+    zone_index = nothing
+    for (_, zone) in network_data["zone"]
+        if lowercase(strip(zone["zoname"])) == lowercase(strip(zone_name))
+            zone_index = zone["i"]
+            break
+        end
+    end
+    zone_index === nothing && error("Zone '$zone_name' not found in network data")
+
+    # Collect all bus IDs belonging to this zone
+    zone_buses = Set{Int}()
+    for (_, bus) in network_data["bus"]
+        if bus["zone"] == zone_index
+            push!(zone_buses, Int(bus["bus_i"]))
+        end
+    end
+
+    # Find branches where exactly one endpoint is in the zone (zone bridges)
+    branch_keys = Set{Int}()
+    for (branch_key, branch) in network_data["branch"]
+        f_bus = Int(branch["f_bus"])
+        t_bus = Int(branch["t_bus"])
+        if xor(f_bus in zone_buses, t_bus in zone_buses)
+            push!(branch_keys, parse(Int, branch_key))
+        end
+    end
+
+    return sort(collect(branch_keys))
 end
 
 function find_branches_by_bus_pairs(network_data, bus_pairs)
@@ -149,6 +210,7 @@ function find_branches_by_bus_pairs(network_data, bus_pairs)
     return sort(branch_keys)
 end
 
+
 function find_branches_by_bus(network_data, buses)
     bus_set = Set(buses)
     branch_keys = Int[]
@@ -164,14 +226,46 @@ function find_branches_by_bus(network_data, buses)
     return sort(branch_keys)
 end
 
-function scale_loads!(network_data, scale_percent, buses=nothing)
+# Scale all loads (or only those at `buses`) by a fixed percentage.
+function scale_loads!(network_data, scale::Real, buses=nothing)
     for (i, load) in network_data["load"]
         if buses !== nothing && !(load["load_bus"] in buses)
             continue
         end
-        println("Scaling load at bus $(load["load_bus"]) by $(scale_percent)%")
-        load["pd"] *= (1 + scale_percent / 100)
-        load["qd"] *= (1 + scale_percent / 100)
+        println("Scaling load at bus $(load["load_bus"]) by $((scale - 1) * 100)%")
+        load["pd"] *= scale
+        load["qd"] *= scale
+    end
+end
+
+# Scale all loads in a zone (matched case-insensitively) by a fixed percentage.
+function scale_loads!(network_data, scale::Real, zone_name::AbstractString)
+    zone_index = nothing
+    for (_, zone) in network_data["zone"]
+        if lowercase(strip(zone["zoname"])) == lowercase(strip(zone_name))
+            zone_index = zone["i"]
+            break
+        end
+    end
+    zone_index === nothing && error("Zone '$zone_name' not found in network data")
+
+    for (i, load) in network_data["load"]
+        load["zone"] == zone_index || continue
+        println("Scaling load at bus $(load["load_bus"]) (zone '$zone_name') by $((scale - 1) * 100)%")
+        load["pd"] *= scale
+        load["qd"] *= scale
+    end
+end
+
+# Scale loads per-bus using a Dict{bus_number => scale_percent}.
+function scale_loads!(network_data, bus_scale_dict::AbstractDict)
+    for (i, load) in network_data["load"]
+        bus = load["load_bus"]
+        haskey(bus_scale_dict, bus) || continue
+        scale = bus_scale_dict[bus]
+        println("Scaling load at bus $bus by $((scale - 1) * 100)%")
+        load["pd"] *= scale
+        load["qd"] *= scale
     end
 end
 
@@ -329,26 +423,265 @@ function print_branch_flows(result, modified_network_data, target_lines)
     println("Total absolute flow through target lines: $abs_flow_sum")
 end
 
-function print_load_shedding_status(result, modified_network_data)
-    println("Preemtive load shedding results:")
-    println("\n---  Load Serving Status ---")
-    println("Bus \t PDn \t PD \t Shed \t Shed Percentage")
+"""
+Print generation capacity of a given zone
+if zone_name is nothing, print generation capacity of the whole network
+print in format: zone_name: Pmin, Pmax, Qmin, Qmax
+"""
+function print_zone_capacity(network_data, zone_name=nothing)
+    zone_index = nothing
+    zone_buses = nothing
+    if zone_name !== nothing
+        for (_, zone) in get(network_data, "zone", Dict())
+            if lowercase(strip(zone["zoname"])) == lowercase(strip(zone_name))
+                zone_index = zone["i"]
+                break
+            end
+        end
+        zone_index === nothing && error("Zone '$zone_name' not found in network data")
+        zone_buses = Set{Int}()
+        for (_, bus) in network_data["bus"]
+            if bus["zone"] == zone_index
+                push!(zone_buses, Int(bus["bus_i"]))
+            end
+        end
+    end
+
+    pmin_tot = 0.0
+    pmax_tot = 0.0
+    qmin_tot = 0.0
+    qmax_tot = 0.0
+    for (_, g) in get(network_data, "gen", Dict())
+        get(g, "gen_status", 1) == 0 && continue
+        if zone_buses !== nothing && !(Int(g["gen_bus"]) in zone_buses)
+            continue
+        end
+        pmin_tot += get(g, "pmin", 0.0)
+        pmax_tot += get(g, "pmax", 0.0)
+        qmin_tot += get(g, "qmin", 0.0)
+        qmax_tot += get(g, "qmax", 0.0)
+    end
+
+    label = zone_name === nothing ? "Whole network" : strip(string(zone_name))
+    println(
+        "$label: Pmin=$(round(pmin_tot, digits=4)), Pmax=$(round(pmax_tot, digits=4)), " *
+        "Qmin=$(round(qmin_tot, digits=4)), Qmax=$(round(qmax_tot, digits=4))",
+    )
+end
+
+"""
+    print_network_summary(network_data; zone_name=nothing)
+
+Print a summary of the network data. If `zone_name` is specified (matched case-insensitively),
+print statistics for that zone only; otherwise print statistics for the whole network.
+
+Summary includes:
+- Available voltage levels (base kV)
+- Total number of buses, generators, loads
+- Total number of AC branches and transformers
+- Number of zones and their names
+- Total generation capacity (active and reactive)
+- Total generation (active and reactive)
+- Total load (active and reactive)
+- Total shunt susceptance (B, per-unit)
+"""
+function print_network_summary(network_data; zone_name::Union{String,Nothing}=nothing)
+    # Resolve zone index and filter set if zone_name is specified
+    zone_index = nothing
+    zone_buses = nothing
+    if zone_name !== nothing
+        zone_index = nothing
+        for (_, zone) in get(network_data, "zone", Dict())
+            if lowercase(strip(zone["zoname"])) == lowercase(strip(zone_name))
+                zone_index = zone["i"]
+                break
+            end
+        end
+        zone_index === nothing && error("Zone '$zone_name' not found in network data")
+        zone_buses = Set{Int}()
+        for (_, bus) in network_data["bus"]
+            if bus["zone"] == zone_index
+                push!(zone_buses, Int(bus["bus_i"]))
+            end
+        end
+    end
+
+    # --- Buses ---
+    buses = get(network_data, "bus", Dict())
+    bus_list = [b for (_, b) in buses if zone_buses === nothing || Int(b["bus_i"]) in zone_buses]
+    n_buses = length(bus_list)
+
+    # --- Voltage levels (base_kv) ---
+    base_kv_set = Set{Float64}()
+    for b in bus_list
+        push!(base_kv_set, Float64(b["base_kv"]))
+    end
+    base_kv_sorted = sort(collect(base_kv_set))
+
+    # --- Generators ---
+    gens = get(network_data, "gen", Dict())
+    gen_list = [
+        g for (_, g) in gens
+        if (zone_buses === nothing || Int(g["gen_bus"]) in zone_buses) &&
+        get(g, "gen_status", 1) != 0
+    ]
+    n_gens = length(gen_list)
+
+    # --- Loads ---
+    loads = get(network_data, "load", Dict())
+    load_list = [
+        l for (_, l) in loads
+        if (zone_buses === nothing || Int(get(l, "zone", 0)) == zone_index) &&
+        get(l, "status", 1) != 0
+    ]
+    n_loads = length(load_list)
+
+    # --- Branches: AC lines vs transformers ---
+    branches = get(network_data, "branch", Dict())
+    ac_branches = []
+    transformers = []
+    for (_, br) in branches
+        get(br, "br_status", 1) == 0 && continue
+        f_bus = Int(br["f_bus"])
+        t_bus = Int(br["t_bus"])
+        if zone_buses !== nothing && !(f_bus in zone_buses && t_bus in zone_buses)
+            continue
+        end
+        if get(br, "transformer", false)
+            push!(transformers, br)
+        else
+            push!(ac_branches, br)
+        end
+    end
+    n_ac_branches = length(ac_branches)
+    n_transformers = length(transformers)
+
+    # --- Zones ---
+    zones = get(network_data, "zone", Dict())
+    zone_names = [strip(z["zoname"]) for (_, z) in sort(zones, by=x -> parse(Int, x[1]))]
+    n_zones = length(zones)
+
+    # --- Generation capacity and actual generation ---
+    pmax_tot = sum(get(g, "pmax", 0.0) for g in gen_list)
+    qmax_tot = sum(get(g, "qmax", 0.0) for g in gen_list)
+    pmin_tot = sum(get(g, "pmin", 0.0) for g in gen_list)
+    qmin_tot = sum(get(g, "qmin", 0.0) for g in gen_list)
+    pg_tot = sum(get(g, "pg", 0.0) for g in gen_list)
+    qg_tot = sum(get(g, "qg", 0.0) for g in gen_list)
+
+    # --- Total load ---
+    pd_tot = sum(get(l, "pd", 0.0) for l in load_list)
+    qd_tot = sum(get(l, "qd", 0.0) for l in load_list)
+
+    # --- Total shunt susceptance (B) ---
+    shunts = get(network_data, "shunt", Dict())
+    shunt_B_tot = 0.0
+    shunt_G_tot = 0.0
+    for (_, sh) in shunts
+        get(sh, "status", 1) == 0 && continue
+        shunt_bus = Int(get(sh, "shunt_bus", 0))
+        if zone_buses !== nothing && !(shunt_bus in zone_buses)
+            continue
+        end
+        bs = get(sh, "bs", 0.0)
+        gs = get(sh, "gs", 0.0)
+        B_step = 0.0
+        for i in 1:8
+            bi = get(sh, "b$i", 0.0)
+            ni = Int(get(sh, "n$i", 0))
+            B_step += ni * bi
+        end
+        shunt_B_tot += bs + B_step
+        shunt_G_tot += gs
+    end
+
+    # --- Print ---
+    scope = zone_name === nothing ? "Whole network" : "Zone: $(strip(zone_name))"
+    println("========================================")
+    println("Network Summary - $scope")
+    println("========================================")
+    println("Available voltage levels (base kV): ", base_kv_sorted)
+    println("Total number of buses:              ", n_buses)
+    println("Total number of generators:         ", n_gens)
+    println("Total number of loads:              ", n_loads)
+    println("Total number of AC branches:        ", n_ac_branches)
+    println("Total number of transformers:       ", n_transformers)
+    println("Number of zones:                    ", n_zones)
+    println("Zone names:                         ", zone_names)
+    println("--- Generation ---")
+    println("Total generation capacity (P max):  ", round(pmax_tot, digits=4), " pu")
+    println("Total generation capacity (Q max):  ", round(qmax_tot, digits=4), " pu")
+    println("Total generation capacity (P min):  ", round(pmin_tot, digits=4), " pu")
+    println("Total generation capacity (Q min):  ", round(qmin_tot, digits=4), " pu")
+    println("Total generation (P):               ", round(pg_tot, digits=4), " pu")
+    println("Total generation (Q):               ", round(qg_tot, digits=4), " pu")
+    println("--- Load ---")
+    println("Total load (P):                     ", round(pd_tot, digits=4), " pu")
+    println("Total load (Q):                     ", round(qd_tot, digits=4), " pu")
+    println("--- Shunt ---")
+    println("Total shunt susceptance (B):        ", round(shunt_B_tot, digits=4), " pu")
+    println("Total shunt conductance (G):        ", round(shunt_G_tot, digits=4), " pu")
+    println("========================================")
+end
+
+function print_load_shedding_status(result, modified_network_data, detailed=false)
+    println("Load shedding results:")
+    if detailed
+        println("---  Load Serving Status by Bus ---")
+        println("Bus \t PDn \t PD \t Shed \t Shed Percentage")
+    end
     total_shed = 0.0
+    total_load = 0
+    zone_name_by_index = Dict{Int,String}()
+    for (_, zone) in get(modified_network_data, "zone", Dict())
+        zone_name_by_index[Int(zone["i"])] = strip(zone["zoname"])
+    end
+    bus_zone_by_bus = Dict{Int,Int}()
+    for (_, bus) in get(modified_network_data, "bus", Dict())
+        bus_zone_by_bus[Int(bus["bus_i"])] = Int(get(bus, "zone", 0))
+    end
+    zone_total_load = Dict{Int,Float64}()
+    zone_total_shed = Dict{Int,Float64}()
     for (i, load) in modified_network_data["load"]
+        total_load += load["pd"]
+        load_bus = Int(load["load_bus"])
+        zone_index = Int(get(load, "zone", get(bus_zone_by_bus, load_bus, 0)))
+        if zone_index != 0
+            zone_total_load[zone_index] = get(zone_total_load, zone_index, 0.0) + load["pd"]
+        end
         if haskey(result["solution"]["load"][i], "status")
             status = result["solution"]["load"][i]["status"]
+
             if status >= 1.0
                 continue
             end
-            load_bus = load["load_bus"]
             original_pd = load["pd"]
             served_pd = result["solution"]["load"][i]["pd"]
             shed_amount = original_pd - served_pd
             shed_percentage = (shed_amount / original_pd) * 100
             total_shed += shed_amount
-
-            println("$(load_bus) \t $(original_pd) \t $(round(served_pd, digits=2)) \t $(round(shed_amount, digits=2)) \t $(round(shed_percentage, digits=2))%")
+            if zone_index != 0
+                zone_total_shed[zone_index] = get(zone_total_shed, zone_index, 0.0) + shed_amount
+            end
+            if detailed
+                println("$(load_bus) \t $(round(original_pd, digits=2)) \t $(round(served_pd, digits=2)) \t $(round(shed_amount, digits=2)) \t $(round(shed_percentage, digits=2))%")
+            end
         end
     end
-    println("Total load shed: $(round(total_shed, digits=2)) MW")
+    base_mva = modified_network_data["baseMVA"]
+    if !isempty(zone_total_load)
+        println("---  Load Shed by Zone ---")
+        for zone_index in sort(collect(keys(zone_total_load)))
+            zone_name = get(zone_name_by_index, zone_index, "Zone $zone_index")
+            zone_shed_mw = round(get(zone_total_shed, zone_index, 0.0) * base_mva, digits=2)
+            zone_load_mw = round(zone_total_load[zone_index] * base_mva, digits=2)
+            println("$(zone_name):\t $(zone_shed_mw) MW\t from\t $(zone_load_mw) MW\t $(round(zone_shed_mw / zone_load_mw * 100, digits=2))%")
+        end
+        println("--------------------------------")
+    end
+    total_shed_mw = round(total_shed * base_mva, digits=2)
+    total_load_mw = round(total_load * base_mva, digits=2)
+    println("Total load shed: $(total_shed_mw) MW from $(total_load_mw) MW")
 end
+
+
