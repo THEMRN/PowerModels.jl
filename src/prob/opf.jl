@@ -87,7 +87,7 @@ function build_opf_with_load_shedding(pm::AbstractPowerModel)
     variable_load_power_factor(pm; relax=true)
     variable_shunt_admittance_factor(pm; relax=true)
 
-    objective_min_cost_with_load_shedding_penalty(pm; load_shedding_penalty=-100)
+    objective_min_cost_with_load_shedding_penalty(pm)
 
     constraint_model_voltage(pm)
 
