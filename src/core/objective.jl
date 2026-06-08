@@ -1,130 +1,109 @@
-"""
-Objective: sum of active power flow in specified branches.
-"""
-function objective_sum_branch_flows(pm::AbstractPowerModel; kwargs...)
-    branch_ids = pm.data["target_ids"]
-    is_ac = pm.data["opf_model"] == "AC"
-    p_model = pm.data["p_model"]
+function _get_target_branch_flow_terms(pm::AbstractPowerModel, i::Int; is_ac::Bool=false)
+    f_bus = ref(pm, :branch, i, "f_bus")
+    t_bus = ref(pm, :branch, i, "t_bus")
 
-    expr = 0.0
+    flow_bus_from = f_bus
+    flow_bus_to = t_bus
+
+    if haskey(pm.data, "target_zone_buses")
+        target_zone_buses = Set(pm.data["target_zone_buses"])
+        if !(f_bus in target_zone_buses) && (t_bus in target_zone_buses)
+            println("Adjusting branch $i direction from $(f_bus) to $(t_bus)")
+            flow_bus_from = t_bus
+            flow_bus_to = f_bus
+        end
+    end
+
+    p_term = var(pm, :p)[(i, flow_bus_from, flow_bus_to)]
+    q_term = is_ac ? var(pm, :q)[(i, flow_bus_from, flow_bus_to)] : 0.0
+
+    return p_term, q_term
+end
+
+function _linearized_absolute_value(pm::AbstractPowerModel, expr; base_name::String)
+    t = JuMP.@variable(pm.model, base_name = base_name, lower_bound = 0.0)
+    JuMP.@constraint(pm.model, expr <= t)
+    JuMP.@constraint(pm.model, expr >= -t)
+
+    return t
+end
+
+function _build_branch_flow_penalty(pm::AbstractPowerModel, branch_ids, p_model; is_ac::Bool, abs_var_base_name::String)
+    p_sum = JuMP.AffExpr()
+    q_sum = JuMP.AffExpr()
+    p_penalty = JuMP.AffExpr()
+    q_penalty = JuMP.AffExpr()
+
     for i in branch_ids
-        # Idk why the averaging method which accounts for the loss does not work well
-        # p_term_12 = var(pm, :p)[(i, ref(pm, :branch, i, "f_bus"), ref(pm, :branch, i, "t_bus"))]
-        # p_term_21 = var(pm, :p)[(i, ref(pm, :branch, i, "t_bus"), ref(pm, :branch, i, "f_bus"))]
-        # p_term = (p_term_12 + p_term_21) / 2.0
-
-        p_term = var(pm, :p)[(i, ref(pm, :branch, i, "f_bus"), ref(pm, :branch, i, "t_bus"))]
-        q_term = is_ac ? var(pm, :q)[(i, ref(pm, :branch, i, "f_bus"), ref(pm, :branch, i, "t_bus"))] : 0.0
+        p_term, q_term = _get_target_branch_flow_terms(pm, i; is_ac=is_ac)
 
         if p_model == "abs_sum"
-            expr += p_term
-            # elseif p_model == "sum_abs"
-            #     t = JuMP.@variable(pm.model, base_name = "abs_flow_$(i)", lower_bound = 0.0)
-            #     JuMP.@constraint(pm.model, p_term <= t)
-            #     JuMP.@constraint(pm.model, p_term >= -t)
-            #     expr += t
+            p_sum += p_term
+            q_sum += q_term
         elseif p_model == "squared"
-            q_term = q_term^2
-            expr += p_term^2
+            p_penalty += p_term^2
+            q_penalty += q_term^2
+        elseif p_model == "combined"
+            p_sum += p_term
+            q_penalty += q_term^2
         else
             Memento.error(_LOGGER, "unknown p_model type: $(p_model)")
         end
     end
 
     if p_model == "abs_sum"
-        # Linearize absolute value: min t such that -t <= expr <= t
-        t = JuMP.@variable(pm.model, base_name = "abs_sum_flow", lower_bound = 0.0)
-        JuMP.@constraint(pm.model, expr <= t)
-        JuMP.@constraint(pm.model, expr >= -t)
+        abs_p_sum = _linearized_absolute_value(pm, p_sum; base_name="$(abs_var_base_name)_p")
+        abs_q_sum = _linearized_absolute_value(pm, q_sum; base_name="$(abs_var_base_name)_q")
+        return abs_p_sum + abs_q_sum
 
-        return JuMP.@objective(pm.model, Min, t)
+    elseif p_model == "squared"
+        return p_penalty + q_penalty
+
+    elseif p_model == "combined"
+        abs_p_sum = _linearized_absolute_value(pm, p_sum; base_name=abs_var_base_name)
+        return abs_p_sum + q_penalty
     end
 
-    return JuMP.@objective(pm.model, Min, expr)
 end
 
+function _load_shedding_penalty(pm::AbstractPowerModel)
+    penalty = JuMP.AffExpr()
 
-function objective_sum_branch_flows_and_cost(pm::AbstractPowerModel; kwargs...)
-    expression_pg_cost(pm; kwargs...)
-    expression_p_dc_cost(pm; kwargs...)
-
-    expr1 = sum(
-        sum(var(pm, n, :pg_cost, i) for (i, gen) in nw_ref[:gen])
-        for (n, nw_ref) in nws(pm)
-    )
-
-    branch_ids = pm.data["target_ids"]
-    is_ac = pm.data["opf_model"] == "AC"
-    p_model = pm.data["p_model"]
-    expr2 = 0.0
-    for i in branch_ids
-        p_term = var(pm, :p)[(i, ref(pm, :branch, i, "f_bus"), ref(pm, :branch, i, "t_bus"))]
-        p_term = p_model == "abs_sum" ? p_term : p_term^2
-        q_term = is_ac ? var(pm, :q)[(i, ref(pm, :branch, i, "f_bus"), ref(pm, :branch, i, "t_bus"))] : 0.0
-        q_term = q_term^2
-        expr2 += p_term + q_term
-    end
-
-    lambda = pm.data["lambda"]
-    expr = expr1 + lambda * expr2
-
-    return JuMP.@objective(pm.model, Min, expr)
-end
-
-function objective_min_branch_flows_with_load_shedding(pm::AbstractPowerModel; kwargs...)
-
-    # branch flow penalty
-    branch_ids = pm.data["target_ids"]
-    # is_ac = pm.data["opf_model"] == "AC"
-    p_model = pm.data["p_model"]
-    lambda = pm.data["lambda"]
-
-    # load shedding penalty
-    load_shed_penalty_cost = 0.0
     for (n, nw_ref) in nws(pm)
         z_demand = var(pm, n, :z_demand)
         for (i, load) in nw_ref[:load]
-            load_shed_penalty_cost += load["shed_penalty"] * abs(load["pd"]) * (1 - z_demand[i])
+            penalty += load["shed_penalty"] * abs(load["pd"]) * (1 - z_demand[i])
         end
     end
 
-    # branch flow expression
-    flow_expr = 0.0
-    for i in branch_ids
-        p_term = var(pm, :p)[(i, ref(pm, :branch, i, "f_bus"), ref(pm, :branch, i, "t_bus"))]
-        q_term = var(pm, :q)[(i, ref(pm, :branch, i, "f_bus"), ref(pm, :branch, i, "t_bus"))]
-        if p_model == "abs_sum"
-            flow_expr += p_term
-            # elseif p_model == "sum_abs"
-            #     t = JuMP.@variable(pm.model, base_name = "abs_flow_$(i)", lower_bound = 0.0)
-            #     JuMP.@constraint(pm.model, p_term <= t)
-            #     JuMP.@constraint(pm.model, p_term >= -t)
-            #     flow_expr += t
-        elseif p_model == "squared"
-            flow_expr += p_term^2
-            flow_expr += q_term^2
-        else
-            Memento.error(_LOGGER, "unknown p_model type: $(p_model)")
-        end
-    end
+    return penalty
+end
 
+"""
+Objective: sum of active power flow in specified branches.
+"""
+function objective_min_branch_flows(pm::AbstractPowerModel; kwargs...)
+    branch_ids = pm.data["target_ids"]
+    is_ac = pm.data["opf_model"] == "AC"
+    p_model = pm.data["p_model"]
+    flow_penalty = _build_branch_flow_penalty(pm, branch_ids, p_model; is_ac=is_ac, abs_var_base_name="abs_flow_penalty")
 
-    if p_model == "abs_sum"
-        # Linearize absolute value: min t such that -t <= expr <= t
-        t = JuMP.@variable(pm.model, base_name = "abs_sum_flow", lower_bound = 0.0)
-        JuMP.@constraint(pm.model, flow_expr <= t)
-        JuMP.@constraint(pm.model, flow_expr >= -t)
-        expr = lambda * t + load_shed_penalty_cost
-    elseif p_model == "squared"
-        expr = lambda * flow_expr + load_shed_penalty_cost
-    else
-        Memento.error(_LOGGER, "unknown p_model type: $(p_model)")
-    end
+    return JuMP.@objective(pm.model, Min, flow_penalty)
+end
+
+function objective_min_branch_flows_with_load_shedding(pm::AbstractPowerModel; kwargs...)
+    branch_ids = pm.data["target_ids"]
+    is_ac = pm.data["opf_model"] == "AC"
+    p_model = pm.data["p_model"]
+    lambda = pm.data["lambda"]
+    flow_penalty = _build_branch_flow_penalty(pm, branch_ids, p_model; is_ac=is_ac, abs_var_base_name="abs_flow_penalty")
+    load_shedding_penalty = _load_shedding_penalty(pm)
+    expr = lambda * flow_penalty + load_shedding_penalty
 
     return JuMP.@objective(pm.model, Min, expr)
 end
 
-function objective_min_cost_with_load_shedding_penalty(pm::AbstractPowerModel; kwargs...)
+function objective_min_cost_with_load_shedding(pm::AbstractPowerModel; kwargs...)
     expression_pg_cost(pm)
 
     generation_cost = sum(
@@ -132,55 +111,8 @@ function objective_min_cost_with_load_shedding_penalty(pm::AbstractPowerModel; k
         for (n, nw_ref) in nws(pm)
     )
 
-    # load shedding penalty
-    load_shed_penalty_cost = 0.0
-    for (n, nw_ref) in nws(pm)
-        z_demand = var(pm, n, :z_demand)
-        for (i, load) in nw_ref[:load]
-            load_shed_penalty_cost += load["shed_penalty"] * abs(load["pd"]) * (1 - z_demand[i])
-        end
-    end
-
-    expr = generation_cost + load_shed_penalty_cost
-    return JuMP.@objective(pm.model, Min, expr)
-end
-
-function objective_min_cost_and_branch_flows_with_load_shedding(pm::AbstractPowerModel; kwargs...)
-    expression_pg_cost(pm; kwargs...)
-    expression_p_dc_cost(pm; kwargs...)
-
-    # cost of generation
-    generation_cost = sum(
-        sum(var(pm, n, :pg_cost, i) for (i, gen) in nw_ref[:gen])
-        for (n, nw_ref) in nws(pm)
-    )
-
-    # branch flow penalty
-    branch_ids = pm.data["target_ids"]
-    is_ac = pm.data["opf_model"] == "AC"
-    p_model = pm.data["p_model"]
-    branch_flow_penalty = 0.0
-    for i in branch_ids
-        p_term = var(pm, :p)[(i, ref(pm, :branch, i, "f_bus"), ref(pm, :branch, i, "t_bus"))]
-        p_term = p_model == "abs_sum" ? p_term : p_term^2
-        q_term = is_ac ? var(pm, :q)[(i, ref(pm, :branch, i, "f_bus"), ref(pm, :branch, i, "t_bus"))] : 0.0
-        q_term = q_term^2
-        branch_flow_penalty += p_term + q_term
-    end
-
-    # load shedding penalty
-    load_shed_penalty_cost = 0.0
-    for (n, nw_ref) in nws(pm)
-        z_demand = var(pm, n, :z_demand)
-        for (i, load) in nw_ref[:load]
-            load_shed_penalty_cost += load["shed_penalty"] * abs(load["pd"]) * (1 - z_demand[i])
-        end
-    end
-
-    # combine all 
-    lambda = pm.data["lambda"]
-    expr = generation_cost + lambda * branch_flow_penalty + load_shed_penalty_cost
-
+    load_shedding_penalty = _load_shedding_penalty(pm)
+    expr = generation_cost + load_shedding_penalty
     return JuMP.@objective(pm.model, Min, expr)
 end
 

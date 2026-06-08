@@ -9,25 +9,14 @@ import json
 import datetime as dt
 import re
 import webbrowser
+from html import escape
+
+print("-- Starting dynamic simulation script...")
 
 # specify your PSSE installation path here, in raw string format, i.e., r"your_path_here"
 # 36.1 example path:
 PSSE_PATH = r"C:\Program Files\PTI\PSSE36\36.5"
 PYTHON_VERSION = "14"
-
-
-class Tee(object):
-    def __init__(self, *files):
-        self.files = files
-
-    def write(self, obj):
-        for f in self.files:
-            f.write(obj)
-            f.flush()
-
-    def flush(self):
-        for f in self.files:
-            f.flush()
 
 
 def get_buses_in_zone(zone_num: int) -> list[int]:
@@ -69,6 +58,12 @@ import psspy  # type: ignore
 import dyntools  # type: ignore
 
 base_freq = 60.0
+EVENT_TIME = 10.0
+SIM_END_TIME = 30.0
+VOLTAGE_LOW = 0.9
+VOLTAGE_HIGH = 1.1
+WTVSI_K = 1
+WTVSI_TOP_N = 5
 
 print("-- file paths:")
 print("Raw file path:\r", raw_file_pth)
@@ -80,14 +75,10 @@ now = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
 print("-- Initializing PSSE...")
 psspy.psseinit()
 log_file = f"{output_dir}/log_{now}.txt"
-_orig_stdout = sys.stdout
-_orig_stderr = sys.stderr
-f = open(log_file, "w")
-sys.stdout = Tee(sys.stdout, f)
-sys.stderr = Tee(sys.stderr, f)
-# psspy.progress_output(2, log_file, [0, 0])
-# psspy.progress_output(1, "", [0, 0])
-psspy.progress_output(6, "", [0, 0])
+print(f"-- PSSE progress log: {log_file}")
+ierr = psspy.progress_output(2, log_file, [0, 0])
+if ierr != 0:
+    print(f"-- Warning: failed to redirect PSSE progress output (ierr={ierr})")
 
 # read the raw file
 psspy.read(0, raw_file_pth)
@@ -161,6 +152,7 @@ print("-- Power flow solved successfully.")
 
 # build excel report (bus, gen, load, branch)
 print("-- Building solved power flow report...")
+load_bus_numbers = set()
 
 try:
     # Buses
@@ -210,6 +202,8 @@ try:
             p_act = act.real
             q_act = act.imag
             p_nom = nom.real
+            if abs(p_act) > 1e-9 or abs(p_nom) > 1e-9:
+                load_bus_numbers.add(int(load_buses[0][i]))
             if p_nom == 0:
                 served = 0.0
             else:
@@ -326,7 +320,7 @@ psspy.strt_2([0, 0], output_file)
 print("-- Initializing dynamic simulation...")
 psspy.run(0, -0.02, 1000, 1, 1)
 print("-- Running dynamic simulation... (pre-event)")
-psspy.run(0, 10.0, 1000, 1, 1)
+psspy.run(0, EVENT_TIME, 1000, 1, 1)
 
 # reading the line outages from the file
 try:
@@ -356,7 +350,7 @@ except Exception as e:
 
 # ----------------------------------------------
 print("-- Running dynamic simulation... (post-event)")
-psspy.run(0, 30.0, 1000, 1, 1)
+psspy.run(0, SIM_END_TIME, 1000, 1, 1)
 
 # read the channel data
 print("-- Reading channel data...")
@@ -369,7 +363,7 @@ df = pd.DataFrame({chanid_dict[key]: values for key, values in chandata_dict.ite
 # print(df.head())
 
 print("-- Plotting dynamic simulation channels...")
-keywords = ["POWR", "VARS", "FREQ", "VOLT", "PLOD"]
+keywords = ["FREQ", "VOLT", "POWR", "VARS", "PLOD"]
 # keywords = ["FREQ", "POWR"]
 # keywords = ["POWR"]
 keyword_map = {
@@ -379,6 +373,9 @@ keyword_map = {
     "VOLT": {"title": "Bus Voltage (pu)", "yaxis": "Voltage (pu)"},
     "PLOD": {"title": "Load Active Power (MW)", "yaxis": "Load P (MW)"},
 }
+SHOW_SIGNAL_STATS = True
+SIGNAL_STATS_KEYWORDS = {"FREQ", "VOLT"}
+SIGNAL_STATS_TOP_N = 5
 
 time_col = "Time(s)"
 if time_col not in df.columns:
@@ -388,10 +385,365 @@ if time_col not in df.columns:
 # midlands zone buses
 # midlands_buses = get_buses_in_zone(5)
 
+
+def _fmt(value, digits=4):
+    return f"{value:.{digits}f}"
+
+
+def _series_arrays(series_info):
+    values = np.asarray(series_info["values"], dtype=float)
+    times = np.asarray(series_info["time"], dtype=float)
+    finite = np.isfinite(values) & np.isfinite(times)
+    return values[finite], times[finite]
+
+
+def extract_bus_number(channel_name):
+    match = re.search(r"(\d+)", channel_name)
+    return int(match.group(1)) if match else None
+
+
+def is_valid_voltage_profile(values):
+    tail_values = np.asarray(values[-100:], dtype=float)
+    return bool(np.any(np.isfinite(tail_values) & (np.abs(tail_values) > 1e-9)))
+
+
+def calculate_wtvsi(df, time_col, load_buses, t0, t_end, k=WTVSI_K):
+    duration = float(t_end - t0)
+    load_buses = {int(bus) for bus in load_buses}
+    bus_integrals = {}
+    voltage_channel_count = 0
+
+    if time_col not in df.columns or duration <= 0.0 or not load_buses:
+        return {
+            "wtvsi": 0.0,
+            "event_time": float(t0),
+            "end_time": float(t_end),
+            "duration": max(duration, 0.0),
+            "k": k,
+            "load_bus_count": len(load_buses),
+            "integrated_bus_count": 0,
+            "missing_voltage_profile_count": len(load_buses),
+            "voltage_channel_count": 0,
+            "top_contributors": [],
+            "bus_integrals": {},
+        }
+
+    all_times = np.asarray(df[time_col], dtype=float)
+    for col in [c for c in df.columns if "VOLT" in c and c != time_col]:
+        bus = extract_bus_number(col)
+        # if bus not in load_buses:
+        #     continue
+
+        values = np.asarray(df[col], dtype=float)
+        if not is_valid_voltage_profile(values):
+            continue
+
+        finite = np.isfinite(values) & np.isfinite(all_times)
+        interval = finite & (all_times >= t0) & (all_times <= t_end)
+        if not np.any(interval):
+            continue
+
+        voltage_channel_count += 1
+        interval_values = values[interval]
+        interval_times = all_times[interval]
+        delta = np.maximum.reduce(
+            [
+                np.full_like(interval_values, VOLTAGE_LOW) - interval_values,
+                np.zeros_like(interval_values),
+                interval_values - np.full_like(interval_values, VOLTAGE_HIGH),
+            ]
+        )
+        integral = float(np.trapezoid(delta**k, interval_times))
+        bus_integrals[bus] = max(bus_integrals.get(bus, 0.0), integral)
+
+    total_integral = sum(bus_integrals.values())
+    wtvsi = total_integral / (voltage_channel_count * duration)
+    # wtvsi = total_integral / (len(load_buses) * duration)
+    top_contributors = [
+        {"bus": bus, "integral": value}
+        for bus, value in sorted(bus_integrals.items(), key=lambda item: item[1], reverse=True)[:WTVSI_TOP_N]
+        if value > 0.0
+    ]
+
+    return {
+        "wtvsi": float(wtvsi),
+        "event_time": float(t0),
+        "end_time": float(t_end),
+        "duration": duration,
+        "k": k,
+        # "load_bus_count": len(load_buses),
+        "bus_count": len(bus_integrals),
+        "integrated_bus_count": len(bus_integrals),
+        # "missing_voltage_profile_count": max(0, len(load_buses) - len(bus_integrals)),
+        "voltage_channel_count": voltage_channel_count,
+        "top_contributors": top_contributors,
+        "bus_integrals": {str(bus): value for bus, value in sorted(bus_integrals.items())},
+    }
+
+
+def write_voltage_stats_json(output_dir, wtvsi_summary):
+    stats_path = output_dir / "voltage_stats.json"
+    with open(stats_path, "w", encoding="utf-8") as file:
+        json.dump({"wtvsi": wtvsi_summary}, file, indent=2)
+
+    print(
+        "-- WTVSI written: "
+        f"{stats_path} | WTVSI={wtvsi_summary['wtvsi']:.6f} "
+        # f"| load buses={wtvsi_summary['load_bus_count']} "
+        f"| buses={wtvsi_summary['bus_count']} "
+        f"| integrated={wtvsi_summary['integrated_bus_count']}"
+    )
+    return stats_path
+
+
+def _metric_card(label, value, detail=""):
+    detail_html = f"<span>{escape(detail)}</span>" if detail else ""
+    return f"<div class='metric'><label>{escape(label)}</label><strong>{escape(value)}</strong>{detail_html}</div>"
+
+
+def _stats_table(rows, columns):
+    if not rows:
+        return "<div class='stats-empty'>No plotted signals available for stats.</div>"
+
+    header_html = "".join(f"<th>{escape(label)}</th>" for _, label in columns)
+    rows_html = []
+    for row in rows:
+        cells = "".join(f"<td>{escape(str(row[key]))}</td>" for key, _ in columns)
+        rows_html.append(f"<tr>{cells}</tr>")
+    return (
+        f"<table class='stats-table'><thead><tr>{header_html}</tr></thead><tbody>{''.join(rows_html)}</tbody></table>"
+    )
+
+
+def build_frequency_stats_html(plotted_series):
+    rows = []
+    below_59 = 0
+    below_57 = 0
+    above_605 = 0
+    above_618 = 0
+
+    for series_info in plotted_series:
+        values, times = _series_arrays(series_info)
+        if len(values) == 0:
+            continue
+
+        min_idx = int(np.argmin(values))
+        max_idx = int(np.argmax(values))
+        min_val = float(values[min_idx])
+        max_val = float(values[max_idx])
+        min_time = float(times[min_idx])
+        max_time = float(times[max_idx])
+        min_dev = abs(min_val - base_freq)
+        max_dev = abs(max_val - base_freq)
+        if min_dev >= max_dev:
+            worst_dev = min_dev
+            worst_time = min_time
+        else:
+            worst_dev = max_dev
+            worst_time = max_time
+
+        below_59 += int(np.any(values < 59.0))
+        below_57 += int(np.any(values < 57.0))
+        above_605 += int(np.any(values > 60.5))
+        above_618 += int(np.any(values > 61.8))
+        rows.append(
+            {
+                "channel": series_info["name"],
+                "min": min_val,
+                "max": max_val,
+                "min_time": min_time,
+                "max_time": max_time,
+                "worst_dev": worst_dev,
+                "worst_time": worst_time,
+            }
+        )
+
+    if not rows:
+        return "<section class='stats-card'><h3>Frequency Stats</h3><div class='stats-empty'>No plotted frequency signals available.</div></section>"
+
+    nadir = min(rows, key=lambda row: row["min"])
+    zenith = max(rows, key=lambda row: row["max"])
+    worst = max(rows, key=lambda row: row["worst_dev"])
+    top_rows = sorted(rows, key=lambda row: row["worst_dev"], reverse=True)[:SIGNAL_STATS_TOP_N]
+    table_rows = [
+        {
+            "channel": row["channel"],
+            "min": _fmt(row["min"]),
+            "max": _fmt(row["max"]),
+            "dev": _fmt(row["worst_dev"]),
+            "time": _fmt(row["worst_time"], 3),
+        }
+        for row in top_rows
+    ]
+
+    metrics_html = "".join(
+        [
+            _metric_card("Channels", str(len(rows))),
+            _metric_card("Nadir", f"{_fmt(nadir['min'])} Hz", f"{nadir['channel']} at {nadir['min_time']:.3f}s"),
+            _metric_card("Zenith", f"{_fmt(zenith['max'])} Hz", f"{zenith['channel']} at {zenith['max_time']:.3f}s"),
+            _metric_card(
+                "Worst Dev", f"{_fmt(worst['worst_dev'])} Hz", f"{worst['channel']} at {worst['worst_time']:.3f}s"
+            ),
+            _metric_card("Thresholds", f"<59: {below_59}, <57: {below_57}", f">60.5: {above_605}, >61.8: {above_618}"),
+        ]
+    )
+    table_html = _stats_table(
+        table_rows,
+        [
+            ("channel", "Top Frequency Channels"),
+            ("min", "Min Hz"),
+            ("max", "Max Hz"),
+            ("dev", "Worst Dev"),
+            ("time", "Time s"),
+        ],
+    )
+    return f"<section class='stats-card'><h3>Frequency Stats</h3><div class='metrics'>{metrics_html}</div>{table_html}</section>"
+
+
+def build_wtvsi_table_html(wtvsi_summary):
+    if not wtvsi_summary or not wtvsi_summary["top_contributors"]:
+        return ""
+
+    rows = [
+        {"bus": row["bus"], "integral": _fmt(row["integral"], 6)}
+        for row in wtvsi_summary["top_contributors"]
+        if row["integral"] > 0.0
+    ]
+    if not rows:
+        return ""
+    return _stats_table(rows, [("bus", "Top WTVSI Bus"), ("integral", "Integral")])
+
+
+def build_voltage_stats_html(plotted_series, wtvsi_summary=None):
+    rows = []
+    below_09 = 0
+    above_11 = 0
+    outside_band = 0
+
+    for series_info in plotted_series:
+        values, times = _series_arrays(series_info)
+        if len(values) == 0:
+            continue
+
+        min_idx = int(np.argmin(values))
+        max_idx = int(np.argmax(values))
+        min_val = float(values[min_idx])
+        max_val = float(values[max_idx])
+        min_time = float(times[min_idx])
+        max_time = float(times[max_idx])
+        under_violation = max(0.0, VOLTAGE_LOW - min_val)
+        over_violation = max(0.0, max_val - VOLTAGE_HIGH)
+        worst_violation = max(under_violation, over_violation)
+        worst_time = min_time if under_violation >= over_violation else max_time
+
+        below = bool(np.any(values < VOLTAGE_LOW))
+        above = bool(np.any(values > VOLTAGE_HIGH))
+        below_09 += int(below)
+        above_11 += int(above)
+        outside_band += int(below or above)
+        rows.append(
+            {
+                "channel": series_info["name"],
+                "min": min_val,
+                "max": max_val,
+                "min_time": min_time,
+                "max_time": max_time,
+                "worst_violation": worst_violation,
+                "worst_time": worst_time,
+            }
+        )
+
+    wtvsi_metric = ""
+    wtvsi_table_html = ""
+    if wtvsi_summary:
+        wtvsi_metric = _metric_card(
+            "WTVSI",
+            _fmt(wtvsi_summary["wtvsi"], 6),
+            (
+                # f"load buses: {wtvsi_summary['load_bus_count']}, "
+                f"buses: {wtvsi_summary['bus_count']}, "
+                f"t: {wtvsi_summary['event_time']:.1f}-{wtvsi_summary['end_time']:.1f}s"
+            ),
+        )
+        wtvsi_table_html = build_wtvsi_table_html(wtvsi_summary)
+
+    if not rows:
+        metrics_html = f"<div class='metrics'>{wtvsi_metric}</div>" if wtvsi_metric else ""
+        return (
+            "<section class='stats-card'><h3>Voltage Stats</h3>"
+            f"{metrics_html}<div class='stats-empty'>No plotted voltage signals available.</div>{wtvsi_table_html}</section>"
+        )
+
+    min_voltage = min(rows, key=lambda row: row["min"])
+    max_voltage = max(rows, key=lambda row: row["max"])
+    worst = max(rows, key=lambda row: row["worst_violation"])
+    top_rows = sorted(rows, key=lambda row: row["worst_violation"], reverse=True)[:SIGNAL_STATS_TOP_N]
+    table_rows = [
+        {
+            "channel": row["channel"],
+            "min": _fmt(row["min"]),
+            "max": _fmt(row["max"]),
+            "violation": _fmt(row["worst_violation"]),
+            "time": _fmt(row["worst_time"], 3),
+        }
+        for row in top_rows
+    ]
+
+    metrics_html = "".join(
+        [
+            _metric_card("Channels", str(len(rows))),
+            _metric_card(
+                "Minimum",
+                f"{_fmt(min_voltage['min'])} pu",
+                f"{min_voltage['channel']} at {min_voltage['min_time']:.3f}s",
+            ),
+            _metric_card(
+                "Maximum",
+                f"{_fmt(max_voltage['max'])} pu",
+                f"{max_voltage['channel']} at {max_voltage['max_time']:.3f}s",
+            ),
+            _metric_card("Outside Band", str(outside_band), f"{VOLTAGE_LOW}-{VOLTAGE_HIGH} pu"),
+            _metric_card(
+                "Violations",
+                f"<{VOLTAGE_LOW}: {below_09}, >{VOLTAGE_HIGH}: {above_11}",
+                f"worst {worst['worst_violation']:.4f} pu",
+            ),
+            wtvsi_metric,
+        ]
+    )
+    table_html = _stats_table(
+        table_rows,
+        [
+            ("channel", "Top Voltage Channels"),
+            ("min", "Min pu"),
+            ("max", "Max pu"),
+            ("violation", "Worst Violation"),
+            ("time", "Time s"),
+        ],
+    )
+    return (
+        f"<section class='stats-card'><h3>Voltage Stats</h3><div class='metrics'>{metrics_html}</div>"
+        f"{table_html}{wtvsi_table_html}</section>"
+    )
+
+
+def build_signal_stats_html(keyword, plotted_series, wtvsi_summary=None):
+    if keyword == "FREQ":
+        return build_frequency_stats_html(plotted_series)
+    if keyword == "VOLT":
+        return build_voltage_stats_html(plotted_series, wtvsi_summary)
+    return ""
+
+
+wtvsi_summary = calculate_wtvsi(df, time_col, load_bus_numbers, EVENT_TIME, SIM_END_TIME, WTVSI_K)
+write_voltage_stats_json(output_dir, wtvsi_summary)
+
 plot_blocks = []
+plot_count = 0
 for keyword in keywords:
     fig = go.Figure()
     cols_to_plot = [col for col in df.columns if keyword in col and col != time_col]
+    plotted_series = []
 
     if not cols_to_plot:
         fig.add_annotation(text=f"No channels found for {keyword}", showarrow=False)
@@ -406,10 +758,10 @@ for keyword in keywords:
 
             if keyword == "VOLT":  # and not any(df[col].iloc[-100:].values):
                 # skip voltage channels that are all zeros at the end
-                if not any(df[col].iloc[-100:].values):
+                if not is_valid_voltage_profile(df[col].values):
                     continue
                 # skip voltage channels that don't exceed normal voltage range (0.9-1.1) during the whole simulation
-                if np.all((df[col].values >= 0.9) & (df[col].values <= 1.1)):
+                if np.all((df[col].values >= VOLTAGE_LOW) & (df[col].values <= VOLTAGE_HIGH)):
                     continue
 
             # skip frequency channels that are all zeros at all times
@@ -422,6 +774,9 @@ for keyword in keywords:
             if keyword == "FREQ":
                 series_to_plot = base_freq * (df[col] + 1.0)
                 hover_value_fmt = "%{y:.4f} Hz"
+
+            if SHOW_SIGNAL_STATS and keyword in SIGNAL_STATS_KEYWORDS:
+                plotted_series.append({"name": col, "values": series_to_plot, "time": df[time_col]})
 
             fig.add_trace(
                 go.Scatter(
@@ -462,23 +817,39 @@ for keyword in keywords:
         height=560,
     )
 
-    plot_blocks.append(pio.to_html(fig, include_plotlyjs=(len(plot_blocks) == 0), full_html=False))
+    plot_blocks.append({"kind": "plot", "html": pio.to_html(fig, include_plotlyjs=(plot_count == 0), full_html=False)})
+    plot_count += 1
+    if SHOW_SIGNAL_STATS and keyword in SIGNAL_STATS_KEYWORDS:
+        plot_blocks.append({"kind": "stats", "html": build_signal_stats_html(keyword, plotted_series, wtvsi_summary)})
 
 plots_path = output_dir / f"dynamic_channels_{now}.html"
 html_doc = (
     "<html><head><meta charset='utf-8'><title>Dynamic Simulation Channels</title>"
     "<style>body{margin:0;padding:20px;font-family:Arial,sans-serif;background:#fafafa;}"
     ".plot{margin:0 0 24px 0;background:#fff;padding:8px;border-radius:8px;"
-    "box-shadow:0 1px 4px rgba(0,0,0,0.08);}</style></head><body>"
+    "box-shadow:0 1px 4px rgba(0,0,0,0.08);}"
+    ".stats{margin:-12px 0 24px 0;background:#fff;padding:12px 14px;border-radius:8px;"
+    "box-shadow:0 1px 4px rgba(0,0,0,0.08);}"
+    ".stats-card h3{margin:0 0 8px 0;font-size:16px;}"
+    ".metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-bottom:10px;}"
+    ".metric{border:1px solid #e6e6e6;border-radius:6px;padding:6px 8px;background:#fcfcfc;}"
+    ".metric label{display:block;color:#666;font-size:11px;text-transform:uppercase;letter-spacing:.03em;}"
+    ".metric strong{display:block;font-size:15px;margin-top:2px;}"
+    ".metric span{display:block;color:#666;font-size:11px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}"
+    ".stats-table{width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed;}"
+    ".stats-table th,.stats-table td{border-top:1px solid #eee;padding:4px 6px;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}"
+    ".stats-table th{color:#555;background:#fafafa;font-weight:600;}"
+    ".stats-empty{color:#666;font-size:13px;}</style></head><body>"
 )
-html_doc += "".join([f"<div class='plot'>{block}</div>" for block in plot_blocks])
+html_doc += "".join([f"<div class='{block['kind']}'>{block['html']}</div>" for block in plot_blocks])
 html_doc += "</body></html>"
 
 with open(plots_path, "w", encoding="utf-8") as pf:
     pf.write(html_doc)
 
-webbrowser.open(plots_path.resolve().as_uri())
-print(f"-- Interactive Plotly page opened: {plots_path}")
+if True:  # ignore for now
+    webbrowser.open(plots_path.resolve().as_uri())
+    print(f"-- Interactive Plotly page opened: {plots_path}")
 
 # ------------------------------------------------------------------
 # analyze Frequency Channels
@@ -525,6 +896,7 @@ if bus_max_overall is not None:
 # ------------------------------------------------------------------
 # parse load shedding (LDSTBL) events from the log file
 try:
+    # raise Exception("ignore for now")
     detailed_shedding_log = False
     ierr, event_buses = psspy.abusint(-1, 2, ["NUMBER"])
     ierr, event_zones = psspy.abusint(-1, 2, ["ZONE"])
@@ -613,7 +985,5 @@ try:
 except Exception as e:
     print(f"-- Failed to parse load shed events: {e}")
 
-sys.stdout = _orig_stdout
-sys.stderr = _orig_stderr
-f.close()
+psspy.progress_output(1, "", [0, 0])
 sys.exit(0)

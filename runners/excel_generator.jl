@@ -32,7 +32,7 @@ function create_excel_report(result, network_data, filepth="results.xlsx"; power
         sheet1[XLSX.CellRef(row, 2)] = network_data["baseMVA"]
 
         sheet2 = XLSX.addsheet!(xf, "buses")
-        bus_headers = ["bus number", "bus type", "vmax", "vmin", "vm", "va (rad)", "va (deg)", "p mismatch (MW)", "mva mismatch (MVA)"]
+        bus_headers = ["bus number", "bus type", "zone", "vmax", "vmin", "vm", "va (rad)", "va (deg)", "p mismatch (MW)", "mva mismatch (MVA)"]
 
         # Write bus headers
         for (i, header) in enumerate(bus_headers)
@@ -105,12 +105,13 @@ function create_excel_report(result, network_data, filepth="results.xlsx"; power
 
             sheet2[XLSX.CellRef(row, 1)] = bus_id
             sheet2[XLSX.CellRef(row, 2)] = bus_net["bus_type"]
-            sheet2[XLSX.CellRef(row, 3)] = bus_net["vmax"]
-            sheet2[XLSX.CellRef(row, 4)] = bus_net["vmin"]
+            sheet2[XLSX.CellRef(row, 3)] = bus_net["zone"]
+            sheet2[XLSX.CellRef(row, 4)] = bus_net["vmax"]
+            sheet2[XLSX.CellRef(row, 5)] = bus_net["vmin"]
             # Add solution data
-            sheet2[XLSX.CellRef(row, 5)] = round(get(bus_sol, "vm", 0), digits=4)
-            sheet2[XLSX.CellRef(row, 6)] = round(get(bus_sol, "va", 0), digits=4)
-            sheet2[XLSX.CellRef(row, 7)] = round(rad2deg(get(bus_sol, "va", 0)), digits=4)
+            sheet2[XLSX.CellRef(row, 6)] = round(get(bus_sol, "vm", 0), digits=4)
+            sheet2[XLSX.CellRef(row, 7)] = round(get(bus_sol, "va", 0), digits=4)
+            sheet2[XLSX.CellRef(row, 8)] = round(rad2deg(get(bus_sol, "va", 0)), digits=4)
 
             # Power mismatch: generation - load - shunt - net branch flow out
             vm = get(bus_sol, "vm", 1.0)
@@ -118,8 +119,8 @@ function create_excel_report(result, network_data, filepth="results.xlsx"; power
             bs = _bus_bs[bus_id]
             delta_p = _bus_p_gen[bus_id] - _bus_p_load[bus_id] - gs * vm^2 - _bus_p_branch[bus_id]
             delta_q = _bus_q_gen[bus_id] - _bus_q_load[bus_id] + bs * vm^2 - _bus_q_branch[bus_id]
-            sheet2[XLSX.CellRef(row, 8)] = round(delta_p * _base_mva, digits=4)
-            sheet2[XLSX.CellRef(row, 9)] = round(sqrt(delta_p^2 + delta_q^2) * _base_mva, digits=4)
+            sheet2[XLSX.CellRef(row, 9)] = round(delta_p * _base_mva, digits=4)
+            sheet2[XLSX.CellRef(row, 10)] = round(sqrt(delta_p^2 + delta_q^2) * _base_mva, digits=4)
 
             row += 1
         end

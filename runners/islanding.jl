@@ -39,7 +39,7 @@ if use_config_file
     uniform_shedding = get(cfg, "uniform_shedding", false)
     uniform_penalty = get(cfg, "uniform_penalty", lambda / 10)
     opf_model = get(cfg, "opf_model", "AC")
-    p_model = get(cfg, "p_model", "squared")
+    flow_model = get(cfg, "p_model", "squared")
 
     # load shedding penalties
     raw_penalties = get(cfg, "load_shedding_penalties", Dict())
@@ -74,46 +74,36 @@ else
     modified_network_data = deepcopy(network_data) # make a copy of the network data for modifications, keeping the original
 
     # settings ------------------------------------
-    objective = "flow_shed"    # "opf", "flow", "opf_flow", "flow_shed", "opf_shed", "opf_flow_shed"
+    objective = "flow_shed"    # "opf", "flow", "flow_shed", "opf_shed"
     lambda = 500       # for the flow minimization weight
     opf_model = "AC"
-    p_model = "squared"  # "abs_sum", "squared"
+    flow_model = "squared"  # "abs_sum", "squared", "combined"
     uniform_shedding = false
     uniform_penalty = 0 * lambda
     load_shedding_penalties = Dict()
 
-    selected_buses = find_buses_by_zone(network_data, "greenvil")
-    # for bus in selected_buses
-    #     load_shedding_penalties[string(bus)] = 0.0 * lambda
-    # end
-
-    for bus in keys(network_data["bus"])
-        if parse(Int, bus) in selected_buses
-            load_shedding_penalties[bus] = 0.0 * lambda
-        else
-            load_shedding_penalties[bus] = 0.01 * lambda
-        end
-    end
-
-    # set the gen pmin to 0 for the selected buses
-    # for (_, gen) in modified_network_data["gen"]
-    #     gen_ref = [71, 72, 73, 258, 305, 306]
-    #     gens = [72, 73]
-    #     if gen["gen_bus"] in selected_buses
-    #         # println("Setting gen pmin to 0 for bus $(gen["gen_bus"])")
-    #         gen["pmin"] = 0.0
-    #         # if gen["gen_bus"] in gens
-    #         #     continue
-    #         # end
-    #         gen["gen_status"] = 0
-    #     end
-    # end
-
     # ======================================================================
     # ACTIVSg500 case targets --------------------
     # zone names:  CLEMSON, GREENVIL, SPARTANB, YORK, MIDLANDS, COLUMBIA
-    target_zone = "greenvil"  # case insensitive
-    target_lines = find_branches_by_zone(network_data, target_zone)
+    target_zone = "spartanb"  # case insensitive
+    target_lines = find_branches_by_zone(modified_network_data, target_zone)
+    selected_buses = find_buses_by_zone(modified_network_data, target_zone)
+
+    for bus in keys(network_data["bus"])
+        if parse(Int, bus) in selected_buses        # bus inside the target zone
+            load_shedding_penalties[bus] = 2.5 * lambda
+        else                                        # bus outside the target zone
+            # load_shedding_penalties[bus] = 1.02 * lambda
+        end
+    end
+
+    # set the gen pmin to 0 for selected buses
+    # for (_, gen) in modified_network_data["gen"]
+    #     if gen["gen_bus"] in selected_buses
+    #         gen["pmin"] = 0.0
+    #     end
+    # end
+
 
     # CLEMSON ------------------------
     # GREENVIL -----------------------
@@ -196,7 +186,10 @@ const PowerModelType = Dict(
 modified_network_data["objective"] = ObjectiveType[objective]
 modified_network_data["target_ids"] = target_lines
 modified_network_data["opf_model"] = opf_model
-modified_network_data["p_model"] = p_model
+modified_network_data["p_model"] = flow_model
+if @isdefined(selected_buses)
+    modified_network_data["target_zone_buses"] = selected_buses
+end
 power_model = PowerModelType[opf_model]
 modified_network_data["lambda"] = lambda
 # pm = instantiate_model(network_data, DCPPowerModel, PowerModels.build_opf) # debug
@@ -209,9 +202,14 @@ println("Power Flow Solved")
 println("objective:", result["objective"])
 
 # log flow results and load shedding status
-print_branch_flows(result, modified_network_data, target_lines)
+print_generation_status(modified_network_data, result)
 if occursin("shed", objective)
     print_load_shedding_status(result, modified_network_data)
+end
+if @isdefined(target_zone)
+    print_branch_flows(result, modified_network_data, target_lines, false, target_zone)
+else
+    print_branch_flows(result, modified_network_data, target_lines)
 end
 println("---------------------------")
 
@@ -221,6 +219,16 @@ mkpath(output_path)
 excel_file = "$output_path/pm_res_$(objective)_$(get_timestamp()).xlsx"
 create_excel_report(result, modified_network_data, excel_file, powerworld=true)
 println("Excel file created successfully!")
+
+# Jacobian check -------------------------------------------------------------
+# basic = make_basic_network(modified_network_data)
+# J = calc_basic_jacobian_matrix(basic)
+# n = length(basic["bus"])
+# H = J[1:n, 1:n]             # dP/dtheta
+# N = J[1:n, n+1:2n]          # dP/dV
+# M = J[n+1:2n, 1:n]          # dQ/dtheta
+# L = J[n+1:2n, n+1:2n]       # dQ/dV
+# S_qv = inv(L -M*inv(H)*N)
 
 # psse simulation -------------------------------------------------------------
 if run_psse

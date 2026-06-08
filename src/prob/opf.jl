@@ -37,15 +37,11 @@ function build_custom_pf(pm::AbstractPowerModel)
     if obj == "opf"
         objective_min_fuel_and_flow_cost(pm)
     elseif obj == "flow"
-        objective_sum_branch_flows(pm)
-    elseif obj == "opf_flow"
-        objective_sum_branch_flows_and_cost(pm)
+        objective_min_branch_flows(pm)
     elseif obj == "opf_shed"
-        objective_min_cost_with_load_shedding_penalty(pm)
+        objective_min_cost_with_load_shedding(pm)
     elseif obj == "flow_shed"
         objective_min_branch_flows_with_load_shedding(pm)
-    elseif obj == "opf_flow_shed"
-        objective_min_cost_and_branch_flows_with_load_shedding(pm)
     end
 
     constraint_model_voltage(pm)
