@@ -1,3 +1,5 @@
+include("../../runners/frequency.jl")
+
 function solve_ac_opf(file, optimizer; kwargs...)
     return solve_opf(file, ACPPowerModel, optimizer; kwargs...)
 end
@@ -71,6 +73,10 @@ function build_custom_pf(pm::AbstractPowerModel)
 
     for i in ids(pm, :dcline)
         constraint_dcline_power_losses(pm, i)
+    end
+
+    if haskey(pm.data, "frequency_islands")
+        constraint_island_frequency_security(pm)
     end
 end
 

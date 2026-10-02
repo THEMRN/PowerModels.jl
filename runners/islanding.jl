@@ -3,9 +3,11 @@ using Ipopt
 using JuMP
 using JSON3
 using XLSX
+using LinearAlgebra  # matrix solves/inverses for Jacobian sensitivities
 include("excel_generator.jl")
 include("calc_line_flow.jl")
 include("utils.jl")
+include("islanding_core.jl")
 
 
 # ==================== Configuration Mode =====================
@@ -13,6 +15,7 @@ include("utils.jl")
 # Set to false to use the hardcoded values defined below.
 use_config_file = false
 config_file_path = joinpath(@__DIR__, "config.json")
+dynamic_simulator = "andes"    # "psse", "andes"; used in both modes (not read from the config file)
 # =============================================================
 
 function load_config(path::String)
@@ -26,8 +29,8 @@ if use_config_file
 
     # load the network data
     src_case_path = cfg["src_case_path"]
-    run_psse = get(cfg, "run_psse", true)
-    case_files = find_case_files(src_case_path; require_dyr=run_psse)
+    run_dynamic_sim = get(cfg, "run_psse", true)
+    case_files = find_case_files(src_case_path; require_dyr=run_dynamic_sim)
     case_name = basename(src_case_path)
     network_data = PowerModels.parse_file(case_files.raw, import_all=true)
 
@@ -40,6 +43,7 @@ if use_config_file
     uniform_penalty = get(cfg, "uniform_penalty", lambda / 10)
     opf_model = get(cfg, "opf_model", "AC")
     flow_model = get(cfg, "p_model", "squared")
+    frequency_security = get(cfg, "frequency_security", false)
 
     # load shedding penalties
     raw_penalties = get(cfg, "load_shedding_penalties", Dict())
@@ -66,8 +70,8 @@ else
 
     # Load the network data ------------------------
     src_case_path = "cases/psse/ACTIVSg500"
-    run_psse = true
-    case_files = find_case_files(src_case_path; require_dyr=run_psse)
+    run_dynamic_sim = true
+    case_files = find_case_files(src_case_path; require_dyr=run_dynamic_sim)
     case_name = basename(src_case_path)
     PowerModels.silence()
     network_data = PowerModels.parse_file(case_files.raw, import_all=true)
@@ -78,6 +82,7 @@ else
     lambda = 500       # for the flow minimization weight
     opf_model = "AC"
     flow_model = "squared"  # "abs_sum", "squared", "combined"
+    frequency_security = false   # RoCoF, QSS and nadir limits on each island's import (frequency.jl)
     uniform_shedding = false
     uniform_penalty = 0 * lambda
     load_shedding_penalties = Dict()
@@ -91,9 +96,11 @@ else
 
     for bus in keys(network_data["bus"])
         if parse(Int, bus) in selected_buses        # bus inside the target zone
+            # spartanb: 2.5, midlands: 0.95
             load_shedding_penalties[bus] = 2.5 * lambda
         else                                        # bus outside the target zone
-            # load_shedding_penalties[bus] = 1.02 * lambda
+            # clemson: 1.6, york: 2.5
+            # load_shedding_penalties[bus] = 1.6 * lambda
         end
     end
 
@@ -167,110 +174,23 @@ else
 end
 
 
-# define objectives and power model modes 
-const ObjectiveType = Dict(
-    "pf" => "opf",
-    "opf" => "opf",
-    "flow" => "flow",
-    "opf_flow" => "opf_flow",
-    "opf_shed" => "opf_shed",
-    "flow_shed" => "flow_shed",
-    "opf_flow_shed" => "opf_flow_shed",
+# run the shared pipeline (solve, reports, voltage prediction, psse export)
+data_for_run = @isdefined(modified_network_data) ? modified_network_data : network_data
+result = run_islanding(
+    data_for_run;
+    case_name=case_name,
+    case_files=case_files,
+    objective=objective,
+    lambda=lambda,
+    opf_model=opf_model,
+    flow_model=flow_model,
+    target_lines=target_lines,
+    run_dynamic_sim=run_dynamic_sim,
+    uniform_shedding=uniform_shedding,
+    uniform_penalty=uniform_penalty,
+    load_shedding_penalties=load_shedding_penalties,
+    target_zone=(@isdefined(target_zone) ? target_zone : nothing),
+    selected_buses=(@isdefined(selected_buses) ? selected_buses : nothing),
+    frequency_security=frequency_security,
+    simulator=dynamic_simulator,
 )
-const PowerModelType = Dict(
-    "DC" => DCPPowerModel,
-    "AC" => ACPPowerModel,
-)
-
-# embed additional configurations in the network data
-modified_network_data["objective"] = ObjectiveType[objective]
-modified_network_data["target_ids"] = target_lines
-modified_network_data["opf_model"] = opf_model
-modified_network_data["p_model"] = flow_model
-if @isdefined(selected_buses)
-    modified_network_data["target_zone_buses"] = selected_buses
-end
-power_model = PowerModelType[opf_model]
-modified_network_data["lambda"] = lambda
-# pm = instantiate_model(network_data, DCPPowerModel, PowerModels.build_opf) # debug
-
-# solve the power flow
-optimizer = optimizer_with_attributes(Ipopt.Optimizer, "print_level" => 4)
-result = PowerModels.solve_custom_opf(modified_network_data, power_model, optimizer)
-println("---------------------------")
-println("Power Flow Solved")
-println("objective:", result["objective"])
-
-# log flow results and load shedding status
-print_generation_status(modified_network_data, result)
-if occursin("shed", objective)
-    print_load_shedding_status(result, modified_network_data)
-end
-if @isdefined(target_zone)
-    print_branch_flows(result, modified_network_data, target_lines, false, target_zone)
-else
-    print_branch_flows(result, modified_network_data, target_lines)
-end
-println("---------------------------")
-
-# generate excel report
-output_path = "results/psse/$(case_name)_$(objective)"
-mkpath(output_path)
-excel_file = "$output_path/pm_res_$(objective)_$(get_timestamp()).xlsx"
-create_excel_report(result, modified_network_data, excel_file, powerworld=true)
-println("Excel file created successfully!")
-
-# Jacobian check -------------------------------------------------------------
-# basic = make_basic_network(modified_network_data)
-# J = calc_basic_jacobian_matrix(basic)
-# n = length(basic["bus"])
-# H = J[1:n, 1:n]             # dP/dtheta
-# N = J[1:n, n+1:2n]          # dP/dV
-# M = J[n+1:2n, 1:n]          # dQ/dtheta
-# L = J[n+1:2n, n+1:2n]       # dQ/dV
-# S_qv = inv(L -M*inv(H)*N)
-
-# psse simulation -------------------------------------------------------------
-if run_psse
-    # generate psse raw file
-    PowerModels.update_data!(modified_network_data, result["solution"])
-    pti_network_data = prepare_for_pti_export(modified_network_data)
-    raw_file = "$(output_path)/$(case_name)_$(objective).raw"
-    PowerModels.export_pti(raw_file, pti_network_data)
-    println("Raw file created successfully!")
-
-    # generate line outage file
-    line_outage_file = "$(output_path)/line_outage.json"
-    outages = Vector{Dict{String,Any}}()
-    for br_id in target_lines
-        branch = modified_network_data["branch"][string(br_id)]
-        src = branch["source_id"]  # expected: (from, to, id)
-        line_type = src[1]
-        id_idx = line_type == "branch" ? 4 : 5
-        push!(outages, Dict(
-            "from" => src[2],
-            "to" => src[3],
-            "id" => src[id_idx],
-        ))
-    end
-    open(line_outage_file, "w") do io
-        JSON3.write(io, outages)
-    end
-    println("Line outage file created successfully!")
-
-    # copy dyr file if available
-    if case_files.dyr !== nothing
-        dest = joinpath(output_path, "$(case_name)_$(objective).dyr")
-        cp(case_files.dyr, dest, force=true)
-        println("Dyr file copied successfully!")
-        dyr_file = dest
-    else
-        println("No dyr file found, skipping dynamic simulation.")
-        dyr_file = ""
-    end
-
-    # call python dynamic simulation script
-    println("Running simulation script...")
-    python_script = joinpath(@__DIR__, "psse_scripts", "dynamic.py")
-    run(`python $python_script $raw_file $dyr_file $excel_file`)
-end
