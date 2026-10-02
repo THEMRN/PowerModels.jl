@@ -58,12 +58,13 @@ import psspy  # type: ignore
 import dyntools  # type: ignore
 
 base_freq = 60.0
-EVENT_TIME = 10.0
-SIM_END_TIME = 30.0
+EVENT_TIME = 5.0
+SIM_END_TIME = 25.0
 VOLTAGE_LOW = 0.9
 VOLTAGE_HIGH = 1.1
 WTVSI_K = 1
 WTVSI_TOP_N = 5
+POST_EVENT_AVG_WINDOW = 1.0
 
 print("-- file paths:")
 print("Raw file path:\r", raw_file_pth)
@@ -457,7 +458,7 @@ def calculate_wtvsi(df, time_col, load_buses, t0, t_end, k=WTVSI_K):
         bus_integrals[bus] = max(bus_integrals.get(bus, 0.0), integral)
 
     total_integral = sum(bus_integrals.values())
-    wtvsi = total_integral / (voltage_channel_count * duration)
+    wtvsi = total_integral / (voltage_channel_count * duration) if voltage_channel_count else 0.0
     # wtvsi = total_integral / (len(load_buses) * duration)
     top_contributors = [
         {"bus": bus, "integral": value}
@@ -481,17 +482,144 @@ def calculate_wtvsi(df, time_col, load_buses, t0, t_end, k=WTVSI_K):
     }
 
 
-def write_voltage_stats_json(output_dir, wtvsi_summary):
+def finite_voltage_series(values, times):
+    values = np.asarray(values, dtype=float)
+    times = np.asarray(times, dtype=float)
+    finite = np.isfinite(values) & np.isfinite(times)
+    return values[finite], times[finite]
+
+
+def build_voltage_stats_json(df, time_col, load_buses, t0, t_end):
+    all_times = np.asarray(df[time_col], dtype=float)
+    bus_stats = {}
+
+    for col in [c for c in df.columns if "VOLT" in c and c != time_col]:
+        bus = extract_bus_number(col)
+        if bus is None:
+            continue
+
+        values, times = finite_voltage_series(df[col], all_times)
+        if len(values) == 0 or not is_valid_voltage_profile(values):
+            continue
+
+        min_idx = int(np.argmin(values))
+        max_idx = int(np.argmax(values))
+        min_val = float(values[min_idx])
+        max_val = float(values[max_idx])
+        min_time = float(times[min_idx])
+        max_time = float(times[max_idx])
+        under_violation = max(0.0, VOLTAGE_LOW - min_val)
+        over_violation = max(0.0, max_val - VOLTAGE_HIGH)
+        worst_violation = max(under_violation, over_violation)
+        worst_time = min_time if under_violation >= over_violation else max_time
+
+        pre_mask = times <= t0
+        pre_event_voltage = float(values[pre_mask][-1]) if np.any(pre_mask) else float(values[0])
+        event_mask = times >= t0
+        event_values = values[event_mask] if np.any(event_mask) else values[-1:]
+        event_times = times[event_mask] if np.any(event_mask) else times[-1:]
+        event_deltas = event_values - pre_event_voltage
+        worst_event_idx = int(np.argmax(np.abs(event_deltas)))
+        worst_event_voltage = float(event_values[worst_event_idx])
+        worst_event_time = float(event_times[worst_event_idx])
+        worst_event_delta = float(event_deltas[worst_event_idx])
+        tail_start = max(float(t0), float(t_end) - POST_EVENT_AVG_WINDOW)
+        post_mask = times >= tail_start
+        post_event_voltage = float(np.mean(values[post_mask])) if np.any(post_mask) else float(values[-1])
+        final_voltage = float(values[-1])
+
+        record = {
+            "channel": col,
+            "min": min_val,
+            "max": max_val,
+            "min_time": min_time,
+            "max_time": max_time,
+            "under_violation": under_violation,
+            "over_violation": over_violation,
+            "worst_violation": worst_violation,
+            "worst_time": worst_time,
+            "initial_voltage": float(values[0]),
+            "pre_event_voltage": pre_event_voltage,
+            "worst_event_voltage": worst_event_voltage,
+            "worst_event_time": worst_event_time,
+            "worst_event_delta": worst_event_delta,
+            "post_event_voltage": post_event_voltage,
+            "final_voltage": final_voltage,
+            "post_event_delta": post_event_voltage - pre_event_voltage,
+            "final_delta": final_voltage - pre_event_voltage,
+        }
+
+        previous = bus_stats.get(str(bus))
+        if (
+            previous is None
+            or record["worst_violation"] > previous["worst_violation"]
+            or abs(record["worst_event_delta"]) > abs(previous["worst_event_delta"])
+        ):
+            bus_stats[str(bus)] = record
+
+    summary = {
+        "voltage_low": VOLTAGE_LOW,
+        "voltage_high": VOLTAGE_HIGH,
+        "event_time": float(t0),
+        "end_time": float(t_end),
+        "post_event_avg_window": POST_EVENT_AVG_WINDOW,
+        "bus_count": len(bus_stats),
+        "outside_band_count": sum(1 for row in bus_stats.values() if row["worst_violation"] > 0.0),
+    }
+    if bus_stats:
+        worst_bus, worst_row = max(bus_stats.items(), key=lambda item: item[1]["worst_violation"])
+        largest_worst_delta_bus, largest_worst_delta_row = max(
+            bus_stats.items(), key=lambda item: abs(item[1]["worst_event_delta"])
+        )
+        min_bus, min_row = min(bus_stats.items(), key=lambda item: item[1]["min"])
+        max_bus, max_row = max(bus_stats.items(), key=lambda item: item[1]["max"])
+        summary.update(
+            {
+                "worst_bus": int(worst_bus),
+                "worst_violation": worst_row["worst_violation"],
+                "largest_worst_event_delta_bus": int(largest_worst_delta_bus),
+                "largest_worst_event_delta": largest_worst_delta_row["worst_event_delta"],
+                "min_voltage_bus": int(min_bus),
+                "min_voltage": min_row["min"],
+                "max_voltage_bus": int(max_bus),
+                "max_voltage": max_row["max"],
+            }
+        )
+    else:
+        summary.update(
+            {
+                "worst_bus": None,
+                "worst_violation": 0.0,
+                "largest_worst_event_delta_bus": None,
+                "largest_worst_event_delta": 0.0,
+                "min_voltage_bus": None,
+                "min_voltage": None,
+                "max_voltage_bus": None,
+                "max_voltage": None,
+            }
+        )
+
+    return {
+        "summary": summary,
+        "buses": {str(bus): row for bus, row in sorted(bus_stats.items(), key=lambda item: int(item[0]))},
+        "wtvsi": calculate_wtvsi(df, time_col, load_buses, t0, t_end, WTVSI_K),
+    }
+
+
+def write_voltage_stats_json(output_dir, voltage_stats):
     stats_path = output_dir / "voltage_stats.json"
     with open(stats_path, "w", encoding="utf-8") as file:
-        json.dump({"wtvsi": wtvsi_summary}, file, indent=2)
+        json.dump(voltage_stats, file, indent=2)
 
+    summary = voltage_stats["summary"]
+    wtvsi_summary = voltage_stats["wtvsi"]
     print(
-        "-- WTVSI written: "
-        f"{stats_path} | WTVSI={wtvsi_summary['wtvsi']:.6f} "
-        # f"| load buses={wtvsi_summary['load_bus_count']} "
-        f"| buses={wtvsi_summary['bus_count']} "
-        f"| integrated={wtvsi_summary['integrated_bus_count']}"
+        "-- Voltage stats written: "
+        f"{stats_path} | outside band={summary['outside_band_count']} "
+        f"| worst bus={summary['worst_bus']} "
+        f"| worst violation={summary['worst_violation']:.5f} "
+        f"| largest worst-event dV={summary['largest_worst_event_delta']:.5f} "
+        f"| WTVSI={wtvsi_summary['wtvsi']:.6f}"
     )
     return stats_path
 
@@ -727,6 +855,70 @@ def build_voltage_stats_html(plotted_series, wtvsi_summary=None):
     )
 
 
+def load_run_info(output_dir):
+    """Load run_info.json written by the julia runner. Returns {} if unavailable."""
+    info_path = output_dir / "run_info.json"
+    if not info_path.exists():
+        return {}
+    try:
+        with open(info_path, "r", encoding="utf-8") as f:
+            info = json.load(f)
+        return info if isinstance(info, dict) else {}
+    except Exception:
+        return {}
+
+
+def build_page_title(info, default="Dynamic Simulation Channels"):
+    parts = [str(info[key]) for key in ("target_zone", "objective", "flow_model") if info.get(key)]
+    return ", ".join(parts) if parts else default
+
+
+def build_run_info_html(info, ufls_shed_mw=None):
+    """Build a compact header bar from run info.
+
+    Returns an empty string if no relevant field is present.
+    """
+
+    def fmt_rel(value):
+        if isinstance(value, list):
+            return ", ".join(f"{v:g}\u00d7\u03bb" for v in value)
+        return f"{value:g}\u00d7\u03bb"
+
+    items = []
+    if info.get("target_zone"):
+        items.append(("Zone", str(info["target_zone"])))
+    if info.get("objective"):
+        items.append(("Objective", str(info["objective"])))
+    if info.get("flow_model"):
+        items.append(("Flow model", str(info["flow_model"])))
+    if "uniform_shedding" in info:
+        if info["uniform_shedding"]:
+            label = "yes"
+            if "uniform_penalty_rel" in info:
+                label += f" ({fmt_rel(info['uniform_penalty_rel'])})"
+            items.append(("Uniform shedding", label))
+        else:
+            items.append(("Uniform shedding", "no"))
+            if "shed_penalty_rel" in info:
+                text = fmt_rel(info["shed_penalty_rel"])
+                if info.get("shed_penalty_scope"):
+                    text += f" ({info['shed_penalty_scope']})"
+                items.append(("Shed penalty", text))
+    if "shed" in str(info.get("objective", "")):
+        if "preemptive_shed_mw" in info:
+            items.append(("Preemptive shed", f"{info['preemptive_shed_mw']:.2f} MW"))
+        if ufls_shed_mw is not None:
+            items.append(("UFLS shed", f"{ufls_shed_mw:.2f} MW"))
+
+    if not items:
+        return ""
+
+    spans = "".join(
+        f"<span class='run-info-item'><label>{escape(label)}</label>{escape(value)}</span>" for label, value in items
+    )
+    return f"<div class='run-info'>{spans}</div>"
+
+
 def build_signal_stats_html(keyword, plotted_series, wtvsi_summary=None):
     if keyword == "FREQ":
         return build_frequency_stats_html(plotted_series)
@@ -735,8 +927,103 @@ def build_signal_stats_html(keyword, plotted_series, wtvsi_summary=None):
     return ""
 
 
-wtvsi_summary = calculate_wtvsi(df, time_col, load_bus_numbers, EVENT_TIME, SIM_END_TIME, WTVSI_K)
-write_voltage_stats_json(output_dir, wtvsi_summary)
+voltage_stats = build_voltage_stats_json(df, time_col, load_bus_numbers, EVENT_TIME, SIM_END_TIME)
+wtvsi_summary = voltage_stats["wtvsi"]
+write_voltage_stats_json(output_dir, voltage_stats)
+
+# ------------------------------------------------------------------
+# parse load shedding (LDSTBL) events from the log file
+ufls_total_p_mw = None
+try:
+    # raise Exception("ignore for now")
+    detailed_shedding_log = False
+    ierr, event_buses = psspy.abusint(-1, 2, ["NUMBER"])
+    ierr, event_zones = psspy.abusint(-1, 2, ["ZONE"])
+    zone_by_bus = {int(bus): int(zone) for bus, zone in zip(event_buses[0], event_zones[0])}
+    ierr, zone_names = psspy.azonechar(-1, 2, ["ZONENAME"])
+    zone_names = [name.strip() for name in zone_names[0]]
+
+    events = []
+    with open(log_file, "r") as lf:
+        lines = lf.readlines()
+
+    for i, line in enumerate(lines):
+        m1 = re.search(
+            r"(\S+)\s+AT BUS\s+(\d+)\s+LOAD\s+(\S+).*?BREAKER TIMER TIMED OUT AT TIME\s*=\s*([0-9.]+)",
+            line,
+        )
+        if not m1:
+            continue
+
+        bus = int(m1.group(2))
+        load_id = m1.group(3)  # keep string (could be 1, A, B…)
+        time_val = float(m1.group(4))
+
+        if i + 2 >= len(lines):
+            continue
+        m2 = re.search(r"\s*([0-9.]+)\s+PERCENT OF INITIAL LOAD SHED", lines[i + 1])
+        m3 = re.search(
+            r"\s*([0-9.]+)\s+MW AND\s+([0-9.]+)\s+MVAR SHED\. VOLT\s*=\s*([0-9.]+)\s+FREQUENCY\s*=\s*([0-9.]+)",
+            lines[i + 2],
+        )
+        if not (m2 and m3):
+            continue
+
+        percent = float(m2.group(1))
+        p = float(m3.group(1))
+        q = float(m3.group(2))
+        v = float(m3.group(3))
+        fval = float(m3.group(4))
+
+        events.append(
+            {
+                "bus": bus,
+                "zone": zone_by_bus.get(bus, 0),
+                "zone_name": zone_names[zone_by_bus.get(bus, 0) - 1],
+                "load": load_id,
+                "time": time_val,
+                "percent": percent,
+                "p": p,
+                "q": q,
+                "v": v,
+                "f": fval,
+            }
+        )
+
+    ptot = sum(e["p"] for e in events)
+    qtot = sum(e["q"] for e in events)
+    ufls_total_p_mw = ptot
+    zone_totals = {}
+    for e in events:
+        zone = e.get("zone", 0)
+        if zone == 0:
+            continue
+        zone_totals.setdefault(zone, {"p": 0.0, "q": 0.0, "count": 0})
+        zone_totals[zone]["p"] += e["p"]
+        zone_totals[zone]["q"] += e["q"]
+        zone_totals[zone]["count"] += 1
+
+    print(f"-- Parsed {len(events)} load shed events (UFLS). Totals: P={ptot:.2f} MW, Q={qtot:.2f} Mvar.")
+    if zone_totals:
+        print("-- Load shed totals by zone:")
+        for zone in sorted(zone_totals):
+            totals = zone_totals[zone]
+            zone_name = zone_names[zone - 1]
+            print(f"   {zone_name}: {totals['count']} events P {totals['p']:.2f} MW Q {totals['q']:.2f} Mvar")
+    else:
+        print("-- No zone assignments found for parsed load shed events.")
+
+    if len(events) > 0 and (detailed_shedding_log or not zone_totals):
+        print("-- Detailed load shed events:")
+        for e in events:
+            zone_label = e["zone_name"] or "N/A"
+            print(
+                f"   Bus {e['bus']} Zone {zone_label} Load {e['load']} "
+                f"Time {e['time']}s P {e['p']} MW Q {e['q']} Mvar"
+            )
+
+except Exception as e:
+    print(f"-- Failed to parse load shed events: {e}")
 
 plot_blocks = []
 plot_count = 0
@@ -823,9 +1110,13 @@ for keyword in keywords:
         plot_blocks.append({"kind": "stats", "html": build_signal_stats_html(keyword, plotted_series, wtvsi_summary)})
 
 plots_path = output_dir / f"dynamic_channels_{now}.html"
+run_info = load_run_info(output_dir)
 html_doc = (
-    "<html><head><meta charset='utf-8'><title>Dynamic Simulation Channels</title>"
+    f"<html><head><meta charset='utf-8'><title>{escape(build_page_title(run_info))}</title>"
     "<style>body{margin:0;padding:20px;font-family:Arial,sans-serif;background:#fafafa;}"
+    ".run-info{display:flex;flex-wrap:wrap;gap:6px 18px;align-items:baseline;margin:0 0 14px 0;"
+    "background:#fff;padding:6px 12px;border-radius:8px;box-shadow:0 1px 4px rgba(0,0,0,0.08);font-size:12px;}"
+    ".run-info-item label{color:#666;font-size:10px;text-transform:uppercase;letter-spacing:.03em;margin-right:5px;}"
     ".plot{margin:0 0 24px 0;background:#fff;padding:8px;border-radius:8px;"
     "box-shadow:0 1px 4px rgba(0,0,0,0.08);}"
     ".stats{margin:-12px 0 24px 0;background:#fff;padding:12px 14px;border-radius:8px;"
@@ -841,6 +1132,7 @@ html_doc = (
     ".stats-table th{color:#555;background:#fafafa;font-weight:600;}"
     ".stats-empty{color:#666;font-size:13px;}</style></head><body>"
 )
+html_doc += build_run_info_html(run_info, ufls_total_p_mw)
 html_doc += "".join([f"<div class='{block['kind']}'>{block['html']}</div>" for block in plot_blocks])
 html_doc += "</body></html>"
 
@@ -892,98 +1184,6 @@ for col in freq_cols:
 # print(f"-- Frequency extremes per bus: {freq_devs}")
 if bus_max_overall is not None:
     print(f"-- Bus with maximum frequency deviation: Bus {bus_max_overall} (Value: {val_max_overall:.4f})")
-
-# ------------------------------------------------------------------
-# parse load shedding (LDSTBL) events from the log file
-try:
-    # raise Exception("ignore for now")
-    detailed_shedding_log = False
-    ierr, event_buses = psspy.abusint(-1, 2, ["NUMBER"])
-    ierr, event_zones = psspy.abusint(-1, 2, ["ZONE"])
-    zone_by_bus = {int(bus): int(zone) for bus, zone in zip(event_buses[0], event_zones[0])}
-    ierr, zone_names = psspy.azonechar(-1, 2, ["ZONENAME"])
-    zone_names = [name.strip() for name in zone_names[0]]
-
-    events = []
-    with open(log_file, "r") as lf:
-        lines = lf.readlines()
-
-    for i, line in enumerate(lines):
-        m1 = re.search(
-            r"(\S+)\s+AT BUS\s+(\d+)\s+LOAD\s+(\S+).*?BREAKER TIMER TIMED OUT AT TIME\s*=\s*([0-9.]+)",
-            line,
-        )
-        if not m1:
-            continue
-
-        bus = int(m1.group(2))
-        load_id = m1.group(3)  # keep string (could be 1, A, B…)
-        time_val = float(m1.group(4))
-
-        if i + 2 >= len(lines):
-            continue
-        m2 = re.search(r"\s*([0-9.]+)\s+PERCENT OF INITIAL LOAD SHED", lines[i + 1])
-        m3 = re.search(
-            r"\s*([0-9.]+)\s+MW AND\s+([0-9.]+)\s+MVAR SHED\. VOLT\s*=\s*([0-9.]+)\s+FREQUENCY\s*=\s*([0-9.]+)",
-            lines[i + 2],
-        )
-        if not (m2 and m3):
-            continue
-
-        percent = float(m2.group(1))
-        p = float(m3.group(1))
-        q = float(m3.group(2))
-        v = float(m3.group(3))
-        fval = float(m3.group(4))
-
-        events.append(
-            {
-                "bus": bus,
-                "zone": zone_by_bus.get(bus, 0),
-                "zone_name": zone_names[zone_by_bus.get(bus, 0) - 1],
-                "load": load_id,
-                "time": time_val,
-                "percent": percent,
-                "p": p,
-                "q": q,
-                "v": v,
-                "f": fval,
-            }
-        )
-
-    ptot = sum(e["p"] for e in events)
-    qtot = sum(e["q"] for e in events)
-    zone_totals = {}
-    for e in events:
-        zone = e.get("zone", 0)
-        if zone == 0:
-            continue
-        zone_totals.setdefault(zone, {"p": 0.0, "q": 0.0, "count": 0})
-        zone_totals[zone]["p"] += e["p"]
-        zone_totals[zone]["q"] += e["q"]
-        zone_totals[zone]["count"] += 1
-
-    print(f"-- Parsed {len(events)} load shed events (UFLS). Totals: P={ptot:.2f} MW, Q={qtot:.2f} Mvar.")
-    if zone_totals:
-        print("-- Load shed totals by zone:")
-        for zone in sorted(zone_totals):
-            totals = zone_totals[zone]
-            zone_name = zone_names[zone - 1]
-            print(f"   {zone_name}: {totals['count']} events P {totals['p']:.2f} MW Q {totals['q']:.2f} Mvar")
-    else:
-        print("-- No zone assignments found for parsed load shed events.")
-
-    if len(events) > 0 and (detailed_shedding_log or not zone_totals):
-        print("-- Detailed load shed events:")
-        for e in events:
-            zone_label = e["zone_name"] or "N/A"
-            print(
-                f"   Bus {e['bus']} Zone {zone_label} Load {e['load']} "
-                f"Time {e['time']}s P {e['p']} MW Q {e['q']} Mvar"
-            )
-
-except Exception as e:
-    print(f"-- Failed to parse load shed events: {e}")
 
 psspy.progress_output(1, "", [0, 0])
 sys.exit(0)
