@@ -16,3 +16,5 @@ raw/
 results/
 config.json
 samples.txt
+proposal/
+__pycache__/

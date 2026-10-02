@@ -9,8 +9,8 @@ The workflow optimizes network separation (islanding) using Julia/PowerModels an
 Before running the simulation, ensure your system meets the following requirements:
 
 *   **Operating System:** Windows (Required for PSS®E)
-*   **PSS®E:** Version 36 (36.1 recommended)
-*   **Python:** Version 3.11 (Exact version required for PSS®E 36 compatibility)
+*   **PSS®E:** Version 36 (36.5 recommended)
+*   **Python:** Version 3.14 (or the version required for specific PSS®E version compatibility)
 *   **Julia:** Latest stable version
 
 ## Installation & Setup
