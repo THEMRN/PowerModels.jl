@@ -1,5 +1,6 @@
 """
-ANDES models kept outside the ANDES package, for PSS®E dynamic models ANDES doesn't have.
+ANDES models kept outside the ANDES package, for PSS®E dynamic models ANDES doesn't have
+(FRQTPAT, LDSHBL).
 
 ANDES builds only the models listed in `andes.models.file_classes` and imports each file as
 `andes.models.<file>`, so `register_models()` puts ours in both places. It has to run before any
@@ -11,11 +12,13 @@ import sys
 
 import andes.models
 
-from . import frqtpat
+from . import frqtpat, ldshbl
 from .frqtpat import add_frqtpat_relays
+from .ldshbl import add_ldshbl_relays
 
 MODEL_FILES = [
     (frqtpat, ["FRQTPAT"]),  # module, model classes in it
+    (ldshbl, ["LDSHBL"]),
 ]
 
 

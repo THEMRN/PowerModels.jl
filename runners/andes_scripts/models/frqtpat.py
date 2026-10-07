@@ -21,7 +21,7 @@ from andes.core.model import Model, ModelData
 from andes.core.param import ExtParam, IdxParam, NumParam
 from andes.core.var import ExtAlgeb
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("andes.models.frqtpat")  # under the andes logger, so it reaches the ANDES log
 
 
 class FRQTPATData(ModelData):

@@ -9,9 +9,9 @@ line_outage.json at EVENT_TIME, runs to SIM_END_TIME and writes into the case fo
 flow report (andes_res_*.xlsx), the channels (output_andes_*.csv.gz), voltage_stats.json, the
 Plotly HTML report and the ANDES log.
 
-Not modelled by ANDES (skipped or approximated when reading the dyr): UFLS (LDSHBL) is skipped,
-GENSAL is approximated by GENROU and SCRX by SEXS with default parameters. Generator frequency
-relays (FRQTPAT) are our own ANDES model, in models/.
+Not modelled by ANDES (approximated when reading the dyr): GENSAL is approximated by GENROU and
+SCRX by SEXS with default parameters. Generator frequency relays (FRQTPAT) and UFLS relays (LDSHBL)
+are our own ANDES models, in models/.
 
 Run `andes prepare` and then `python prepare_models.py` once after installing or upgrading ANDES;
 they generate the model code.
@@ -29,7 +29,7 @@ import pandas as pd
 import andes
 
 from report import build_voltage_stats_json, write_voltage_stats_json, write_html_report, print_frequency_extremes
-from models import register_models, find_stale_models, add_frqtpat_relays
+from models import register_models, find_stale_models, add_frqtpat_relays, add_ldshbl_relays
 
 # ==================== Settings ====================
 EVENT_TIME = 5.0  # s, the outage lines trip
@@ -191,6 +191,10 @@ if run_dynamics:
     n_relays = add_frqtpat_relays(ss, busfreq_by_bus)
     print(f"-- {n_relays} generator frequency relays (FRQTPAT) added")
 
+    # UFLS relays from the dyr LDSHBL records, one per load
+    n_relays = add_ldshbl_relays(ss, busfreq_by_bus, load_ids)
+    print(f"-- {n_relays} UFLS relays (LDSHBL) added")
+
     # reading the line outages from the file, each one becomes a trip event at EVENT_TIME
     tripped_lines = []
     outage_file = output_dir / "line_outage.json"
@@ -341,6 +345,10 @@ if not ss.TDS.test_ok:
     print("-- Warning: dynamic initialization is not at steady state, see the ANDES log.")
 ss.dae.store()  # keep the initial point (t=0) in the channels
 
+# converted load constants before the UFLS relays reduce them, for the PLOD/QLOD channels
+initial_load_current = ss.PQ.Ipeq.v.copy()  # pu, P = Ipeq * V
+initial_load_admittance = ss.PQ.Xeq.v.copy()  # pu, Q = Xeq * V^2
+
 print(f"-- Running dynamic simulation to t={SIM_END_TIME}s (lines trip at t={EVENT_TIME}s)...")
 ss.TDS.run()
 if ss.TDS.busted:
@@ -352,6 +360,22 @@ for trip in ss.FRQTPAT.trips:
         f"   t={round(trip['time'], 3)}s  relay {trip['relay']}  {trip['machine']} at bus {trip['bus']}  "
         f"f={round(trip['frequency'], 3)} Hz  {round(trip['MW'], 1)} MW"
     )
+
+shed_events = ss.LDSHBL.shed_events
+ufls_total_p_mw = sum(event["MW"] for event in shed_events)
+ufls_total_q_mvar = sum(event["Mvar"] for event in shed_events)
+print(
+    f"-- Load shed by UFLS relays (LDSHBL): {len(shed_events)} events, "
+    f"P={round(ufls_total_p_mw, 2)} MW, Q={round(ufls_total_q_mvar, 2)} Mvar"
+)
+for event in shed_events:
+    print(
+        f"   t={round(event['time'], 3)}s  bus {event['bus']} load {event['load_id']} stage {event['stage']}  "
+        f"{round(event['percent'], 2)} %  {round(event['MW'], 2)} MW  {round(event['Mvar'], 2)} Mvar  "
+        f"V={round(event['voltage'], 3)} pu  f={round(event['frequency'], 3)} Hz"
+    )
+if ss.LDSHBL.n == 0:
+    ufls_total_p_mw = None  # no UFLS relays in the dyr, nothing to report
 
 # build the channel DataFrame with PSS®E channel names and units:
 # FREQ in pu deviation from 60 Hz, VOLT in pu, POWR/VARS/PLOD/QLOD in pu on the system base
@@ -388,14 +412,17 @@ for bus in ss.Bus.idx.v:
 for bus in ss.Bus.idx.v:
     channels[f"VOLT {bus} {bus_names[bus]}"] = bus_voltage[bus].to_numpy()
 
-# load power from the converted load model: P = Ipeq * V (constant current), Q = Xeq * V^2 (constant admittance)
+# load power from the converted load model: P = Ipeq * V (constant current), Q = Xeq * V^2 (constant admittance),
+# times the fraction of the initial load the UFLS relays left in service
+channel_times = bus_voltage.index.to_numpy()  # s
 for i in range(ss.PQ.n):
     if ss.PQ.u.v[i] == 0:
         continue
     bus = ss.PQ.bus.v[i]
     voltage = bus_voltage[bus].to_numpy()
-    channels[f"PLOD {bus}{bus_names[bus]}{load_ids[i]}"] = ss.PQ.Ipeq.v[i] * voltage
-    channels[f"QLOD {bus}{bus_names[bus]}{load_ids[i]}"] = ss.PQ.Xeq.v[i] * voltage**2
+    served = ss.LDSHBL.calc_served_fraction(ss.PQ.idx.v[i], channel_times)
+    channels[f"PLOD {bus}{bus_names[bus]}{load_ids[i]}"] = initial_load_current[i] * served * voltage
+    channels[f"QLOD {bus}{bus_names[bus]}{load_ids[i]}"] = initial_load_admittance[i] * served * voltage**2
 
 df = pd.DataFrame(channels)
 
@@ -407,11 +434,10 @@ df.to_csv(output_file, index=False, float_format="%.6g")
 voltage_stats = build_voltage_stats_json(df, TIME_COL, load_bus_numbers, EVENT_TIME, SIM_END_TIME)
 write_voltage_stats_json(output_dir, voltage_stats)
 
-# UFLS relays (LDSHBL) are not modelled, so there are no load shed events to report
-print("-- UFLS (LDSHBL) is not modelled in ANDES, no load shed events.")
-
 print("-- Plotting dynamic simulation channels...")
-plots_path = write_html_report(df, output_dir, now, voltage_stats["wtvsi"], ufls_total_p_mw=None, simulator="ANDES")
+plots_path = write_html_report(
+    df, output_dir, now, voltage_stats["wtvsi"], ufls_total_p_mw=ufls_total_p_mw, simulator="ANDES"
+)
 webbrowser.open(plots_path.resolve().as_uri())
 print(f"-- Interactive Plotly page opened: {plots_path}")
 
