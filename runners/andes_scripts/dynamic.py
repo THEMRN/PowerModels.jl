@@ -9,11 +9,12 @@ line_outage.json at EVENT_TIME, runs to SIM_END_TIME and writes into the case fo
 flow report (andes_res_*.xlsx), the channels (output_andes_*.csv.gz), voltage_stats.json, the
 Plotly HTML report and the ANDES log.
 
-Not modelled by ANDES (skipped or approximated when reading the dyr): UFLS (LDSHBL) and generator
-frequency relays (FRQTPAT) are skipped, GENSAL is approximated by GENROU and SCRX by SEXS with
-default parameters.
+Not modelled by ANDES (skipped or approximated when reading the dyr): UFLS (LDSHBL) is skipped,
+GENSAL is approximated by GENROU and SCRX by SEXS with default parameters. Generator frequency
+relays (FRQTPAT) are our own ANDES model, in models/.
 
-Run `andes prepare` once after installing or upgrading ANDES; it generates the model code.
+Run `andes prepare` and then `python prepare_models.py` once after installing or upgrading ANDES;
+they generate the model code.
 """
 
 import sys
@@ -28,6 +29,7 @@ import pandas as pd
 import andes
 
 from report import build_voltage_stats_json, write_voltage_stats_json, write_html_report, print_frequency_extremes
+from models import register_models, find_stale_models, add_frqtpat_relays
 
 # ==================== Settings ====================
 EVENT_TIME = 5.0  # s, the outage lines trip
@@ -38,7 +40,7 @@ TIME_COL = "Time(s)"
 
 def read_raw_block(raw_file, block_name):
     """
-    Records of one data block of a PSS®E RAW file ("LOAD", "BRANCH", "TRANSFORMER", ...), one list
+    Records of one data block of a PSSE RAW file ("LOAD", "BRANCH", "TRANSFORMER", ...), one list
     of string fields per file line, with quotes stripped. The block is found by the
     "BEGIN <name> DATA" / "END OF <name> DATA" comments that PowerModels and PSS®E write.
     """
@@ -124,15 +126,15 @@ run_dynamics = dyr_file_pth != ""
 # ANDES messages go to the log file, warnings also to the console
 log_file = f"log_{now}.txt"
 print(f"-- ANDES log: {output_dir / log_file}")
-andes.config_logger(
-    stream_level=logging.WARNING, log_path=str(output_dir), log_file=log_file, file_level=logging.INFO
-)
+andes.config_logger(stream_level=logging.WARNING, log_path=str(output_dir), log_file=log_file, file_level=logging.INFO)
 
 # ==================== Load the case ====================
 # setup=False: every device, including the trip events and frequency measurements,
 # has to be added before ANDES sets the system up.
 # autogen_stale=False: never regenerate model code here (it spawns processes), see `andes prepare`
+# and prepare_models.py
 print("-- Loading case...")
+register_models()  # our models (FRQTPAT), before ANDES creates the system
 ss = andes.load(
     raw_file_pth,
     addfile=dyr_file_pth if run_dynamics else None,
@@ -142,6 +144,11 @@ ss = andes.load(
     autogen_stale=False,
 )
 base_mva = ss.config.mva
+
+stale_models = find_stale_models(ss)
+if stale_models:
+    print(f"-- Generated code of {stale_models} is missing or out of date, run `python prepare_models.py`.")
+    sys.exit(1)
 
 # ANDES reads neither the circuit ids nor the line-end shunts (GI, BI, GJ, BJ) of the RAW, and
 # PowerModels writes the line charging into those shunts, so both are taken from the file here.
@@ -176,8 +183,13 @@ ss.PQ.config.q2z = 1.0
 
 if run_dynamics:
     # bus frequency measurement at every bus (FREQ channels)
+    busfreq_by_bus = {}
     for bus in ss.Bus.idx.v:
-        ss.add("BusFreq", {"bus": bus})
+        busfreq_by_bus[bus] = ss.add("BusFreq", {"bus": bus})
+
+    # generator frequency relays from the dyr FRQTPAT records
+    n_relays = add_frqtpat_relays(ss, busfreq_by_bus)
+    print(f"-- {n_relays} generator frequency relays (FRQTPAT) added")
 
     # reading the line outages from the file, each one becomes a trip event at EVENT_TIME
     tripped_lines = []
@@ -333,6 +345,13 @@ print(f"-- Running dynamic simulation to t={SIM_END_TIME}s (lines trip at t={EVE
 ss.TDS.run()
 if ss.TDS.busted:
     print("-- Warning: dynamic simulation stopped early, see the ANDES log.")
+
+print(f"-- Generator trips by frequency relays (FRQTPAT): {len(ss.FRQTPAT.trips)}")
+for trip in ss.FRQTPAT.trips:
+    print(
+        f"   t={round(trip['time'], 3)}s  relay {trip['relay']}  {trip['machine']} at bus {trip['bus']}  "
+        f"f={round(trip['frequency'], 3)} Hz  {round(trip['MW'], 1)} MW"
+    )
 
 # build the channel DataFrame with PSS®E channel names and units:
 # FREQ in pu deviation from 60 Hz, VOLT in pu, POWR/VARS/PLOD/QLOD in pu on the system base
