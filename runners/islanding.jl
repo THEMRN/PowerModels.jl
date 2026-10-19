@@ -4,8 +4,8 @@ using JuMP
 using JSON3
 using XLSX
 using LinearAlgebra  # matrix solves/inverses for Jacobian sensitivities
-include("excel_generator.jl")
 include("calc_line_flow.jl")
+include("excel_generator.jl")
 include("utils.jl")
 include("islanding_core.jl")
 

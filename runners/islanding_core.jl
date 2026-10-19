@@ -271,7 +271,7 @@ function run_islanding(network_data;
     create_excel_report(result, network_data, excel_file, powerworld=true)
     println("Excel file created successfully!")
 
-    voltage_prediction = predict_voltage_change_from_opened_lines(network_data, result, target_lines)
+    # voltage_prediction = predict_voltage_change_from_opened_lines(network_data, result, target_lines)
 
     # dynamic simulation -------------------------------------------------------------
     if run_dynamic_sim

@@ -19,10 +19,13 @@ they generate the model code.
 
 import sys
 import json
+import time
 import logging
 import datetime as dt
 import webbrowser
 from pathlib import Path
+
+script_start = time.perf_counter()  # s, before the slow imports (pandas, andes) for the run time summary
 
 import numpy as np
 import pandas as pd
@@ -134,7 +137,8 @@ andes.config_logger(stream_level=logging.WARNING, log_path=str(output_dir), log_
 # autogen_stale=False: never regenerate model code here (it spawns processes), see `andes prepare`
 # and prepare_models.py
 print("-- Loading case...")
-register_models()  # our models (FRQTPAT), before ANDES creates the system
+load_start = time.perf_counter()
+register_models()  # our models (FRQTPAT, LDSHBL), before ANDES creates the system
 ss = andes.load(
     raw_file_pth,
     addfile=dyr_file_pth if run_dynamics else None,
@@ -144,6 +148,7 @@ ss = andes.load(
     autogen_stale=False,
 )
 base_mva = ss.config.mva
+load_time = time.perf_counter() - load_start  # s
 
 stale_models = find_stale_models(ss)
 if stale_models:
@@ -340,6 +345,7 @@ ss.TDS.config.tf = SIM_END_TIME
 ss.TDS.config.tstep = TIME_STEP
 ss.TDS.config.criteria = 0  # keep running after a loss of synchronism, as PSS®E does
 ss.TDS.config.no_tqdm = 1
+simulation_start = time.perf_counter()
 ss.TDS.init()
 if not ss.TDS.test_ok:
     print("-- Warning: dynamic initialization is not at steady state, see the ANDES log.")
@@ -351,6 +357,7 @@ initial_load_admittance = ss.PQ.Xeq.v.copy()  # pu, Q = Xeq * V^2
 
 print(f"-- Running dynamic simulation to t={SIM_END_TIME}s (lines trip at t={EVENT_TIME}s)...")
 ss.TDS.run()
+simulation_time = time.perf_counter() - simulation_start  # s, initialization and run
 if ss.TDS.busted:
     print("-- Warning: dynamic simulation stopped early, see the ANDES log.")
 
@@ -380,6 +387,7 @@ if ss.LDSHBL.n == 0:
 # build the channel DataFrame with PSS®E channel names and units:
 # FREQ in pu deviation from 60 Hz, VOLT in pu, POWR/VARS/PLOD/QLOD in pu on the system base
 print("-- Reading channel data...")
+output_start = time.perf_counter()
 bus_names = {}  # e.g. "[NUC-A 21.600]"
 for bus, name, base_kv in zip(ss.Bus.idx.v, ss.Bus.name.v, ss.Bus.Vn.v):
     bus_names[bus] = f"[{name} {base_kv:.3f}]"
@@ -438,8 +446,19 @@ print("-- Plotting dynamic simulation channels...")
 plots_path = write_html_report(
     df, output_dir, now, voltage_stats["wtvsi"], ufls_total_p_mw=ufls_total_p_mw, simulator="ANDES"
 )
+output_time = time.perf_counter() - output_start  # s, channels, CSV, voltage stats and HTML report
 webbrowser.open(plots_path.resolve().as_uri())
 print(f"-- Interactive Plotly page opened: {plots_path}")
 
 print_frequency_extremes(df)
+
+# ==================== Run time ====================
+total_time = time.perf_counter() - script_start  # s
+other_time = total_time - load_time - simulation_time - output_time  # s, mostly the imports (~2.5 s)
+print("---------------------------")
+print(f"-- Run time: {round(total_time, 1)} s in total, of which")
+print(f"   loading the case:            {round(load_time, 1)} s")
+print(f"   dynamic simulation:          {round(simulation_time, 1)} s ({ss.dae.kcount} time steps)")
+print(f"   channels, CSV and report:    {round(output_time, 1)} s")
+print(f"   other (imports, power flow): {round(other_time, 1)} s")
 sys.exit(0)
