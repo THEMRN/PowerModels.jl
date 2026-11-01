@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Frequency Security Summary</title>
+<style>
+/* One black-and-white US Letter page; the figures are separate files (build_summary.py). */
+@page { size: letter; margin: 0.45in 0.6in; }
+body { margin: 0 auto; max-width: 7.3in; background: #fff; color: #000; font-family: Cambria, Georgia, "Times New Roman", serif; font-size: 9.3pt; line-height: 1.3; }
+h1 { font-size: 14.5pt; margin: 0 0 2pt; }
+.meta { font-size: 8.3pt; padding-bottom: 4pt; border-bottom: 0.75pt solid #000; margin-bottom: 7pt; }
+h2 { font-size: 10.6pt; margin: 6pt 0 1.5pt; }
+p { margin: 0 0 4pt; }
+i { font-family: Cambria, "Times New Roman", serif; }
+sub { font-size: 0.72em; }
+.nb { white-space: nowrap; }
+code { font-family: Consolas, "Courier New", monospace; font-size: 0.88em; }
+table.eq { border-collapse: collapse; margin: 3pt auto 5pt; }
+table.eq th { font-weight: normal; font-style: italic; font-size: 8.6pt; padding: 0 14pt 2pt; border-bottom: 0.5pt solid #000; text-align: left; }
+table.eq td { padding: 1.5pt 14pt; white-space: nowrap; }
+.figures { margin-top: 4pt; padding-top: 3pt; border-top: 0.5pt solid #000; font-size: 9pt; }
+</style>
+</head>
+<body>
+<h1>Frequency security for fixed-boundary islanding: test summary</h1>
+<div class="meta">savnw and ACTIVSg500 · simulations in ANDES 2.0 · 19 Oct 2026 · full report: <code>results/frequency_tests/frequency_security_tests.html</code></div>
+
+<h2>What the constraint does</h2>
+<p>When the boundary lines open, each island suddenly loses the power <i>ΔP</i> it was importing over them (or gains it, if it was exporting), and its frequency starts to fall (or rise). The frequency-security constraint limits <i>ΔP</i> before the split, so that afterwards the frequency changes no faster than 0.5 Hz/s (RoCoF, the rate of change of frequency), its lowest point (the nadir) stays above 59.5 Hz, where the first underfrequency load-shedding (UFLS) stage acts, and it settles within 0.3 Hz of 60 Hz. Each of these requirements gives a cap on <span class="nb">|<i>ΔP</i>|</span>, and the OPF gets one linear constraint per island, −<i>L</i> ≤ <i>ΔP</i> ≤ <i>L</i>, where <i>L</i> is the smallest of the three caps and <i>ΔP</i> is the sum of the flows into the island on its boundary lines.</p>
+
+<h2>How the caps are computed</h2>
+<p>Once per island, before the OPF and on the 100 MVA base, frequency.jl adds up three quantities from the island's online units and loads: the inertia <i>H</i> = Σ <i>H<sub>i</sub></i> · MBASE<sub><i>i</i></sub> / 100 (s), the energy stored in the spinning machines, with <i>H<sub>i</sub></i> from each unit's generator model in the .dyr file and MBASE<sub><i>i</i></sub> its MVA rating; the governor strength <i>K</i> = Σ (MBASE<sub><i>i</i></sub> / 100) / <i>R<sub>i</sub></i>, with <i>R<sub>i</sub></i> the droop of the unit's governor model; and the load damping <i>D</i> = 1.0 × the island's load, which assumes the load falls 1 % for every 1 % drop in frequency. The RoCoF and settling caps follow directly: <span class="nb">|<i>ΔP</i>|</span> ≤ 2<i>H</i> · 0.5 / 60 and <span class="nb">|<i>ΔP</i>|</span> ≤ (<i>D</i> + <i>K</i>) · 0.3 / 60.</p>
+<p>The nadir has no formula, so the island is simulated as one machine driven by one steam-turbine governor (the SFR model of Anderson and Mirheydar, 1990), with <i>Δf</i> the frequency deviation in pu of 60 Hz. The machines speed up or slow down with the power imbalance, the governors add the power <i>ΔP</i><sub>m</sub>, and <i>z</i> is the delayed part of the turbine's response; <i>F</i><sub>H</sub> = 0.3 (the share that responds at once) and <i>T</i><sub>R</sub> = 7 s (the delay of the rest) are the same for every island. From <i>Δf</i><sub>0</sub> = <i>z</i><sub>0</sub> = 0, forward Euler with step <i>h</i> = 0.01 s computes each step from the one before, for <i>k</i> = 0, …, 1999 (20 s):</p>
+<table class="eq">
+  <thead><tr><th>SFR model</th><th>Forward Euler, step <i>k</i> → <i>k</i> + 1</th></tr></thead>
+  <tbody>
+    <tr><td><i>ΔP</i><sub>m</sub> = −<i>K</i> · ( <i>F</i><sub>H</sub> · <i>Δf</i> + (1 − <i>F</i><sub>H</sub>) · <i>z</i> )</td><td><i>ΔP</i><sub>m,<i>k</i></sub> = −<i>K</i> · ( <i>F</i><sub>H</sub> · <i>Δf<sub>k</sub></i> + (1 − <i>F</i><sub>H</sub>) · <i>z<sub>k</sub></i> )</td></tr>
+    <tr><td>2<i>H</i> · d<i>Δf</i>/d<i>t</i> = <i>ΔP</i><sub>m</sub> − <i>D</i> · <i>Δf</i> − <i>ΔP</i></td><td><i>Δf</i><sub><i>k</i>+1</sub> = <i>Δf<sub>k</sub></i> + <i>h</i> · ( <i>ΔP</i><sub>m,<i>k</i></sub> − <i>D</i> · <i>Δf<sub>k</sub></i> − <i>ΔP</i> ) / (2<i>H</i>)</td></tr>
+    <tr><td><i>T</i><sub>R</sub> · d<i>z</i>/d<i>t</i> = <i>Δf</i> − <i>z</i></td><td><i>z</i><sub><i>k</i>+1</sub> = <i>z<sub>k</sub></i> + <i>h</i> · ( <i>Δf<sub>k</sub></i> − <i>z<sub>k</sub></i> ) / <i>T</i><sub>R</sub></td></tr>
+  </tbody>
+</table>
+<p>The nadir is 60 · (1 + min<sub><i>k</i></sub> <i>Δf<sub>k</sub></i>) Hz, and a bisection on <i>ΔP</i> finds the largest step whose nadir stays at or above 59.5 Hz: the nadir cap. The model is linear and has no governor output limits.</p>
+
+<h2>What the tests show</h2>
+<p>The numbers are right. Recomputed by hand for every island, <i>H</i>, <i>K</i>, <i>D</i> and the three caps agree with frequency.jl, the machine data agrees with ANDES's own reading of the .dyr files, and Euler integration changes the nadir cap by only a fraction of a percent, on the safe side. In nearly every island the RoCoF cap is the smallest of the three.</p>
+<p>The optimization also does what it should (Fig. 1). With the constraint on, every island's import or export is held at or inside its cap, solutions that already meet the caps are left untouched, and the problem becomes infeasible exactly when a hand check shows that no dispatch can meet the caps without shedding load. Where redispatch is not enough, the OPF sheds load before the split instead, at no extra solve time. The one failure is a bug: a boundary line already out of service is still listed as a boundary line, but PowerModels has no flow variable for it, so the model build fails.</p>
+<p>The simulated islands tell a less comfortable story (Fig. 2). The constraint always helps: without it, every scenario ends in load shedding, a generator trip or a runaway frequency (the SPARTANB zone falls to 44.9 Hz), and with it most islands stay much closer to 60 Hz. But only a few become fully secure. Sweeps that fix the import and simulate each value show why (Fig. 3). The nadir model is accurate for a zone with steam, gas and hydro units such as MIDLANDS, but hydro governors are deliberately slow in the first seconds, exactly when the nadir happens, so the hydro-only SPARTANB zone reaches 59.5 Hz at about a third of its nadir cap. In savnw a second effect appears: the boundary lines also carry reactive power, so opening them lowers the island's voltages by about 0.1 pu and the voltage-dependent load drops with them; imports then turn out safer than modelled and exports less safe. Two smaller mismatches remain: the simulated loads ignore frequency (<i>D</i> = 0), which leaves an island without governors with nothing to hold its frequency, and the OPF can dispatch a unit below its governor minimum.</p>
+
+<h2>What was not covered, and what could come next</h2>
+<p>flow_shed was not used to test what the constraint can do: it already drives the boundary flows toward zero and would hide the constraint's own effect, so all simulations used opf and opf_shed. All simulations are in ANDES, none in PSS®E. Looking ahead, the bug is a one-line fix; keeping units above their governor minimum and setting the load damping to 0, as in the simulation, are small changes; a nadir model with one governor per type from the .dyr, starting with the hydro temporary droop, would address the hydro zones; how to handle the voltage change at the split, by modelling the load drop or by also capping the reactive import, is still open.</p>
+
+<p class="figures"><b>Figures</b> (PNG and PDF in this folder): Fig. 1 <code>fig1_opf_tests</code>, Fig. 2 <code>fig2_frequency_off_on</code>, Fig. 3 <code>fig3_nadir_model</code>.</p>
+</body>
+</html>

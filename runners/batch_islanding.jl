@@ -259,7 +259,7 @@ for (run_idx, (scenario_idx, run, swept)) in enumerate(all_runs)
             opf_model=opf_model,
             flow_model=flow_model,
             target_lines=target_lines,
-            run_psse=run_psse,
+            run_dynamic_sim=run_psse,
             load_shedding_penalties=load_shedding_penalties,
             target_zone=target_zone,
             selected_buses=selected_buses,

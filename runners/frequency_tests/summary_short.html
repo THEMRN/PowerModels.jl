@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Frequency Security Short Summary</title>
+<style>
+/* Half-length version of summary.html, same black-and-white style; the figures are separate files (build_summary.py). */
+@page { size: letter; margin: 0.6in 0.75in; }
+body { margin: 0 auto; max-width: 7in; background: #fff; color: #000; font-family: Cambria, Georgia, "Times New Roman", serif; font-size: 10.5pt; line-height: 1.38; }
+h1 { font-size: 15pt; margin: 0 0 2pt; }
+.meta { font-size: 8.8pt; padding-bottom: 4pt; border-bottom: 0.75pt solid #000; margin-bottom: 8pt; }
+h2 { font-size: 11.5pt; margin: 10pt 0 2pt; }
+p { margin: 0 0 5pt; }
+i { font-family: Cambria, "Times New Roman", serif; }
+sub { font-size: 0.72em; }
+.nb { white-space: nowrap; }
+code { font-family: Consolas, "Courier New", monospace; font-size: 0.88em; }
+table.eq { border-collapse: collapse; margin: 3pt auto 6pt; }
+table.eq td { padding: 1.5pt 14pt; white-space: nowrap; }
+</style>
+</head>
+<body>
+<h1>Frequency security for fixed-boundary islanding: short summary</h1>
+<div class="meta">savnw and ACTIVSg500 · simulations in ANDES 2.0 · 19 Oct 2026 · figures <code>fig1</code> to <code>fig3</code> in this folder</div>
+
+<h2>The constraint</h2>
+<p>When the boundary lines open, each island suddenly loses the power <i>ΔP</i> it was importing over them (or gains it, if exporting), and its frequency moves. The constraint caps <span class="nb">|<i>ΔP</i>|</span> before the split so that the frequency changes no faster than 0.5 Hz/s (RoCoF), stays above 59.5 Hz (the first load-shedding stage) and settles within 0.3 Hz of 60 Hz. With the inertia <i>H</i> = Σ <i>H<sub>i</sub></i> · MBASE<sub><i>i</i></sub> / 100, the governor strength <i>K</i> = Σ (MBASE<sub><i>i</i></sub> / 100) / <i>R<sub>i</sub></i> and the load damping <i>D</i> = 1.0 × island load (<i>H<sub>i</sub></i> and the droop <i>R<sub>i</sub></i> from the .dyr, MBASE<sub><i>i</i></sub> the MVA rating), the RoCoF and settling caps are 2<i>H</i> · 0.5 / 60 and (<i>D</i> + <i>K</i>) · 0.3 / 60. For the nadir, the island is one machine with one steam governor, stepped forward with Euler (<i>h</i> = 0.01 s, 20 s, from zero):</p>
+<table class="eq"><tbody>
+  <tr><td><i>ΔP</i><sub>m,<i>k</i></sub> = −<i>K</i> · ( <i>F</i><sub>H</sub> · <i>Δf<sub>k</sub></i> + (1 − <i>F</i><sub>H</sub>) · <i>z<sub>k</sub></i> )</td></tr>
+  <tr><td><i>Δf</i><sub><i>k</i>+1</sub> = <i>Δf<sub>k</sub></i> + <i>h</i> · ( <i>ΔP</i><sub>m,<i>k</i></sub> − <i>D</i> · <i>Δf<sub>k</sub></i> − <i>ΔP</i> ) / (2<i>H</i>)</td></tr>
+  <tr><td><i>z</i><sub><i>k</i>+1</sub> = <i>z<sub>k</sub></i> + <i>h</i> · ( <i>Δf<sub>k</sub></i> − <i>z<sub>k</sub></i> ) / <i>T</i><sub>R</sub></td></tr>
+</tbody></table>
+<p><i>Δf</i> is the frequency deviation in pu, <i>ΔP</i><sub>m</sub> the governors' extra power, <i>F</i><sub>H</sub> = 0.3 the share of turbine power that responds at once and <i>z</i> the rest, delayed by <i>T</i><sub>R</sub> = 7 s. The nadir is 60 · (1 + min<sub><i>k</i></sub> <i>Δf<sub>k</sub></i>) Hz, and a bisection finds the largest <i>ΔP</i> that keeps it at or above 59.5 Hz. The OPF then enforces −<i>L</i> ≤ <i>ΔP</i> ≤ <i>L</i>, with <i>L</i> the smallest cap.</p>
+
+<h2>What we found</h2>
+<p>The caps are computed correctly, and the OPF enforces them as intended (Fig. 1), shedding load before the split when redispatch is not enough; the only problem is a bug when a boundary line is already out of service. In simulation the constraint always helps but is not always enough (Fig. 2): without it every scenario ends in load shedding, a trip or a runaway frequency, and with it only a few become fully secure. The main reason is the nadir model (Fig. 3). It is right for zones with steam and gas units, but too optimistic for hydro units, which respond slowly at first. In savnw, opening the lines also drops the voltage and the load, which the model ignores.</p>
+
+<h2>Not covered, and next</h2>
+<p>flow_shed was not used to test the constraint: it already pushes the boundary flows toward zero and would hide the constraint's effect. All simulations are in ANDES, none in PSS®E. Next: fix the bug, give the nadir model a governor per type (hydro first), and decide how to handle the voltage change at the split.</p>
+</body>
+</html>

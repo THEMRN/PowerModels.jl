@@ -1,0 +1,1441 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Frequency Security Tests</title>
+<style>
+/* Layout: one reading column with a sticky contents list on wide screens. The story runs top to
+   bottom: what the constraint computes, the cases, then the three tests and what to change. */
+:root {
+  color-scheme: light;
+  --bg: #f3f5f6;
+  --surface: #fcfcfb;
+  --ink: #14191d;
+  --ink-2: #47515a;
+  --muted: #78818a;
+  --line: #dde1e4;
+  --line-strong: #c2c8cd;
+  --accent: #1d5ea6;
+  --accent-wash: #e3ecf6;
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --band: rgba(42, 120, 214, 0.08);
+  --good-ink: #006300;
+  --good-wash: #e4f3e4;
+  --warn-ink: #7a5000;
+  --warn-wash: #fcf0d3;
+  --bad: #d03b3b;
+  --bad-ink: #a12424;
+  --bad-wash: #fbe4e4;
+  --font-display: "Bahnschrift", "DIN Alternate", "Segoe UI", system-ui, sans-serif;
+  --font-body: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --bg: #101315; --surface: #181b1e; --ink: #eef1f3; --ink-2: #c1c8ce; --muted: #8b939a;
+    --line: #2a2f34; --line-strong: #3b4248; --accent: #78aef0; --accent-wash: #1a2a3d;
+    --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --band: rgba(57, 135, 229, 0.12);
+    --good-ink: #5ccb5c; --good-wash: #12301a; --warn-ink: #f3c552; --warn-wash: #33290c;
+    --bad-ink: #f08080; --bad-wash: #3b1717;
+  }
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 15.5px; line-height: 1.6; }
+[hidden] { display: none !important; }
+.page { max-width: 1200px; margin: 0 auto; padding: 32px 20px 72px; display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 44px; }
+@media (max-width: 920px) { .page { grid-template-columns: minmax(0, 1fr); gap: 0; } .toc { display: none; } }
+
+.toc { position: sticky; top: 20px; align-self: start; font-size: 13.5px; max-height: calc(100vh - 40px); overflow-y: auto; }
+.toc p { font-family: var(--font-display); font-weight: 600; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0 0 8px; }
+.toc ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 1px; }
+.toc a { color: var(--ink-2); text-decoration: none; display: block; padding: 3px 8px; border-radius: 6px; }
+.toc a:hover, .toc a:focus-visible { background: var(--accent-wash); color: var(--ink); }
+.toc .sub a { padding-left: 22px; font-size: 12.5px; color: var(--muted); }
+
+main { min-width: 0; display: grid; gap: 60px; }
+section { display: grid; gap: 16px; min-width: 0; }
+h1, h2, h3, h4 { font-family: var(--font-display); text-wrap: balance; margin: 0; line-height: 1.2; }
+h1 { font-size: clamp(32px, 5vw, 44px); font-weight: 700; }
+h2 { font-size: 26px; font-weight: 700; padding-top: 8px; border-top: 2px solid var(--ink); }
+h3 { font-size: 19px; font-weight: 600; margin-top: 10px; }
+h4 { font-size: 16px; font-weight: 600; margin-top: 4px; }
+.num { color: var(--accent); margin-right: 10px; font-variant-numeric: tabular-nums; }
+p { margin: 0; max-width: 78ch; }
+.lede { font-size: 18px; color: var(--ink-2); max-width: 74ch; }
+.eyebrow { font-family: var(--font-display); font-weight: 600; font-size: 13px; letter-spacing: .1em; text-transform: uppercase; color: var(--accent); }
+code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
+code { background: var(--accent-wash); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+a { color: var(--accent); }
+ul, ol.list { margin: 0; padding-left: 22px; display: grid; gap: 6px; max-width: 80ch; }
+var { font-style: italic; font-family: Cambria, "Times New Roman", serif; font-size: 1.06em; }
+sub, sup { font-size: 0.72em; }
+
+header { display: grid; gap: 14px; }
+.meta { display: flex; flex-wrap: wrap; gap: 6px 22px; font-size: 14px; color: var(--ink-2); }
+.meta b { color: var(--ink); font-weight: 600; }
+.note { font-size: 14px; color: var(--ink-2); background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; max-width: none; }
+
+.chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; padding: 1px 9px 1px 7px; border-radius: 999px; white-space: nowrap; vertical-align: 1px; }
+.chip svg { width: 13px; height: 13px; flex: none; }
+.chip.good { background: var(--good-wash); color: var(--good-ink); }
+.chip.warn { background: var(--warn-wash); color: var(--warn-ink); }
+.chip.bad { background: var(--bad-wash); color: var(--bad-ink); }
+.chip.info { background: var(--accent-wash); color: var(--accent); }
+
+.findings { display: grid; gap: 10px; }
+.finding { display: grid; grid-template-columns: 54px minmax(0, 1fr); gap: 14px; padding: 14px 16px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
+.finding .id { font-family: var(--font-display); font-weight: 700; font-size: 20px; color: var(--accent); line-height: 1.3; }
+.finding .body { display: grid; gap: 6px; }
+.finding h4 { margin: 0; }
+@media (max-width: 560px) { .finding { grid-template-columns: minmax(0, 1fr); gap: 4px; } }
+
+.equation { font-family: Cambria, "Times New Roman", serif; font-size: 18px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 20px; display: grid; gap: 6px; overflow-x: auto; }
+.equation div { white-space: nowrap; }
+
+figure { margin: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px 12px; display: grid; gap: 10px; min-width: 0; }
+figcaption { font-size: 14px; color: var(--ink-2); max-width: 96ch; }
+figcaption b { color: var(--ink); }
+.fig-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 16px; align-items: baseline; }
+.fig-title { font-family: var(--font-display); font-weight: 600; font-size: 16px; }
+.chart { position: relative; min-width: 0; }
+.chart svg { display: block; overflow: visible; }
+.charts-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+.charts-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+.panel-title { font-size: 13.5px; font-weight: 600; color: var(--ink-2); margin-bottom: 2px; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px; color: var(--ink-2); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend svg { width: 22px; height: 10px; }
+
+.controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.seg { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--line-strong); border-radius: 8px; overflow: hidden; }
+.seg button { font: inherit; font-size: 13.5px; border: 0; background: var(--surface); color: var(--ink-2); padding: 5px 12px; cursor: pointer; border-right: 1px solid var(--line); }
+.seg button:last-child { border-right: 0; }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--surface); }
+.seg button:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+select { font: inherit; font-size: 14px; padding: 5px 8px; border-radius: 8px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); max-width: 100%; }
+
+.tick-label { fill: var(--muted); font-family: var(--font-body); font-size: 12px; font-variant-numeric: tabular-nums; }
+.axis-title { fill: var(--ink-2); font-size: 12.5px; font-family: var(--font-body); }
+.grid-line { stroke: var(--line); stroke-width: 1; }
+.base-line { stroke: var(--line-strong); stroke-width: 1; }
+.ref-line { stroke: var(--ink-2); stroke-width: 1; stroke-dasharray: 4 3; }
+.ref-label { fill: var(--ink-2); font-size: 11.5px; font-family: var(--font-body); }
+.limit-line { stroke: var(--muted); stroke-width: 1; }
+.crosshair { stroke: var(--line-strong); stroke-width: 1; }
+.annotation { fill: var(--ink); font-size: 12.5px; font-family: var(--font-body); font-weight: 600; }
+
+.tooltip { position: absolute; pointer-events: none; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 8px; padding: 7px 10px; font-size: 12.5px; box-shadow: 0 4px 14px rgba(0,0,0,.12); min-width: 140px; z-index: 5; display: grid; gap: 3px; }
+.tooltip .tt-head { color: var(--muted); font-size: 12px; }
+.tooltip .tt-row { display: flex; align-items: center; gap: 8px; }
+.tooltip .tt-row b { font-variant-numeric: tabular-nums; color: var(--ink); }
+.tooltip .tt-row span { color: var(--ink-2); }
+.tooltip .key { width: 12px; height: 2px; flex: none; }
+
+.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { padding: 6px 8px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-weight: 600; color: var(--ink-2); background: var(--bg); white-space: nowrap; font-size: 12.5px; }
+td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+tr:last-child td { border-bottom: 0; }
+tr.group-start td { border-top: 1px solid var(--line-strong); }
+td .sub { display: block; color: var(--muted); font-size: 12px; }
+td.wrap { min-width: 180px; }
+.text-table td { font-size: 13.5px; }
+.text-table td:first-child { white-space: nowrap; font-weight: 600; }
+.columns { font-size: 13.5px; color: var(--ink-2); max-width: none; }
+details { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
+details > summary { cursor: pointer; padding: 10px 14px; font-weight: 600; font-size: 14.5px; color: var(--ink-2); }
+details[open] > summary { border-bottom: 1px solid var(--line); }
+details .table-wrap { border: 0; border-radius: 0 0 10px 10px; }
+
+.callout { border-left: 3px solid var(--bad); background: var(--bad-wash); padding: 12px 16px; border-radius: 0 10px 10px 0; display: grid; gap: 8px; }
+.callout pre { margin: 0; font-family: var(--font-mono); font-size: 12.5px; white-space: pre-wrap; }
+.cmd { font-family: var(--font-mono); font-size: 13px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; overflow-x: auto; white-space: pre; }
+.statline { display: flex; flex-wrap: wrap; gap: 8px 24px; font-size: 14.5px; align-items: baseline; }
+.statline b { font-size: 20px; font-family: var(--font-display); margin-right: 4px; }
+</style>
+</head>
+<body>
+<div class="page">
+  <nav class="toc" aria-label="Contents">
+    <p>Contents</p>
+    <ol>
+      <li><a href="#summary">Summary</a></li>
+      <li><a href="#background">1 What the constraint does</a></li>
+      <li class="sub"><a href="#import">1.1 The scheduled import</a></li>
+      <li class="sub"><a href="#response">1.2 Frequency after the split</a></li>
+      <li class="sub"><a href="#requirements">1.3 The three requirements</a></li>
+      <li class="sub"><a href="#sfr">1.4 The SFR model</a></li>
+      <li class="sub"><a href="#hkd">1.5 Where H, K and D come from</a></li>
+      <li class="sub"><a href="#constraint">1.6 The constraint in the OPF</a></li>
+      <li class="sub"><a href="#symbols">1.7 Symbols and terms</a></li>
+      <li><a href="#cases">2 Cases and scenarios</a></li>
+      <li><a href="#test1">3 Test 1: offline limits</a></li>
+      <li class="sub"><a href="#machines">3.1 Machine data</a></li>
+      <li class="sub"><a href="#islands">3.2 Islands and limits</a></li>
+      <li class="sub"><a href="#nadir">3.3 Nadir limit</a></li>
+      <li class="sub"><a href="#binding">3.4 Which limit binds</a></li>
+      <li><a href="#test2">4 Test 2: the constraint</a></li>
+      <li><a href="#test3">5 Test 3: ANDES simulations</a></li>
+      <li class="sub"><a href="#method">5.1 How the runs work</a></li>
+      <li class="sub"><a href="#step">5.2 Voltage at the split</a></li>
+      <li class="sub"><a href="#sweeps">5.3 Calibration sweeps</a></li>
+      <li class="sub"><a href="#traces">5.4 Frequency traces</a></li>
+      <li class="sub"><a href="#passfail">5.5 Off and on</a></li>
+      <li class="sub"><a href="#hydro">5.6 Hydro-only zone</a></li>
+      <li><a href="#changes">6 What to change</a></li>
+      <li><a href="#reproduce">7 Files and reproduction</a></li>
+    </ol>
+  </nav>
+
+  <main>
+    <header>
+      <div class="eyebrow">Islanding fork of PowerModels.jl · runners/frequency.jl</div>
+      <h1>Frequency Security Tests</h1>
+      <p class="lede">The islanding workflow can limit, for every island it creates, the power the island exchanges with the rest of the system before the split, so that its frequency stays within its requirements after the split. This report explains what that frequency-security constraint computes, then tests it in three steps on the savnw and ACTIVSg500 cases: the numbers it computes before any optimization, its behaviour inside the optimization, and whether the islands it allows actually keep their frequency in dynamic simulations.</p>
+      <div class="meta">
+        <span>Runs of <b>19 Oct 2026</b></span>
+        <span>Page built <b id="generated">—</b></span>
+        <span>Simulator <b>ANDES 2.0</b></span>
+        <span>OPF solver <b>Ipopt</b></span>
+      </div>
+      <p class="note">Numbers in the text are from these runs. Every table and figure is drawn from the result files in <code>results/frequency_tests/</code> when the page is built. Section 1 defines every symbol where it first appears; section 1.7 collects them in one table.</p>
+    </header>
+
+    <!-- ==================== Summary ==================== -->
+    <section id="summary">
+      <h2>Summary</h2>
+      <p>The constraint is implemented correctly: it computes what its formulas say, and the optimization enforces it, apart from one bug. The weak part is the model behind the limits. When the islands it allows are simulated, the limits turn out about right for an island with a mix of steam, gas and hydro units, too generous for an island with only hydro units, and wrong in one direction when opening the boundary also changes the island's voltages.</p>
+      <div class="table-wrap">
+        <table class="text-table">
+          <thead><tr><th>Test</th><th>Question</th><th>Result</th></tr></thead>
+          <tbody>
+            <tr><td><a href="#test1">1 Offline limits</a></td><td>Before any optimization: does frequency.jl read the right machine data, find the right islands and compute the limits its formulas describe?</td><td><span class="chip good" data-icon="good">yes</span> All 62 online units read the same as ANDES reads them; all 31 islands pass 8 independent checks; the nadir limit is within 0.26 % of the exact value, on the safe side.</td></tr>
+            <tr><td><a href="#test2">2 The constraint</a></td><td>Does the optimization keep each island's import within its limit, in both directions, and only when it has to?</td><td><span class="chip warn" data-icon="warn">22 of 23</span> Yes, in every test but one. Bug: a boundary line that is already out of service makes the model build fail.</td></tr>
+            <tr><td><a href="#test3">3 ANDES simulations</a></td><td>After the boundary opens, do the islands the constraint allows keep their frequency within the requirements?</td><td><span class="chip bad" data-icon="bad">2 of 7</span> scenarios are fully secure with the constraint on. Without it, all 7 see load shedding, a unit trip or a collapse; with it, 3 still do, and 2 more violate a requirement without any relay acting.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <h3>Findings</h3>
+      <div class="findings">
+        <div class="finding"><div class="id">F1</div><div class="body">
+          <h4><span class="chip bad" data-icon="bad">bug</span> A boundary line that is already out of service breaks the model</h4>
+          <p>If one of the lines chosen for opening is already out of service (<code>br_status = 0</code>), frequency.jl still counts it as a boundary line of the island, but PowerModels leaves it out of the model, so the constraint looks up a flow variable that does not exist (<code>KeyError</code>). The report function has the same problem. Section <a href="#test2">4</a>, fix in <a href="#changes">6.1</a>.</p>
+        </div></div>
+        <div class="finding"><div class="id">F2</div><div class="body">
+          <h4><span class="chip bad" data-icon="bad">model</span> Hydro units respond far more slowly than the model assumes</h4>
+          <p>frequency.jl models every governor as a steam turbine. Hydro governors are deliberately slow at first, because the water in the pipe cannot be sped up quickly. The ACTIVSg500 SPARTANB zone has only hydro units. When its boundary opens, the model says its frequency stays above 59.5 Hz (where load shedding starts) for any import up to 58 MW. In the simulation it falls to 59.5 Hz at only 18 MW, about a third of that. The constraint lets the zone import 49 MW (the rate-of-fall limit is the tightest of the three), and the simulated frequency then falls to 59.26 Hz and underfrequency relays shed 72 MW of load. Section <a href="#hydro">5.6</a> goes through the numbers. Also sections <a href="#sweeps">5.3</a>, <a href="#passfail">5.5</a>, change in <a href="#changes">6.2</a>.</p>
+        </div></div>
+        <div class="finding"><div class="id">F3</div><div class="body">
+          <h4><span class="chip bad" data-icon="bad">model</span> Opening the boundary changes the island's voltages, and its load with them</h4>
+          <p>In savnw the boundary lines also supply reactive power to the north island (about 200 Mvar). When they open, its voltages drop by about 0.11 pu and its load falls by about 72 MW, because the simulated loads draw less power at lower voltage. The model assumes the island loses exactly its active import. As a result, imports are safe beyond their limit (59.5 Hz is reached at 99 MW against a 77 MW limit) but exports are not: 60.5 Hz is exceeded at 34 MW of export. With the constraint on, the heavily loaded north island avoids load shedding but overshoots to 60.89 Hz. Sections <a href="#step">5.2</a>, <a href="#sweeps">5.3</a>, change in <a href="#changes">6.3</a>.</p>
+        </div></div>
+        <div class="finding"><div class="id">F4</div><div class="body">
+          <h4><span class="chip warn" data-icon="warn">model</span> The governors deliver less steady-state response than the model counts</h4>
+          <p>In the MIDLANDS zone the governors deliver about 192 pu of response against the 258 pu the model counts, so the frequency settles more than 0.3 Hz off at 96 MW of import, inside the 129 MW quasi-steady-state limit. At its limit the zone settles at 59.68 Hz. Its nadir limit, by contrast, is accurate (59.5 Hz at 105 MW against 102 MW). Section <a href="#sweeps">5.3</a>, change in <a href="#changes">6.2</a>.</p>
+        </div></div>
+        <div class="finding"><div class="id">F5</div><div class="body">
+          <h4><span class="chip warn" data-icon="warn">model</span> The simulated loads do not respond to frequency, and islands without governors depend on that response</h4>
+          <p>The model assumes the load drops 1 % for every 1 % drop of frequency (load damping D). The simulated loads do not depend on frequency at all. With governors present this matters little. The savnw left island has no governor, so D is all that would hold its frequency: its limit is 1 MW, and even at that import its frequency drifts until underfrequency relays shed load and its only unit trips. Section <a href="#passfail">5.5</a>, change in <a href="#changes">6.4</a>.</p>
+        </div></div>
+        <div class="finding"><div class="id">F6</div><div class="body">
+          <h4><span class="chip warn" data-icon="warn">data</span> The optimization can dispatch a unit below the minimum its governor model allows</h4>
+          <p>To export only 50 MW, the savnw top island needs unit 3011 at about 150 MW, but its governor model cannot go below 300 MW (30 % of its 1000 MVA rating). The optimization allows 0 MW. The simulation starts out of balance and the unit trips at 61.8 Hz. With the load at bus 3005 raised to 400 MW (as in islanding.jl) the same island is secure. Section <a href="#passfail">5.5</a>, change in <a href="#changes">6.5</a>.</p>
+        </div></div>
+        <div class="finding"><div class="id">F7</div><div class="body">
+          <h4><span class="chip info" data-icon="info">note</span> The constraint costs no solve time; its cost is preemptive load shedding</h4>
+          <p>Solve times with and without it are the same. When an island cannot meet its limit by redispatch, the optimization sheds load before the split instead: 389 MW in SPARTANB, 78 MW in MIDLANDS, 372 MW outside the zone for YORK, 1,328 MW in GREENVIL (a zone with 12 MW of generation). Section <a href="#test2">4</a>.</p>
+        </div></div>
+        <div class="finding"><div class="id">F8</div><div class="body">
+          <h4><span class="chip good" data-icon="good">fixed</span> The batch runner called run_islanding with a keyword it no longer has</h4>
+          <p><code>batch_islanding.jl</code> passed <code>run_psse=</code>, but <code>run_islanding</code> now takes <code>run_dynamic_sim</code>, so every batch run failed. Changed to <code>run_dynamic_sim=run_psse</code>.</p>
+        </div></div>
+      </div>
+    </section>
+
+    <!-- ==================== 1. Background ==================== -->
+    <section id="background">
+      <h2><span class="num">1</span>What the frequency constraint does</h2>
+      <p>This section explains the quantities the rest of the report tests. The code is <code>runners/frequency.jl</code>, called by <code>run_islanding</code> when <code>frequency_security=true</code>.</p>
+
+      <h3 id="import"><span class="num">1.1</span>The island and its scheduled import</h3>
+      <p>The islanding workflow picks a set of boundary lines to open (the <b>target lines</b>, from bus pairs or from a zone boundary) and solves an optimal power flow (OPF) for the operating point just before they open. Opening them splits the network into <b>islands</b>. Before the split, each island exchanges power with the rest of the system over those lines.</p>
+      <p>The <b>scheduled import</b> <var>ΔP</var> of an island is the net active power flowing into it over its boundary lines in that operating point, measured at the island end of each line (so losses on the boundary lines count toward it). When the lines open, the island loses <var>ΔP</var> at once. An island that imported (<var>ΔP</var> &gt; 0) is then short of generation: a <b>deficit</b>, and its frequency falls. An island that exported (<var>ΔP</var> &lt; 0) has more generation than load: a <b>surplus</b>, and its frequency rises. The frequency constraint limits |<var>ΔP</var>| for every island.</p>
+
+      <h3 id="response"><span class="num">1.2</span>What the frequency does after the split</h3>
+      <p>Figure 1 shows the typical response of an island to a sudden deficit. It has three features, and each gets its own requirement.</p>
+      <figure>
+        <div class="fig-title">Figure 1. Frequency of the savnw north island after it loses a 77 MW import (SFR model, section 1.4)</div>
+        <div class="chart" id="anatomy-chart"></div>
+        <figcaption><b>RoCoF</b> (rate of change of frequency, Hz/s) is the initial slope. At first only the kinetic energy stored in the rotating machines covers the deficit, so the frequency falls at a rate set by the island's inertia <var>H</var>. <b>Nadir</b>: the governors (the speed controllers of the turbines) sense the falling frequency and open their steam valves or water gates; once their extra mechanical power covers the deficit, the frequency stops falling. The lowest point is the nadir; for a surplus the mirror image is the <b>zenith</b>, the highest point. <b>Quasi-steady state (QSS)</b>: governors respond in proportion to the frequency deviation (droop control), so the frequency settles at an offset from 60 Hz, here 59.78 Hz, until slower control (AGC, not modelled) brings it back.</figcaption>
+      </figure>
+
+      <h3 id="requirements"><span class="num">1.3</span>The three requirements and the limits they give</h3>
+      <p>Each feature has a threshold, and each threshold gives a limit on |<var>ΔP</var>| through the model of section 1.4. frequency.jl takes the smallest of the three as the island's limit <var>L</var>. The same limit applies to deficits and surpluses.</p>
+      <div class="table-wrap">
+        <table class="text-table">
+          <thead><tr><th>Requirement</th><th>Threshold (constant in frequency.jl)</th><th>Why this value</th><th>Limit on |ΔP| (pu)</th></tr></thead>
+          <tbody>
+            <tr><td>RoCoF</td><td>|df/dt| ≤ 0.5 Hz/s (<code>MAX_ROCOF</code>)</td><td>A common setting of RoCoF protection; faster changes risk tripping generators and distributed resources.</td><td>2<var>H</var> × 0.5 / 60</td></tr>
+            <tr><td>Nadir and zenith</td><td>nadir ≥ 59.5 Hz (<code>MIN_NADIR_FREQUENCY</code>); zenith ≤ 60.5 Hz by symmetry</td><td>59.5 Hz is the first stage of underfrequency load shedding (UFLS) in both cases' .dyr files. 60.5 Hz is where savnw's generator over-frequency relays start counting (trip after 10 s).</td><td>found by search on the SFR model (1.4)</td></tr>
+            <tr><td>Quasi-steady state</td><td>|f − 60| ≤ 0.3 Hz (<code>MAX_QSS_DEVIATION</code>)</td><td>Settle well clear of the 59.5 Hz UFLS stage and of the 59.5 / 60.5 Hz 10-second generator relay settings.</td><td>(<var>D</var> + <var>K</var>) × 0.3 / 60</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <figure>
+        <div class="fig-title">Figure 2. Where the thresholds sit, with the protection settings in the .dyr files</div>
+        <div class="chart" id="scale"></div>
+        <figcaption><b>UFLS 1–3</b>: underfrequency load-shedding stages (LDSHBL relays, every load in both cases): 5 % of the load at 59.5 Hz, 7 % more at 59.3 Hz, 5 % more at 59.1 Hz, each after 0.3 s below its setting. <b>Generator trip</b>: savnw's FRQTPAT relays trip a unit instantly below 57.8 Hz or above 61.8 Hz, and after 10 s below 59.5 Hz or above 60.5 Hz (ACTIVSg500 has none). The shaded bands are the QSS band (±0.3 Hz) inside the nadir/zenith band (±0.5 Hz).</figcaption>
+      </figure>
+
+      <h3 id="sfr"><span class="num">1.4</span>The SFR model behind the limits</h3>
+      <p>frequency.jl represents each island as one equivalent machine driven by one equivalent governor: the <b>system frequency response (SFR) model</b> of Anderson and Mirheydar (1990). With <var>Δf</var> the frequency deviation in per unit (<var>Δf</var> = (<var>f</var> − 60)/60) and <var>t</var> = 0 the moment the lines open:</p>
+      <div class="equation">
+        <div>2<var>H</var> · d<var>Δf</var>/d<var>t</var> = <var>ΔP</var><sub>m</sub> − <var>D</var> · <var>Δf</var> − <var>ΔP</var></div>
+        <div><var>ΔP</var><sub>m</sub> = −<var>K</var> · ( <var>F</var><sub>H</sub> · <var>Δf</var> + (1 − <var>F</var><sub>H</sub>) · <var>z</var> )</div>
+        <div><var>T</var><sub>R</sub> · d<var>z</var>/d<var>t</var> = <var>Δf</var> − <var>z</var></div>
+      </div>
+      <ul>
+        <li><b>First line, the swing equation.</b> The rotating mass (inertia <var>H</var>) speeds up or slows down by the power imbalance: the extra mechanical power from the governors <var>ΔP</var><sub>m</sub>, minus the change of load with frequency <var>D</var>·<var>Δf</var>, minus the lost import <var>ΔP</var>.</li>
+        <li><b>Second and third lines, a reheat steam turbine.</b> A frequency drop makes the governor open the steam valve in proportion to the drop (total gain <var>K</var>, section 1.5). In a reheat turbine only a fraction <var>F</var><sub>H</sub> of the power comes from the high-pressure stage, which follows the valve at once. The remaining 1 − <var>F</var><sub>H</sub> comes from the intermediate- and low-pressure stages, after the steam has passed through the reheater, a large volume that delays it with time constant <var>T</var><sub>R</sub>. <var>z</var> is that delayed signal.</li>
+        <li><b>Fixed constants.</b> <var>F</var><sub>H</sub> = 0.3 (<code>REHEAT_FRACTION</code>) and <var>T</var><sub>R</sub> = 7 s (<code>REHEAT_TIME</code>) are the same for every island and every unit, whatever its actual governor. Governor limits (maximum and minimum output, rate limits) and deadbands are not modelled, so the response is linear: twice the deficit gives twice the deviation.</li>
+        <li><b>RoCoF limit.</b> At <var>t</var> = 0 nothing has responded yet (<var>Δf</var> = 0, <var>ΔP</var><sub>m</sub> = 0), so d<var>Δf</var>/d<var>t</var> = −<var>ΔP</var>/(2<var>H</var>). In Hz/s that is 60·<var>ΔP</var>/(2<var>H</var>); keeping it within 0.5 Hz/s gives |<var>ΔP</var>| ≤ 2<var>H</var>·0.5/60.</li>
+        <li><b>QSS limit.</b> Once everything has settled (d<var>Δf</var>/d<var>t</var> = 0 and <var>z</var> = <var>Δf</var>), <var>Δf</var> = −<var>ΔP</var>/(<var>D</var> + <var>K</var>). Keeping it within 0.3/60 pu gives |<var>ΔP</var>| ≤ (<var>D</var> + <var>K</var>)·0.3/60.</li>
+        <li><b>Nadir limit.</b> There is no simple formula, so frequency.jl simulates the model: forward Euler integration with a 0.01 s step over 20 s (the simulated time after the split in dynamic.py). It finds by bisection the largest <var>ΔP</var> whose lowest frequency stays at or above 59.5 Hz, to 10<sup>−5</sup> pu (0.001 MW).</li>
+      </ul>
+
+      <h3 id="hkd"><span class="num">1.5</span>Where H, K and D come from</h3>
+      <p>Once per island, before the optimization (<code>add_frequency_security!</code>), from the online units and loads inside the island. Values are in <b>per unit (pu) on the system base</b>: power divided by 100 MVA (the base of both cases), frequency deviation divided by 60 Hz. So <var>K</var> = 200 pu means the island's governors add 200 × 100 MW for a 1 pu (60 Hz) drop, which is 333 MW per Hz.</p>
+      <div class="table-wrap">
+        <table class="text-table">
+          <thead><tr><th>Quantity</th><th>Computed as</th><th>Source of the inputs</th></tr></thead>
+          <tbody>
+            <tr><td><var>H</var>, inertia (s)</td><td>Σ <var>H<sub>i</sub></var> × MBASE<sub><var>i</var></sub> / 100 over the online units</td><td><var>H<sub>i</sub></var>: each unit's inertia constant, the kinetic energy stored at rated speed divided by its MVA rating, from its generator model in the .dyr file (GENROU: 5th parameter, GENSAL: 4th, GENCLS: 1st). MBASE<sub><var>i</var></sub>: the unit's MVA rating, from the RAW file. <code>read_dyr_machine_data</code></td></tr>
+            <tr><td><var>K</var>, governor gain (pu)</td><td>Σ (MBASE<sub><var>i</var></sub> / 100) / <var>R<sub>i</sub></var> over the online units that have a governor</td><td><var>R<sub>i</sub></var>: the governor's droop, the per-unit frequency change that moves the unit from zero to full rated output. Here 0.04–0.07, mostly 0.05 (5 %): with <var>R</var> = 0.05 a 3 Hz drop (5 % of 60 Hz) raises the unit's output by its full MVA rating. From the governor model in the .dyr (TGOV1, HYGOV, GAST: 1st parameter; IEEEG1: 3rd, as 1/<var>R</var>; IEESGO: 7th).</td></tr>
+            <tr><td><var>D</var>, load damping (pu)</td><td>1.0 × Σ <var>P</var> of the online loads in the island (pu)</td><td><code>LOAD_DAMPING</code> = 1.0: the load is assumed to drop 1 % for every 1 % drop of frequency. Load <var>P</var> from the network data.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>An island without any unit (no inertia) gets no limit. It cannot survive the split anyway: the simulation de-energizes it. Its load, though, was supplied over boundary lines from a neighbouring island, so that supply is part of the neighbour's scheduled import.</p>
+
+      <h3 id="constraint"><span class="num">1.6</span>The constraint in the optimization</h3>
+      <p><code>build_custom_pf</code> (<code>src/prob/opf.jl</code>) calls <code>constraint_island_frequency_security</code> when the network data carries the islands. For each island it adds one linear constraint on the OPF's flow variables:</p>
+      <div class="equation"><div>−<var>L</var> ≤ Σ<sub>lines <var>l</var></sub> −<var>p</var><sub><var>l</var>,<var>i</var>,<var>j</var></sub> ≤ <var>L</var></div></div>
+      <p>The sum runs over the island's boundary lines; <var>i</var> is the line's bus inside the island and <var>j</var> the bus outside, so <var>p</var><sub><var>l</var>,<var>i</var>,<var>j</var></sub> is the power leaving the island at that end and the sum of −<var>p</var> is the scheduled import. It is the same in the AC and DC models.</p>
+
+      <h3 id="symbols"><span class="num">1.7</span>Symbols and terms</h3>
+      <p>Every symbol and model name used in this report, what it means and how it is obtained. Values are for these two cases.</p>
+      <div class="table-wrap">
+        <table class="text-table">
+          <thead><tr><th>Symbol or term</th><th>Meaning</th><th>How it is obtained here</th></tr></thead>
+          <tbody>
+            <tr><td><var>f</var>, <var>Δf</var></td><td>Frequency (Hz) and its deviation from 60 Hz, in pu (<var>Δf</var> = (<var>f</var> − 60)/60)</td><td>In the SFR model, a state; in the simulations, measured (COI frequency, below)</td></tr>
+            <tr><td><var>ΔP</var>, scheduled import</td><td>Net active power into the island over its boundary lines before the split; &gt; 0 import (deficit when lost), &lt; 0 export (surplus)</td><td>From the OPF solution, at the island end of each boundary line. In the simulations, from ANDES's own power flow of the exported case.</td></tr>
+            <tr><td><var>L</var>, limit</td><td>Largest |<var>ΔP</var>| allowed for the island</td><td>Smallest of the RoCoF, nadir and QSS limits (1.3)</td></tr>
+            <tr><td>pu, system base</td><td>Per unit: value divided by its base</td><td>Power base 100 MVA (baseMVA of both cases); frequency base 60 Hz</td></tr>
+            <tr><td>MBASE</td><td>A unit's MVA rating; its .dyr parameters are on this base</td><td>RAW file (gen <code>mbase</code>)</td></tr>
+            <tr><td><var>H</var>, <var>H<sub>i</sub></var></td><td>Inertia constant (s): stored kinetic energy at rated speed per MVA of rating</td><td><var>H<sub>i</sub></var> from the .dyr generator model; island <var>H</var> = Σ <var>H<sub>i</sub></var>·MBASE<sub><var>i</var></sub>/100 (1.5)</td></tr>
+            <tr><td><var>R</var>, droop</td><td>Per-unit frequency change that moves a unit from zero to full output</td><td>.dyr governor model; 0.04–0.07 here, mostly 0.05</td></tr>
+            <tr><td><var>K</var>, governor gain</td><td>Extra mechanical power (pu) per pu of frequency drop, in steady state</td><td>Σ (MBASE<sub><var>i</var></sub>/100)/<var>R<sub>i</sub></var> (1.5)</td></tr>
+            <tr><td><var>D</var>, load damping</td><td>Load reduction (pu) per pu of frequency drop</td><td>1.0 × island load in pu (<code>LOAD_DAMPING</code>)</td></tr>
+            <tr><td><var>F</var><sub>H</sub></td><td>Share of a reheat steam turbine's power that responds at once (high-pressure stage)</td><td>Constant 0.3 in frequency.jl (<code>REHEAT_FRACTION</code>)</td></tr>
+            <tr><td><var>T</var><sub>R</sub></td><td>Reheater time constant (s): delay of the remaining 1 − <var>F</var><sub>H</sub></td><td>Constant 7 s in frequency.jl (<code>REHEAT_TIME</code>)</td></tr>
+            <tr><td><var>ΔP</var><sub>m</sub>, <var>z</var></td><td>Extra mechanical power from the governors; the reheater-delayed frequency signal</td><td>States of the SFR model (1.4)</td></tr>
+            <tr><td>RoCoF</td><td>Rate of change of frequency (Hz/s)</td><td>Model: the initial slope. Simulation: frequency change over the first 500 ms ÷ 0.5 s</td></tr>
+            <tr><td>Nadir, zenith</td><td>Lowest frequency after a deficit, highest after a surplus (Hz)</td><td>Minimum / maximum of the frequency after the split</td></tr>
+            <tr><td>QSS, settling frequency</td><td>Frequency the island settles at after the governors respond (Hz)</td><td>Model: <var>Δf</var> = −<var>ΔP</var>/(<var>D</var>+<var>K</var>). Simulation: mean frequency 19–20 s after the split</td></tr>
+            <tr><td>SFR model</td><td>System frequency response model: one equivalent machine and governor per island</td><td>Anderson &amp; Mirheydar (1990), as in 1.4</td></tr>
+            <tr><td>UFLS</td><td>Underfrequency load shedding: relays that disconnect load when frequency falls</td><td>LDSHBL relays in the .dyr (Figure 2)</td></tr>
+            <tr><td>Preemptive shedding</td><td>Load the OPF disconnects before the split</td><td>Objectives <code>opf_shed</code>, <code>flow_shed</code> (section 2)</td></tr>
+            <tr><td>Dead island</td><td>Island left without any generating unit</td><td>No limit; de-energized in the simulation</td></tr>
+            <tr><td>GENROU, GENSAL, GENCLS</td><td>Generator models: round rotor, salient pole, classical</td><td>.dyr; source of <var>H<sub>i</sub></var>. ANDES reads GENSAL as GENROU.</td></tr>
+            <tr><td>TGOV1</td><td>Steam turbine-governor. Parameters: <var>R</var>; T1 valve time constant; VMAX, VMIN valve limits (pu of MBASE); T2, T3 a lead-lag that represents the reheater; Dt turbine damping</td><td>.dyr. Its step response starts at T2/T3 of the final value and rises with time constant T3, so it is the SFR reheat model with <var>F</var><sub>H</sub> = T2/T3 and <var>T</var><sub>R</sub> = T3. Here T2/T3 = 0.30–0.33 and T3 = 6.3–10 s, except savnw units 101 and 102 with T2 = T3 = 1 s (no reheat delay). VMIN is 0.3 in savnw (those units cannot run below 30 % of their MVA rating) and 0 in ACTIVSg500.</td></tr>
+            <tr><td>HYGOV</td><td>Hydro turbine-governor. Parameters: <var>R</var> permanent droop; r temporary droop and Tr its reset time; Tf, Tg filter and gate servo time constants; VELM maximum gate speed; GMAX, GMIN gate limits; Tw water starting time; At turbine gain; Dturb; qNL no-load flow</td><td>.dyr. Right after a disturbance the governor acts with the much larger droop <var>R</var> + r (r = 0.07–0.97 here, against <var>R</var> = 0.04–0.07, so 2 to 25 times weaker), and moves to the permanent droop <var>R</var> over a few times Tr (0.6–9.9 s). This is deliberate: fast gate movement is unstable because of the water's inertia. Tw (0.13–1.25 s) is the time the water column needs to accelerate; when the gate opens, the power first dips before it rises.</td></tr>
+            <tr><td>GAST</td><td>Gas turbine-governor: <var>R</var>; T1 fuel valve and T2 turbine time constants; T3, AT and KT a load limiter; VMAX, VMIN; Dturb</td><td>.dyr. T1 = 0.1–0.5 s and T2 = 0.1–1 s here: much faster than a reheat steam turbine.</td></tr>
+            <tr><td>SEXS, IEEET1, SCRX, IEEEST</td><td>Excitation systems and stabilizers (voltage control)</td><td>.dyr; not used by the constraint</td></tr>
+            <tr><td>FRQTPAT</td><td>Generator frequency relay</td><td>savnw .dyr only; settings in Figure 2</td></tr>
+            <tr><td>LDSHBL</td><td>UFLS relay, one per load</td><td>Both .dyr files; settings in Figure 2</td></tr>
+            <tr><td>ANDES</td><td>Open-source dynamic simulator (Python), used here for all dynamic runs</td><td>Version 2.0, through <code>runners/andes_scripts/dynamic.py</code></td></tr>
+            <tr><td>COI frequency</td><td>Centre-of-inertia frequency: the island's average frequency, each machine weighted by its stored energy</td><td>Bus frequency at each unit's terminal bus, weighted by <var>H<sub>i</sub></var>·MBASE<sub><var>i</var></sub> (section 5.1)</td></tr>
+            <tr><td>Power, load, voltage step</td><td>Change at the moment of the split of the island's machine output, load, and mean load-bus voltage</td><td>Simulation channels 20 ms after the split minus just before (5.1)</td></tr>
+            <tr><td>Reactive import</td><td>Net reactive power (Mvar) into the island over its boundary lines before the split</td><td>ANDES power flow</td></tr>
+            <tr><td><var>K</var><sub>eff</sub></td><td>Governor gain the simulation actually delivers</td><td>Slope of the settling frequency against the import across a sweep (5.1)</td></tr>
+            <tr><td>Crossing</td><td>Import at which a simulated quantity first reaches its threshold</td><td>Linear interpolation between sweep runs (5.1)</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ==================== 2. Cases and scenarios ==================== -->
+    <section id="cases">
+      <h2><span class="num">2</span>Test cases and scenarios</h2>
+      <div class="table-wrap">
+        <table class="text-table">
+          <thead><tr><th>Case</th><th>Network</th><th>Units and governors (.dyr)</th><th>Relays (.dyr)</th></tr></thead>
+          <tbody>
+            <tr><td>savnw</td><td>PSS®E's 23-bus sample system; 3,200 MW of load; 100 MVA base</td><td>6 units, 4,153 MW: 101 and 102 (810 MW, steam TGOV1, no reheat), 206 and 3011 (900 MW, steam TGOV1 with reheat), 211 (616 MW, hydro HYGOV), 3018 (117 MW, no governor)</td><td>FRQTPAT on every unit, LDSHBL on every load</td></tr>
+            <tr><td>ACTIVSg500</td><td>Synthetic 500-bus grid on a South Carolina footprint (Texas A&amp;M ACTIVSg); 7,750 MW of load; 100 MVA base; zones CLEMSON, GREENVIL, SPARTANB, YORK, MIDLANDS, COLUMBIA</td><td>90 units, 56 online; governors HYGOV 39, GAST 30, TGOV1 21</td><td>LDSHBL on every load; no generator frequency relays</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Each scenario is a set of target lines plus, where noted, a change to the network in the style of the scenario blocks in <code>islanding.jl</code> (all are defined in <code>runners/frequency_tests/common.jl</code>). A zone boundary means every branch with exactly one end in the zone (<code>find_branches_by_zone</code>).</p>
+      <div class="table-wrap">
+        <table class="text-table">
+          <thead><tr><th>Scenario</th><th>Target lines</th><th>Network change</th><th>Why it is tested</th><th>Tests</th></tr></thead>
+          <tbody>
+            <tr><td>savnw · top</td><td>3001-3002, 3005-3004, 3005-3006, 3005-3008, 3005-3007</td><td>none</td><td>Island of 4 buses with unit 3011 (900 MW) and only 100 MW of load: it exports</td><td>1, 2, 3</td></tr>
+            <tr><td>savnw · top, 3005 at 400 MW</td><td>as above</td><td>load at 3005 raised to 400 MW (islanding.jl)</td><td>The same island with unit 3011 above its governor minimum</td><td>1, 2, 3</td></tr>
+            <tr><td>savnw · north-south</td><td>154-3008, 154-153 (2 circuits), 152-153, 152-3004</td><td>none</td><td>North island of 11 buses (700 MW of load, units 3011 and 3018) that imports</td><td>1, 2, 3 (sweep)</td></tr>
+            <tr><td>savnw · north-south, north ×1.6</td><td>as above</td><td>loads at 3005, 3007, 3008, 153 ×1.6 (islanding.jl)</td><td>North units (1,017 MW) cannot cover 1,120 MW within the limit: needs shedding</td><td>1, 2, 3</td></tr>
+            <tr><td>savnw · bottom</td><td>201-151, 202-152, 203-154, 205-154</td><td>none</td><td>Imports already within the limits: nothing may change</td><td>1, 2</td></tr>
+            <tr><td>savnw · left</td><td>3007-3008, 154-3008, 3005-3008</td><td>none</td><td>Island whose only unit (3018) has no governor: <var>K</var> = 0</td><td>1, 2, 3</td></tr>
+            <tr><td>savnw · gen 3018 alone</td><td>3008-3018 (transformer)</td><td>none</td><td>Island with a unit but no load and no governor: QSS limit 0</td><td>1, 2</td></tr>
+            <tr><td>savnw · bus 202 alone</td><td>202-152, 202-201, 202-203</td><td>none</td><td>Island without generation, which gets no limit</td><td>1, 2</td></tr>
+            <tr><td>savnw · north-south, 152-3004 out</td><td>as north-south</td><td>line 152-3004 out of service before the solve</td><td>A target line that is already open</td><td>1, 2</td></tr>
+            <tr><td>ACTIVSg500 · SPARTANB</td><td>zone boundary (18 lines)</td><td>none</td><td>Importing zone (1,043 MW of load, 608 MW of units), hydro units only</td><td>1, 2, 3</td></tr>
+            <tr><td>ACTIVSg500 · MIDLANDS</td><td>zone boundary (12 lines)</td><td>none</td><td>Importing zone with hydro, gas and steam units</td><td>1, 2, 3</td></tr>
+            <tr><td>ACTIVSg500 · YORK</td><td>zone boundary (10 lines)</td><td>none</td><td>Exporting zone (891 MW of export)</td><td>1, 2, 3</td></tr>
+            <tr><td>ACTIVSg500 · COLUMBIA</td><td>zone boundary (9 lines)</td><td>none</td><td>Small exchange, within the limits</td><td>1, 2</td></tr>
+            <tr><td>ACTIVSg500 · GREENVIL</td><td>zone boundary (18 lines)</td><td>none</td><td>Zone with 1,340 MW of load and 12 MW of generation</td><td>1, 2</td></tr>
+            <tr><td>ACTIVSg500 · MIDLANDS, loads ×0.7</td><td>zone boundary</td><td>zone loads ×0.7</td><td>Sweep: the zone's units can then cover any import from −186 to +531 MW</td><td>1, 3 (sweep)</td></tr>
+            <tr><td>ACTIVSg500 · SPARTANB, loads ×0.5</td><td>zone boundary</td><td>zone loads ×0.5</td><td>Sweep: the same for the hydro-only zone (−87 to +340 MW)</td><td>1, 3 (sweep)</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Optimization objectives used (the <code>objective</code> setting of the workflow): <b>opf</b> minimizes generation cost; all units cost the same in both cases, so it in effect minimizes losses. <b>opf_shed</b> also allows preemptive shedding, at a penalty of 1,000 per pu of shed load, 10 times the generation cost, so load is shed only when nothing else works. <b>flow_shed</b> minimizes the sum of squared boundary-line flows plus shedding penalties (λ = 500).</p>
+    </section>
+
+    <!-- ==================== 3. Test 1 ==================== -->
+    <section id="test1">
+      <h2><span class="num">3</span>Test 1: the offline limits</h2>
+      <p>Before any optimization, frequency.jl reads the machine data, finds the islands and computes their limits. Test 1 recomputes each of these independently and compares (<code>1_offline.jl</code>), for every scenario of section 2.</p>
+
+      <h3 id="machines"><span class="num">3.1</span>Machine data from the .dyr</h3>
+      <p><code>read_dyr_machine_data</code> reads <var>H<sub>i</sub></var> from each unit's generator model and <var>R<sub>i</sub></var> from its governor model, by parameter position. ANDES has its own .dyr reader; it stores the inertia as <var>M</var> = 2<var>H</var> on the unit's MVA base and the droop <var>R</var> on the same base. The test reads both cases with ANDES (<code>andes_dyr_check.py</code>) and compares, unit by unit, <var>H</var>, <var>R</var> and the MVA base.</p>
+      <div class="statline" id="machine-stats"></div>
+      <details>
+        <summary>All online units, Julia against ANDES</summary>
+        <div class="table-wrap" id="machine-table"></div>
+      </details>
+      <p>Result: identical for every unit. savnw unit 3018 has no governor record in its .dyr, so it adds inertia but no governor gain.</p>
+
+      <h3 id="islands"><span class="num">3.2</span>Islands, H, K, D and the RoCoF and QSS limits</h3>
+      <p>Eight checks on every island the split leaves:</p>
+      <ul>
+        <li>the islands together contain every bus exactly once;</li>
+        <li>no in-service line other than the target lines joins two islands;</li>
+        <li>the island's boundary lines are exactly the target lines with one end inside it, each with its inside bus first;</li>
+        <li><var>H</var>, <var>K</var> and <var>D</var> equal a separate hand calculation (1.5);</li>
+        <li>the RoCoF and QSS limits equal their formulas (1.3).</li>
+      </ul>
+      <p class="columns">Columns: island load; online units (with a governor); <var>H</var>, <var>K</var>, <var>D</var> on the 100 MVA base; the three limits in MW; which limit is the smallest; checks passed.</p>
+      <div class="statline" id="island-stats"></div>
+      <div class="table-wrap" id="island-table"></div>
+      <p id="dead-note"></p>
+
+      <h3 id="nadir"><span class="num">3.3</span>The nadir limit</h3>
+      <p>Four checks on the bisection that gives the nadir limit, for every island:</p>
+      <ul>
+        <li><b>At the limit</b>, the model's lowest frequency is 59.5 Hz, and a step 2×10<sup>−5</sup> pu (0.002 MW) larger goes below it.</li>
+        <li><b>Linearity</b>: the nadir deviation per MW of deficit is the same at 0.25, 0.5, 1, 2 and 4 times the limit, as the model has no limits in it. The spread is reported.</li>
+        <li><b>Integration accuracy</b>: the limit recomputed with the exact solution of the same linear equations (matrix exponential, 1 ms steps) instead of forward Euler at 0.01 s.</li>
+        <li><b>Window</b>: whether the lowest point falls inside the 20 s window, or the frequency is still falling at 20 s.</li>
+      </ul>
+      <figure>
+        <div class="fig-head">
+          <div class="fig-title">Figure 3. Model frequency after a step equal to the island's nadir limit</div>
+          <div class="controls"><select id="nadir-select" aria-label="Island"></select></div>
+        </div>
+        <div class="legend" id="nadir-legend"></div>
+        <div class="chart" id="nadir-chart"></div>
+        <figcaption>Forward Euler (how frequency.jl integrates) against the exact solution; the two lie on top of each other. For the savnw islands without a governor (left, gen 3018 alone) the frequency never turns: nothing but load damping opposes the deficit, and the "nadir" is just the frequency at 20 s.</figcaption>
+      </figure>
+      <p class="columns">Columns: nadir limit; model frequency at the limit and just above it; linearity spread (relative); limit from the exact solution; difference of the code's limit from it; time of the lowest point; whether it lies inside the 20 s window.</p>
+      <div class="table-wrap" id="nadir-table"></div>
+      <p>Result: the bisection is exact, the model is linear to rounding error, and Euler integration makes the limit at most 0.26 % smaller than exact (on the safe side). The lowest point comes 0.5–2.6 s after the split in every island with governors (0.5 s in GREENVIL, which has almost no inertia). Only the islands without a governor have no turning point within 20 s, which makes their nadir limit depend on the window length.</p>
+
+      <h3 id="binding"><span class="num">3.4</span>Which limit binds</h3>
+      <p>The RoCoF limit depends only on <var>H</var>, the QSS limit only on <var>D</var> and <var>K</var>, and the nadir limit on all three. Figure 4 scales one of them at a time for three islands and shows how the three limits move; the map scales <var>H</var> and <var>K</var> together and colours each point by the limit that is smallest.</p>
+      <figure>
+        <div class="fig-head">
+          <div class="fig-title">Figure 4. The three limits as the island's H, K or D is scaled</div>
+          <div class="controls"><div class="seg" id="sens-seg" role="group" aria-label="Island"></div></div>
+        </div>
+        <div class="legend" id="sens-legend"></div>
+        <div class="charts-3">
+          <div><div class="panel-title">Inertia H scaled</div><div class="chart" id="sens-H"></div></div>
+          <div><div class="panel-title">Governor gain K scaled</div><div class="chart" id="sens-K"></div></div>
+          <div><div class="panel-title">Load damping D scaled</div><div class="chart" id="sens-D"></div></div>
+        </div>
+        <div class="charts-2">
+          <div><div class="panel-title">Smallest limit over H and K (D as is)</div><div class="chart" id="sens-map"></div></div>
+          <div id="sens-text" style="display:grid; gap:10px; align-content:start; font-size:14.5px;"></div>
+        </div>
+        <figcaption>The vertical line in each panel and the ringed cell in the map mark the island as it is (scale 1).</figcaption>
+      </figure>
+      <p>Result: RoCoF is the smallest limit in 29 of the 31 islands; the other two have no governor, where QSS is smallest. In these cases the islands have little inertia relative to their governor gain, and for such islands RoCoF binds. The nadir limit only becomes the smallest for islands with much more inertia than governor response.</p>
+    </section>
+
+    <!-- ==================== 4. Test 2 ==================== -->
+    <section id="test2">
+      <h2><span class="num">4</span>Test 2: the constraint in the optimization</h2>
+      <p>Each test solves one scenario twice, with frequency security off and on, and checks one expected outcome (<code>2_model.jl</code>):</p>
+      <ul>
+        <li><b>binds</b>: off, some island's import exceeds its limit; on, every import is within its limit and at least one is at it (within 0.05 MW).</li>
+        <li><b>within</b>: the same, without requiring an import at its limit. Used where the objective is flat: in the DC model with equal costs there are no losses, every dispatch costs the same, and the solver may stop anywhere inside the limit.</li>
+        <li><b>unchanged</b>: off, every import is already within its limit; on, the solution must be the same (objective within 10<sup>−6</sup>, imports within 0.001 MW).</li>
+        <li><b>infeasible</b>: on, the solver finds no solution, and a hand check agrees that none exists without shedding. The hand check gives each island the import range its own units allow (load − maximum output to load − minimum output), cuts it to [−<var>L</var>, <var>L</var>], and requires the imports of all islands to add up to minus the load of the dead islands (whose supply came over the boundary).</li>
+      </ul>
+      <figure>
+        <div class="fig-title">Figure 5. Scheduled import divided by the island's limit, with frequency security off and on</div>
+        <div class="legend" id="model-legend"></div>
+        <div class="chart" id="model-chart"></div>
+        <figcaption>One row per test, for the island whose import is largest relative to its limit when the constraint is off. The shaded band is what the constraint allows (|import| ≤ limit); negative values are exports. The axis is linear between −1 and 1 and logarithmic beyond, since GREENVIL's import is 1,300 times its limit.</figcaption>
+      </figure>
+      <p class="columns">Columns: expected outcome and result; solver status with the constraint on; for each island its limit (and which one) and its import off → on; preemptive shedding off → on; Ipopt solve time off / on.</p>
+      <div class="table-wrap" id="model-table"></div>
+      <p>Result: 22 of 23 tests pass. The constraint holds exports and imports at their limits, leaves the solution untouched when the limits are not reached (including the islanding.jl SPARTANB setup, still 407.4 MW of shedding), and makes the problem infeasible exactly when the hand check says the limits cannot be met. Solve times are the same with and without it; only the infeasible cases take longer, because Ipopt has to prove that no solution exists.</p>
+      <div class="callout" id="bug-callout"></div>
+    </section>
+
+    <!-- ==================== 5. Test 3 ==================== -->
+    <section id="test3">
+      <h2><span class="num">5</span>Test 3: dynamic simulation in ANDES</h2>
+      <p>Tests 1 and 2 show the constraint does what its formulas say. Test 3 checks whether the formulas describe what actually happens, by simulating the islands after the split (<code>3_dynamic.jl</code>).</p>
+
+      <h3 id="method"><span class="num">5.1</span>How the runs work</h3>
+      <p>Every run exports the OPF solution as a PSS®E RAW file and runs <code>andes_scripts/dynamic.py</code>, as <code>run_islanding</code> does: ANDES solves the power flow of the exported case, opens the target lines at <var>t</var> = 5 s and simulates until 25 s, so 20 s after the split. dynamic.py converts every load the way the PSS®E script does: active power as constant current (<var>P</var> proportional to the voltage) and reactive power as constant admittance (<var>Q</var> proportional to the voltage squared). Neither depends on frequency, so the simulation has no load damping (<var>D</var> = 0).</p>
+      <p>Two kinds of runs:</p>
+      <ul>
+        <li><b>Calibration sweeps</b> fix the scheduled import of one island at a series of values and simulate each. The import is fixed by an equality constraint added in the test only (the OPF otherwise as <code>opf</code>). The FRQTPAT and LDSHBL relays are removed from the .dyr, so the frequency shows what the system does on its own, without relays cutting load or units. Three sweeps: savnw north-south (−200 to +200 MW into the north island), ACTIVSg500 MIDLANDS with loads ×0.7 (−150 to +400 MW), SPARTANB with loads ×0.5 (−75 to +300 MW). Each run also gives the response of the other island, which receives about the opposite import.</li>
+        <li><b>Off and on runs</b> go through <code>run_islanding</code> unchanged with the case's own .dyr, relays included, frequency security off and then on, and record what the relays do.</li>
+      </ul>
+      <p>What is measured in each run (<code>analyze_andes.py</code>):</p>
+      <div class="table-wrap">
+        <table class="text-table">
+          <thead><tr><th>Quantity</th><th>How it is measured</th></tr></thead>
+          <tbody>
+            <tr><td>COI frequency</td><td>The island's centre-of-inertia frequency: the frequency at each unit's terminal bus (ANDES bus frequency measurement), averaged with weights <var>H<sub>i</sub></var>·MBASE<sub><var>i</var></sub>. All quantities below use it.</td></tr>
+            <tr><td>RoCoF</td><td>(COI frequency 0.5 s after the split − frequency just before) ÷ 0.5 s. Measured over a window because a measured frequency is noisy at the switching instant; protection relays do the same.</td></tr>
+            <tr><td>Nadir, zenith</td><td>Lowest and highest COI frequency after the split</td></tr>
+            <tr><td>Settling frequency</td><td>Mean COI frequency 19–20 s after the split</td></tr>
+            <tr><td>Power step</td><td>Sum of the electrical output of the island's units 20 ms after the split minus just before: the imbalance the machines actually take up. The model assumes it equals the scheduled import.</td></tr>
+            <tr><td>Load step, voltage step</td><td>Change of the island's total load, and of the mean voltage at its load buses, over the same 20 ms</td></tr>
+            <tr><td>Reactive import</td><td>Net reactive power (Mvar) into the island over its boundary lines in ANDES's power flow before the split</td></tr>
+            <tr><td>UFLS, trips</td><td>Load shed by LDSHBL relays (MW) and units tripped by FRQTPAT relays, from the ANDES console output</td></tr>
+            <tr><td>Crossing</td><td>Sweeps: the import at which a measured quantity first reaches its threshold (RoCoF 0.5 Hz/s, nadir 59.5 Hz, zenith 60.5 Hz, settling ±0.3 Hz), interpolated linearly between neighbouring runs. It is the limit the island really has, to compare with frequency.jl's.</td></tr>
+            <tr><td><var>K</var><sub>eff</sub></td><td>Sweeps: the governor gain the simulation delivers. The settling deviation is fitted as a straight line against the import, over the runs that settle within 1 Hz (beyond that, units hit their limits); <var>K</var><sub>eff</sub> = 60 / (100 × slope in Hz/MW), comparable with <var>K</var> + <var>D</var>. The fit's value at zero import is the offset the split causes on its own.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="step"><span class="num">5.2</span>Opening the boundary also changes voltages, and the load follows</h3>
+      <p>The model assumes the island loses exactly its scheduled import. Figure 6 compares that with the power step its machines actually take up. For the ACTIVSg500 zones the two agree within 2 %. In savnw they do not: deficits come out smaller and surpluses larger, and at zero import the north island still takes a 72 MW surplus.</p>
+      <figure>
+        <div class="fig-title">Figure 6. Scheduled import against the power step the island's machines take up at the split</div>
+        <div class="legend" id="step-legend"></div>
+        <div class="charts-3" id="step-charts"></div>
+        <figcaption>Each dot is one sweep run; positive values are deficits. The thin diagonal is "step = import", what the model assumes. Below the line, the island has less deficit or more surplus than the model expects.</figcaption>
+      </figure>
+      <p>Figure 7 shows why. The boundary lines also carry reactive power into the islands (part of it their own line charging). In savnw the north island receives 156–249 Mvar before the split; when the lines open it loses that support and its load-bus voltages drop by 0.08–0.12 pu at once. The simulated loads draw active power in proportion to the voltage, so the north island's load falls by about 72 MW and the south island's by about 160 MW. The voltage regulators then raise the voltages again over the next seconds, so part of the load comes back. The ACTIVSg500 zones exchange less reactive power over their boundaries and their voltages move by at most 0.03 pu; the large rest-of-system islands lose 20–90 MW of load, little compared with their size.</p>
+      <figure>
+        <div class="fig-title">Figure 7. Voltage and load step at the split against the reactive import before it</div>
+        <div class="legend" id="volt-legend"></div>
+        <div class="charts-2">
+          <div><div class="panel-title">Mean voltage step at the island's load buses (pu)</div><div class="chart" id="volt-chart"></div></div>
+          <div><div class="panel-title">Load step at the split (MW)</div><div class="chart" id="load-chart"></div></div>
+        </div>
+        <figcaption>All sweep runs, both islands of each sweep. The frequency constraint limits only the active import; the reactive import is whatever the dispatch leaves.</figcaption>
+      </figure>
+
+      <h3 id="sweeps"><span class="num">5.3</span>Calibration sweeps: the limits against the simulation</h3>
+      <p>Figure 8 plots, for one island of one sweep, each measured quantity against the scheduled import, next to what the SFR model predicts for the same import. A second model curve uses <var>D</var> = 0, as in the simulation. Where the blue dots and the orange line agree, the model is right; where the dots cross a dashed threshold inside the two vertical limit lines, the limit lets the island through a violation.</p>
+      <figure>
+        <div class="fig-head">
+          <div class="fig-title" id="sweep-title">—</div>
+          <div class="controls">
+            <select id="sweep-select" aria-label="Sweep"></select>
+            <div class="seg" id="sweep-island-seg" role="group" aria-label="Island"></div>
+          </div>
+        </div>
+        <div class="legend" id="sweep-legend"></div>
+        <div class="charts-3">
+          <div><div class="panel-title">RoCoF over 500 ms (Hz/s)</div><div class="chart" id="sweep-rocof"></div></div>
+          <div><div class="panel-title">Nadir for imports, zenith for exports (Hz)</div><div class="chart" id="sweep-extreme"></div></div>
+          <div><div class="panel-title">Settling frequency, 19–20 s (Hz)</div><div class="chart" id="sweep-settle"></div></div>
+        </div>
+        <figcaption>Figure 8. Dashed horizontal lines: the requirements. Thin vertical lines: the island's limit from frequency.jl, ±. Import: the scheduled import in ANDES's power flow. <span id="sweep-excluded"></span></figcaption>
+      </figure>
+      <p class="columns">Table columns: the island's limit from frequency.jl; then, for each requirement, the import (or export) at which ANDES crosses it, and that as a multiple of the matching limit (below 1: the limit allows a violation; above 1: it is conservative; "not reached" within the sweep); step/import, the fitted ratio of the machines' power step to the import; <var>K</var><sub>eff</sub> against <var>K</var> + <var>D</var>; the settling offset at zero import.</p>
+      <div class="table-wrap" id="sweep-table"></div>
+      <h4>What the sweeps show, island by island</h4>
+      <ul>
+        <li><b>MIDLANDS zone (hydro, gas and steam units).</b> RoCoF follows the model closely: the inertia is right. The nadir limit is accurate: 59.5 Hz is reached at 105 MW against a limit of 102 MW. The settling frequency is off: the governors deliver <var>K</var><sub>eff</sub> = 192 pu against <var>K</var> + <var>D</var> = 258 pu (partly the missing load damping, mostly governor behaviour), so the frequency settles more than 0.3 Hz off at 96 MW of import and 98 MW of export, inside the QSS limit of 129 MW. At 300 MW and more it settles more than 1 Hz off, as the same trend predicts (those runs are left out of the <var>K</var><sub>eff</sub> fit).</li>
+        <li><b>SPARTANB zone (hydro units only, explained step by step in 5.6).</b> RoCoF matches the model within a few percent at large imports, so the inertia is right. Everything after the first second is worse than modelled. 59.5 Hz is reached at 18 MW of import, against a nadir limit of 58 MW (0.32 times); 60.5 Hz at 33 MW of export; the settling band is left at 46 MW. The hydro governors' temporary droop makes their first seconds of response weak (section 1.7, HYGOV), exactly when the nadir happens; by 20 s they have delivered about two thirds of their steady-state gain (<var>K</var><sub>eff</sub> = 99 against 151 pu). From 150 MW of import the zone does not recover at all and settles near 51 Hz. A linear model cannot show that; which governor or turbine limit causes it was not investigated.</li>
+        <li><b>savnw north island.</b> The governor gain is right (<var>K</var><sub>eff</sub> = 194 against 207 pu: these are steam units, as the model assumes), but the split's own surplus (5.2) shifts everything upward: at zero import the island settles 0.10 Hz high. Imports are safer than modelled: 59.5 Hz at 99 MW against a limit of 77 MW, the settling band at 129 MW against 104 MW. Exports are less safe: 60.5 Hz at 34 MW of export, and RoCoF already exceeds 0.5 Hz/s at 7 MW of export, against a limit of 56.5 MW.</li>
+        <li><b>The large "rest of system" islands</b> (and the savnw south island on the import side) never reach a threshold within the sweep range. Only the south island's RoCoF crosses 0.5 Hz/s, at 195 MW of export, against a limit of 222 MW.</li>
+      </ul>
+
+      <h3 id="traces"><span class="num">5.4</span>Frequency traces</h3>
+      <p>The full COI frequency of any sweep run against the model's prediction for the same import.</p>
+      <figure>
+        <div class="fig-head">
+          <div class="fig-title">Figure 9. COI frequency after the split, simulation and model</div>
+          <div class="controls">
+            <select id="trace-sweep" aria-label="Sweep"></select>
+            <div class="seg" id="trace-island-seg" role="group" aria-label="Island"></div>
+            <select id="trace-import" aria-label="Scheduled import"></select>
+          </div>
+        </div>
+        <div class="legend" id="trace-legend"></div>
+        <div class="chart" id="trace-chart"></div>
+        <figcaption id="trace-caption">—</figcaption>
+      </figure>
+
+      <h3 id="passfail"><span class="num">5.5</span>Frequency security off and on, relays included</h3>
+      <p>Seven scenarios through the unchanged pipeline (<code>run_islanding</code>, then ANDES), each with frequency security off and on. An island counts as <b>secure</b> when its nadir is at least 59.5 Hz, its zenith at most 60.5 Hz, its RoCoF within 0.5 Hz/s and its settling frequency within 0.3 Hz, and no UFLS stage or generator relay acts.</p>
+      <div class="table-wrap">
+        <table class="text-table">
+          <thead><tr><th>Scenario</th><th>Frequency security off</th><th>Frequency security on</th></tr></thead>
+          <tbody>
+            <tr><td>savnw · north-south, north ×1.6<br><span class="mono">opf_shed</span></td><td>The north island imports 341 MW. Its frequency falls to 58.23 Hz and UFLS sheds 188 MW. The south island, losing an export of 348 MW, peaks at 60.55 Hz.</td><td>70 MW shed beforehand, import 56.5 MW (the limit). No UFLS, but the north island loses about 270 MW of load as its voltage drops (5.2): it overshoots to 60.89 Hz with a RoCoF of 1.38 Hz/s. Not secure.</td></tr>
+            <tr><td>savnw · top<br><span class="mono">opf</span></td><td>The island exports 417 MW. Its frequency passes 61.8 Hz after 0.62 s, the FRQTPAT relay trips unit 3011, and the island is left without generation (the simulation stops).</td><td>Export 50 MW. That needs unit 3011 at about 150 MW, below the 300 MW minimum of its governor model (TGOV1 VMIN = 0.3 of 1000 MVA). ANDES has to clamp the governor at initialization, the unit accelerates and trips at 61.8 Hz after 1.3 s.</td></tr>
+            <tr><td>savnw · top, 3005 at 400 MW<br><span class="mono">opf</span></td><td>Export 271 MW; 61.8 Hz after 1.24 s, unit 3011 trips, the island is lost.</td><td>Export 50 MW. Zenith 60.33 Hz, RoCoF 0.26 Hz/s, settles at 60.14 Hz. Secure.</td></tr>
+            <tr><td>savnw · left<br><span class="mono">opf_shed</span></td><td>Import 83 MW into an island whose only unit has no governor. UFLS sheds 33 MW, the frequency still reaches 57.8 Hz after 0.9 s and the unit trips.</td><td>82 MW shed beforehand, import 1 MW (the QSS limit). UFLS stage 1 sheds 5.7 MW after 1.2 s, which turns the small deficit into a surplus. Nothing holds the frequency (no governor, no load damping in the simulation): it climbs to 61.8 Hz and the unit trips after 13.4 s.</td></tr>
+            <tr><td>ACTIVSg500 · SPARTANB<br><span class="mono">opf_shed</span></td><td>Import 441 MW. UFLS sheds all it can (the three stages add up to 17 % of the load, 165 MW) and the zone collapses to 44.9 Hz.</td><td>389 MW shed beforehand, import 49 MW (the limit). The frequency still falls to 59.26 Hz and UFLS sheds 72 MW, then overshoots to 60.78 Hz. Not secure: the hydro response is too slow (5.3, 5.6).</td></tr>
+            <tr><td>ACTIVSg500 · MIDLANDS<br><span class="mono">opf_shed</span></td><td>Import 181 MW. Nadir 59.25 Hz, UFLS sheds 133 MW.</td><td>78 MW shed beforehand, import 102 MW (the limit). Nadir 59.52 Hz, no UFLS, but it settles at 59.68 Hz, 0.02 Hz outside the 0.3 Hz band (5.3). Not secure by that margin.</td></tr>
+            <tr><td>ACTIVSg500 · YORK<br><span class="mono">opf_shed</span></td><td>York exports 892 MW. Its frequency runs away to 65.1 Hz (ACTIVSg500 has no generator over-frequency relays) and the simulation stops after 7.9 s. The rest of the system loses that supply: UFLS sheds 321 MW there.</td><td>372 MW shed beforehand, all outside the zone, export 164 MW (the limit). Zenith 60.496 Hz, RoCoF 0.38 Hz/s. Secure, with both islands.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <figure>
+        <div class="fig-head">
+          <div class="fig-title">Figure 10. COI frequency with frequency security off and on</div>
+          <div class="controls"><div class="seg" id="pf-island-seg" role="group" aria-label="Island"></div></div>
+        </div>
+        <div class="legend" id="pf-legend"></div>
+        <div class="charts-3" id="pf-charts"></div>
+        <figcaption>Dashed lines at 59.5 and 60.5 Hz. A line that ends early is a run where an island lost its last unit or ran away and ANDES stopped. After a UFLS stage acts, the frequency recovers because load was removed.</figcaption>
+      </figure>
+      <p class="columns">Columns: preemptive shedding; island; scheduled import and limit; power step at the split; nadir, zenith, RoCoF, settling frequency; UFLS shedding; unit trips (and when); verdict, naming the requirements that fail.</p>
+      <div class="table-wrap" id="pf-table"></div>
+
+      <h3 id="hydro"><span class="num">5.6</span>The hydro-only zone SPARTANB, step by step</h3>
+      <p>This is the case behind finding F2. It shows how far a limit can be off when the model's governor is not the governor the units really have.</p>
+
+      <h4>What the constraint is meant to do here</h4>
+      <p>SPARTANB has 8 generating units, all hydro (water turbines), with about 608 MW of generation, and 1,043 MW of load. It normally imports power from the rest of the grid over its 18 boundary lines. When those lines open, the imported power disappears at once. The zone is then short of power by about the amount it was importing, and its frequency starts to fall. The constraint caps the import so that the fall stays acceptable.</p>
+      <p>It computes three caps and applies the smallest. For the sweep version of the zone (loads halved, section 5.1) they are 49 MW for the speed of the fall (RoCoF), 58 MW for the lowest frequency (the nadir) and 75 MW for the frequency it settles at. The zone as it is in the off/on run has 49, 62 and 78 MW. So the constraint lets this zone import up to <b>49 MW</b>. The 58 MW is the nadir cap on its own, which is the one the simulation contradicts most.</p>
+
+      <h4>What the model says and what the simulation shows</h4>
+      <p>The sweep fixes the import at a series of values and simulates each one. The table compares the lowest frequency the model predicts with the lowest frequency ANDES gives. The requirement is to stay at or above 59.5 Hz, where the first underfrequency relays start to cut load.</p>
+      <div class="table-wrap">
+        <table class="text-table">
+          <thead><tr><th>Import (MW)</th><th class="n">Lowest frequency, model (Hz)</th><th class="n">Lowest frequency, simulation (Hz)</th><th class="n">Time of lowest point, model / simulation (s)</th><th>Against 59.5 Hz</th></tr></thead>
+          <tbody>
+            <tr><td>0</td><td class="n">60.00</td><td class="n">59.86</td><td class="n">none / 2.18</td><td>Simulation dips even with no import</td></tr>
+            <tr><td>25</td><td class="n">59.78</td><td class="n">59.37</td><td class="n">2.25 / 2.83</td><td>Simulation fails</td></tr>
+            <tr><td>50</td><td class="n">59.57</td><td class="n">58.86</td><td class="n">2.25 / 2.98</td><td>Model passes, simulation fails by 0.64 Hz</td></tr>
+            <tr><td>75</td><td class="n">59.35</td><td class="n">58.36</td><td class="n">2.25 / 3.06</td><td>Both fail</td></tr>
+            <tr><td>100</td><td class="n">59.14</td><td class="n">57.87</td><td class="n">2.25 / 3.11</td><td>Both fail</td></tr>
+            <tr><td>150</td><td class="n">58.71</td><td class="n">50.99</td><td class="n">2.25 / 14.45</td><td>Simulation collapses to about 51 Hz and stays there (cause not investigated)</td></tr>
+            <tr class="group-start"><td><b>Import at which 59.5 Hz is reached</b></td><td class="n"><b>58 MW</b></td><td class="n"><b>18 MW</b></td><td class="n"></td><td>The simulation uses up the allowed drop at about a third of the model's import</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>In words. At 50 MW of import the model says the frequency bottoms out at 59.57 Hz, which is acceptable. The simulation says 58.86 Hz, 0.71 Hz lower, well past the point where relays cut load. Its lowest point also comes about 0.7 s later than the model's. The 0.5 Hz of room between 60 and 59.5 Hz is used up at 18 MW in the simulation and at 58 MW in the model.</p>
+
+      <h4>Why the model is too optimistic</h4>
+      <p>The ratio between the model's 58 MW and the simulation's 18 MW is 3.15. It splits into three effects, shown in the table. The load damping is described in sections <a href="#hkd">1.5</a> and <a href="#changes">6.4</a>; the other two are explained below the table. The 30.5 MW is read off the sweep, interpolating the machines' power step between the 0 and 25 MW runs.</p>
+      <div class="table-wrap">
+        <table class="text-table">
+          <thead><tr><th>Step</th><th class="n">MW</th><th class="n">Factor</th><th>Cause</th></tr></thead>
+          <tbody>
+            <tr><td>Model's nadir cap, as frequency.jl computes it</td><td class="n">57.9</td><td class="n"></td><td></td></tr>
+            <tr><td>The same cap with no load damping</td><td class="n">54.0</td><td class="n">1.07</td><td>The model assumes the load shrinks as the frequency falls; the simulated loads do not</td></tr>
+            <tr><td>Deficit the simulated machines really see when 59.5 Hz is reached</td><td class="n">30.5</td><td class="n">1.77</td><td>What is left once the other two are accounted for, which is the governors: the hydro governors respond more slowly than the model's steam governor</td></tr>
+            <tr><td>Scheduled import at which that happens</td><td class="n">18.4</td><td class="n">1.66</td><td>Opening the lines raises the zone's voltage and its load, which adds about 12 MW of deficit that is not part of the import</td></tr>
+            <tr class="group-start"><td><b>Total</b></td><td class="n"></td><td class="n"><b>3.15</b></td><td></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h4>The governors: slow on purpose</h4>
+      <p>A governor reacts to a frequency drop by letting more steam or water into the turbine. How strongly it reacts is set by its <b>droop</b>, and a smaller droop means a stronger reaction. A hydro governor has two. The permanent droop <var>R</var> (5 % for most units here) applies once everything has settled. On top of it sits a temporary droop <var>r</var> that applies at first and fades away over the reset time <var>T</var><sub>r</sub>. The reason is the water. A long column of water cannot be sped up quickly, so if the gate is opened fast the turbine's power first dips and the control becomes unstable. The temporary droop makes the governor open the gate gently at first.</p>
+      <p>In SPARTANB the three large units (236 MVA each) carry 97 % of the zone's governor response. Their temporary droop is 0.11, 0.47 and 0.29, so right after the split they act with a droop of 0.16, 0.52 and 0.34, which is 3, 10 and 7 times weaker than their permanent 0.05. The temporary droop fades with reset times of 1.5, 1.7 and 4.4 s, which overlaps with the 2 to 3 s in which the nadir is decided. On top of that, the water starting time of 0.3 to 0.8 s makes each unit's power dip briefly before it rises.</p>
+      <p>The model gives every unit a steam governor instead. Of its full response, 30 % acts at once and the rest within about 7 s. The first three rows of the table are hand estimates from the .dyr parameters (the sum over the zone's units of MVA/100 divided by the droop), not simulation outputs, and the hydro value ignores the gate servo delay, so the true early response is somewhat smaller still. The last row is measured.</p>
+      <div class="table-wrap">
+        <table class="text-table">
+          <thead><tr><th></th><th class="n">Governor response (pu per pu of frequency drop)</th><th class="n">MW per Hz of drop</th></tr></thead>
+          <tbody>
+            <tr><td>Full response once settled (the model's <var>K</var>)</td><td class="n">145.5</td><td class="n">243</td></tr>
+            <tr><td>Model, right after the split (30 % of <var>K</var>)</td><td class="n">43.7</td><td class="n">73</td></tr>
+            <tr><td>Hydro governors, right after the split (at most)</td><td class="n">27.3</td><td class="n">45</td></tr>
+            <tr><td>Hydro governors, delivered by 20 s in the simulation (<var>K</var><sub>eff</sub>)</td><td class="n">98.7</td><td class="n">165</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Right after the split the hydro governors can deliver at most 27 pu against the model's 44 pu. How much of that gap is left at the moment of the nadir was not measured separately, but the simulation shows that the shortfall lasts: after 20 s the zone has delivered only two thirds of its full response (99 against 151 pu, counting the model's <var>K</var> + <var>D</var>). The inertia is right (the RoCoF agrees with the model at larger imports, section 5.3), and the load damping and the voltage effect are accounted for in the table above, so the governor response is what is left. That is the factor 1.77. It was found by elimination; the simulation was not rerun with a different governor model to confirm it.</p>
+
+      <h4>The voltage effect</h4>
+      <p>This is the effect of section 5.2, here with the opposite sign to savnw. When the 18 lines open, the voltage at the zone's load buses rises by about 0.03 pu. The simulated loads draw power in proportion to voltage, so the load rises by 14 MW. Even at zero import the machines therefore have to make up a 13 MW deficit in the first instant. At the 18 MW import where 59.5 Hz is reached, the machines see about 30 MW, not 18 MW. The model assumes they see exactly the import. That is the factor 1.66.</p>
+
+      <h4>What happens with the constraint on</h4>
+      <p>This is the off/on run of section 5.5, with the zone's real loads. To bring the import down to its 49.4 MW limit, the optimization first sheds 389 MW of the zone's load, leaving 654 MW. The model predicts a lowest frequency of 59.60 Hz for this import (59.54 Hz without load damping), so no relay should act. The simulation does this.</p>
+      <div class="table-wrap">
+        <table class="text-table">
+          <thead><tr><th>Time after the split</th><th>What happens</th></tr></thead>
+          <tbody>
+            <tr><td>0 s</td><td>The lines open. The machines take a 57.8 MW deficit, 8 MW more than the import because of the voltage effect. The speed of the fall over the first 0.5 s is 0.46 Hz/s, inside the 0.5 Hz/s limit, so the RoCoF cap does its job.</td></tr>
+            <tr><td>about 1.0 s</td><td>The frequency drops below 59.5 Hz. The relays wait 0.3 s before acting.</td></tr>
+            <tr><td>1.29 s</td><td>Underfrequency stage 1 acts: 30 MW (5 % of the load) shed across 34 loads. The frequency keeps falling.</td></tr>
+            <tr><td>1.79 s</td><td>Lowest point, 59.26 Hz, 0.34 Hz below the model's 59.60 Hz. Stage 2 (59.3 Hz) acts: 42 MW (7 %) shed.</td></tr>
+            <tr><td>5.2 s</td><td>The frequency has overshot to 60.78 Hz. The relays removed 72 MW against a deficit of 58 MW, and the governors had raised their output by then, so the zone is in surplus.</td></tr>
+            <tr><td>20 s</td><td>Settles at 60.17 Hz.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>The constraint still helps a great deal. Without it the zone imports 441 MW and collapses to 44.9 Hz even with 165 MW of load shed. With it the zone survives and 72 MW is shed. But the constraint's purpose was that no relay acts at all, and that is not achieved. These numbers are for a different operating point from the sweep (the zone carries a different load), so they should not be read against the table above digit by digit.</p>
+      <p>The fix is in sections <a href="#changes">6.2</a> (give the model each island's own governor, which for hydro units means the temporary droop and the reset time) and <a href="#changes">6.3</a> (account for the voltage change at the split).</p>
+    </section>
+
+    <!-- ==================== 6. Changes ==================== -->
+    <section id="changes">
+      <h2><span class="num">6</span>What to change</h2>
+      <p>In order of importance. 6.1 is a bug fix; 6.2 to 6.5 change the model behind the limits; 6.6 uses the sweep results directly.</p>
+
+      <h3><span class="num">6.1</span>Skip out-of-service lines when building the island's boundary</h3>
+      <p><code>calc_island_boundary_arcs</code> lists every target line with one end in the island, including lines with <code>br_status = 0</code>. Such a line carries no flow, and PowerModels leaves it out of the model, so <code>constraint_island_frequency_security</code> fails when it looks up its flow variable, and <code>print_frequency_security</code> fails the same way on the solution. A guard that skips lines out of service in <code>calc_island_boundary_arcs</code> fixes both. The islands themselves need no change: they are computed on the network with the target lines opened, where an already-open line makes no difference.</p>
+
+      <h3><span class="num">6.2</span>Give the model each island's own governor dynamics</h3>
+      <p>frequency.jl gives every island the same governor: a reheat steam turbine with <var>F</var><sub>H</sub> = 0.3 and <var>T</var><sub>R</sub> = 7 s (1.4). The .dyr already describes how each unit's governor actually behaves, and the tests show where the difference matters:</p>
+      <ul>
+        <li><b>Steam units (TGOV1).</b> TGOV1's T2 and T3 parameters are the reheat model itself: the turbine's power first jumps by T2/T3 of its final change and then rises with time constant T3, so <var>F</var><sub>H</sub> = T2/T3 and <var>T</var><sub>R</sub> = T3. For the TGOV1 units here that is <var>F</var><sub>H</sub> = 0.30–0.33 and <var>T</var><sub>R</sub> = 6.3–10 s, close to the constants, except savnw units 101 and 102 (T2 = T3 = 1 s: no reheat delay, faster than modelled). The savnw sweep confirms the model fits steam units (<var>K</var><sub>eff</sub> 194 against 207 pu).</li>
+        <li><b>Hydro units (HYGOV).</b> They respond in a different way, which the reheat model cannot represent. Their temporary droop r (0.07–0.97 here, against a permanent droop <var>R</var> = 0.04–0.07) makes their first response 2 to 25 times weaker than their steady-state one, recovering over the reset time Tr (0.6–9.9 s); and the water starting time Tw (0.13–1.25 s) makes their power dip briefly before it rises. The nadir happens in those first 2–3 seconds, which is why the hydro-only SPARTANB zone reaches 59.5 Hz at a third of its nadir limit.</li>
+        <li><b>Gas units (GAST)</b> have fuel-valve and turbine time constants of 0.1–1 s, so they respond much faster than a reheat steam turbine. In MIDLANDS, where 4 of the 11 online units are gas, the nadir limit comes out accurate.</li>
+      </ul>
+      <p>Two ways to use this while keeping the offline search and the linear constraint. (a) Split the governor term into one branch per governor type, each with its own parameters from the .dyr and its own share of <var>K</var>; the island is still one linear model, so the bisection for the nadir limit and the QSS formula stay as they are. (b) Bisect on a slightly larger reduced simulation, one equivalent machine per governor type. Either way, the sweeps here (5.3) are the check: the model should reproduce the SPARTANB and MIDLANDS curves.</p>
+
+      <h3><span class="num">6.3</span>Account for the voltage change at the split</h3>
+      <p>The model assumes the island loses exactly its active import. In savnw the island also loses the reactive power the boundary lines supplied, its voltages drop by about 0.1 pu, and its load, which depends on voltage, falls by 70–160 MW (5.2). This makes deficits smaller and surpluses larger than modelled, so the symmetric limit is conservative for imports and unsafe for exports. Two options:</p>
+      <ul>
+        <li>Add the expected load change to the scheduled import before applying the limit: with constant-current loads, Δ<var>P</var><sub>load</sub> ≈ Σ <var>P</var><sub>load</sub> × Δ<var>V</var>, where Δ<var>V</var> is each load bus's voltage change at the split. <code>predict_voltage_change_from_opened_lines</code> in <code>islanding_core.jl</code> already predicts Δ<var>V</var> from the network Jacobian. That makes the effective imbalance, and the limit, depend on the direction of the import.</li>
+        <li>Or limit the reactive import over the boundary as well, so the islands keep their voltage when it opens. This also relates to the voltage part of the proposal.</li>
+      </ul>
+
+      <h3><span class="num">6.4</span>Use the load damping the simulated loads actually have</h3>
+      <p>frequency.jl assumes the load falls 1 % per 1 % of frequency (<code>LOAD_DAMPING</code> = 1.0). The loads in dynamic.py (constant current and admittance) do not depend on frequency, so <code>LOAD_DAMPING</code> = 0 matches the simulation; for islands with governors it changes the limits by a few percent (the green dashed curves in Figure 8). For an island without any governor (<var>K</var> = 0) the QSS limit then becomes zero and the nadir limit tiny: such an island cannot be made frequency-secure, as the savnw left island shows (5.5). It should be reported as such rather than given a 1 MW limit.</p>
+
+      <h3><span class="num">6.5</span>Keep the dispatch inside the governor limits</h3>
+      <p>The OPF uses each unit's pmin and pmax from the RAW file; the governor models have their own limits (TGOV1 and GAST VMIN and VMAX, HYGOV GMIN and GMAX, in pu of MBASE). In savnw every pmin is 0 while TGOV1 VMIN is 0.3 of MBASE, so the OPF can dispatch a unit to an output its governor model cannot hold (5.5, top island). Raising pmin to VMIN × MBASE before the solve avoids that. The same governor limits also cap the upward response: a unit dispatched near VMAX × MBASE contributes little to <var>K</var> in reality, which the model could account for by counting only units with headroom.</p>
+
+      <h3><span class="num">6.6</span>Use the sweeps as the proposal's outer loop</h3>
+      <p>The proposal describes an outer loop: simulate the solution, tighten the limit where the simulation is worse than expected, solve again. The sweeps give the tightening directly: the ratios in the table of 5.3. For the islands here: the nadir limit of the hydro-only zone by 0.32, the QSS limit of MIDLANDS by 0.74, savnw north's export limit by 0.44. Applying those factors to <var>L</var> and solving again would make those islands secure under the same simulation; changes 6.2–6.4 would make the factors close to 1 in the first place.</p>
+    </section>
+
+    <!-- ==================== 7. Reproduce ==================== -->
+    <section id="reproduce">
+      <h2><span class="num">7</span>Files and reproduction</h2>
+      <p>From the repository root, in order:</p>
+      <div class="cmd">julia --project=. runners/frequency_tests/1_offline.jl     # test 1, about 2.5 min
+julia --project=. runners/frequency_tests/2_model.jl       # test 2, about 4 min
+julia --project=. runners/frequency_tests/3_dynamic.jl     # test 3, about 1.5 h of ANDES runs ("sweeps" or "passfail" for one part)
+python runners/frequency_tests/build_report.py             # this page</div>
+      <div class="table-wrap">
+        <table class="text-table">
+          <thead><tr><th>File</th><th>What it does</th></tr></thead>
+          <tbody>
+            <tr><td>common.jl</td><td>Packages and runner includes, the scenarios of section 2, solve and export helpers, a version of the SFR model that returns the whole trajectory</td></tr>
+            <tr><td>1_offline.jl</td><td>Test 1 (section 3)</td></tr>
+            <tr><td>andes_dyr_check.py</td><td>ANDES's reading of the .dyr for 3.1</td></tr>
+            <tr><td>2_model.jl</td><td>Test 2 (section 4)</td></tr>
+            <tr><td>3_dynamic.jl</td><td>Test 3: sweeps and off/on runs (section 5)</td></tr>
+            <tr><td>analyze_andes.py</td><td>The measurements of 5.1 for one ANDES run</td></tr>
+            <tr><td>build_report.py, report_template.html, d3.v7.8.5.min.js</td><td>This page; the chart library is embedded so the page works offline</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>All in <code>runners/frequency_tests/</code>. Results in <code>results/frequency_tests/</code>: <code>offline/</code>, <code>model/</code>, <code>dynamic/sweep_*/</code> and <code>dynamic/passfail/</code>, plus <code>report_data.json</code> with everything this page shows. Each ANDES run folder keeps the exported case, the lines tripped, the channels (<code>output_andes_*.csv.gz</code>), the console output and the measurements (<code>metrics.json</code>); the off/on runs also keep dynamic.py's own HTML report.</p>
+      <p>Not changed: <code>frequency.jl</code>, <code>src/</code>, <code>islanding_core.jl</code> and the ANDES scripts. One fix in <code>batch_islanding.jl</code> (F8).</p>
+    </section>
+  </main>
+</div>
+
+<script>/*D3_LIBRARY*/</script>
+<script id="report-data" type="application/json">/*REPORT_DATA*/null</script>
+<script>
+"use strict";
+const D = JSON.parse(document.getElementById("report-data").textContent);
+const T = D.thresholds;
+const NOM = T.nominal;
+
+// ==================== Helpers ====================
+const $ = id => document.getElementById(id);
+function h(tag, attrs = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (v === null || v === undefined || v === false) continue;
+    if (k === "class") node.className = v;
+    else node.setAttribute(k, v);
+  }
+  for (const c of children.flat()) {
+    if (c === null || c === undefined) continue;
+    node.append(c instanceof Node ? c : document.createTextNode(String(c)));
+  }
+  return node;
+}
+function fmt(x, digits = 1) {
+  if (x === null || x === undefined || Number.isNaN(x)) return "—";
+  return Number(x).toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+}
+const signed = (x, d = 1) => (x === null || x === undefined) ? "—" : (x > 0 ? "+" : x < 0 ? "−" : "") + fmt(Math.abs(x), d);
+const ICONS = {
+  good: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5l3 3 7-7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  bad: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>',
+  warn: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5l6 11H2z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M8 7v3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="8" cy="12" r="1" fill="currentColor"/></svg>',
+  info: '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8 7.2v4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="8" cy="4.8" r="1" fill="currentColor"/></svg>',
+};
+function chip(kind, text) {
+  const c = h("span", { class: `chip ${kind}` });
+  c.innerHTML = ICONS[kind];
+  c.append(document.createTextNode(text));
+  return c;
+}
+// icons for the chips written in the HTML
+document.querySelectorAll(".chip[data-icon]").forEach(c => c.insertAdjacentHTML("afterbegin", ICONS[c.dataset.icon]));
+
+const LIMIT_NAMES = { rocof: "RoCoF", qss: "QSS", nadir: "nadir" };
+const SCENARIO_NAMES = {
+  savnw_top: "savnw · top", savnw_top_heavy: "savnw · top, 3005 at 400 MW", savnw_north: "savnw · north-south",
+  savnw_north_heavy: "savnw · north-south, north ×1.6", savnw_bottom: "savnw · bottom", savnw_left: "savnw · left",
+  savnw_gen_only: "savnw · gen 3018 alone", savnw_dead_bus: "savnw · bus 202 alone", savnw_north_line_out: "savnw · north-south, 152-3004 out",
+  activsg_spartanb: "ACTIVSg500 · SPARTANB", activsg_midlands: "ACTIVSg500 · MIDLANDS", activsg_york: "ACTIVSg500 · YORK",
+  activsg_columbia: "ACTIVSg500 · COLUMBIA", activsg_greenvil: "ACTIVSg500 · GREENVIL",
+  activsg_midlands_light: "ACTIVSg500 · MIDLANDS, loads ×0.7", activsg_spartanb_light: "ACTIVSg500 · SPARTANB, loads ×0.5",
+};
+const scenarioName = s => SCENARIO_NAMES[s] || s;
+function islandName(scenario, k) {
+  if (scenario.startsWith("activsg")) return k === 1 ? "zone" : "rest of system";
+  if (scenario.startsWith("savnw_north")) return k === 1 ? "north" : "south";
+  return k === 1 ? "island 1 (smaller)" : "island 2";
+}
+function table(host, columns, rows, opts = {}) {
+  const t = h("table");
+  t.append(h("thead", {}, h("tr", {}, columns.map(c => h("th", { class: c.n ? "n" : null, title: c.title || null }, c.label)))));
+  const body = h("tbody");
+  rows.forEach((r, i) => {
+    const tr = h("tr", { class: opts.groupStart && opts.groupStart(r, i) ? "group-start" : null });
+    for (const c of columns) tr.append(h("td", { class: [c.n ? "n" : "", c.wrap ? "wrap" : ""].join(" ").trim() || null }, c.value(r, i)));
+    body.append(tr);
+  });
+  t.append(body);
+  host.replaceChildren(t);
+}
+function seg(host, options, current, onChange) {
+  host.replaceChildren();
+  options.forEach(o => {
+    const b = h("button", { type: "button", "aria-pressed": String(o.value === current) }, o.label);
+    b.addEventListener("click", () => {
+      host.querySelectorAll("button").forEach(x => x.setAttribute("aria-pressed", "false"));
+      b.setAttribute("aria-pressed", "true");
+      onChange(o.value);
+    });
+    host.append(b);
+  });
+}
+function legend(host, items) {
+  host.replaceChildren(...items.map(it => {
+    const s = h("span");
+    const sv = d3.create("svg").attr("viewBox", "0 0 22 10");
+    if (it.kind === "dot") sv.append("circle").attr("cx", 11).attr("cy", 5).attr("r", 4).style("fill", it.color);
+    else if (it.kind === "rect") sv.append("rect").attr("x", 3).attr("y", 1).attr("width", 16).attr("height", 8).attr("rx", 2).style("fill", it.color);
+    else if (it.kind === "hollow") sv.append("circle").attr("cx", 11).attr("cy", 5).attr("r", 3.5).style("fill", "var(--surface)").style("stroke", it.color).style("stroke-width", 2);
+    else sv.append("line").attr("x1", 1).attr("x2", 21).attr("y1", 5).attr("y2", 5).style("stroke", it.color).style("stroke-width", it.width || 2).style("stroke-dasharray", it.dash || null);
+    s.append(sv.node(), document.createTextNode(it.label));
+    return s;
+  }));
+}
+
+// ==================== Chart ====================
+const redraws = [];
+function onRedraw(fn) { redraws.push(fn); fn(); }
+let resizeTimer = null;
+window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => redraws.forEach(fn => fn()), 150); });
+
+/*
+ * Line / dot chart. cfg: {height, x: {label, domain, format, scale, includeRefs}, y: {label, domain, format},
+ * series: [{label, color, points: [{x, y}], line, dots, dash, width, noTip}], refs: [{axis, value, label}],
+ * tipX: x => header text, tipValue: (series, point) => text}. Returns the scales and the svg.
+ */
+function lineChart(host, cfg) {
+  host.replaceChildren();
+  const W = Math.max(260, host.clientWidth || 600);
+  const H = cfg.height || 240;
+  const m = { t: 10, r: 14, b: 40, l: cfg.marginLeft || 52 };
+  const points = cfg.series.flatMap(s => s.points).filter(p => p.y !== null && p.y !== undefined && isFinite(p.y));
+  const refY = (cfg.refs || []).filter(r => r.axis === "y").map(r => r.value);
+  const refX = (cfg.refs || []).filter(r => r.axis === "x").map(r => r.value);
+  const xDomain = cfg.x.domain || d3.extent([...points.map(p => p.x), ...(cfg.x.includeRefs ? refX : [])]);
+  let yDomain = cfg.y.domain || d3.extent([...points.map(p => p.y), ...refY]);
+  if (!cfg.y.domain) { const pad = (yDomain[1] - yDomain[0]) * 0.06 || 0.1; yDomain = [yDomain[0] - pad, yDomain[1] + pad]; }
+  const x = (cfg.x.scale === "log" ? d3.scaleLog() : d3.scaleLinear()).domain(xDomain).range([m.l, W - m.r]);
+  const y = d3.scaleLinear().domain(yDomain).range([H - m.b, m.t]);
+  if (!cfg.y.domain) y.nice(5);
+  const svg = d3.select(host).append("svg").attr("width", "100%").attr("viewBox", `0 0 ${W} ${H}`).attr("role", "img").attr("aria-label", cfg.aria || "");
+
+  const yTicks = y.ticks(5);
+  svg.append("g").selectAll("line").data(yTicks).join("line").attr("class", "grid-line").attr("x1", m.l).attr("x2", W - m.r).attr("y1", d => y(d)).attr("y2", d => y(d));
+  svg.append("g").selectAll("text").data(yTicks).join("text").attr("class", "tick-label").attr("x", m.l - 6).attr("y", d => y(d) + 4).attr("text-anchor", "end").text(cfg.y.format || (d => d));
+  const xTicks = cfg.x.scale === "log" ? x.ticks(5).filter(t => [1, 2, 5].includes(+String(t.toPrecision(1))[0])) : x.ticks(Math.max(3, Math.min(7, Math.floor(W / 90))));
+  svg.append("line").attr("class", "base-line").attr("x1", m.l).attr("x2", W - m.r).attr("y1", H - m.b).attr("y2", H - m.b);
+  svg.append("g").selectAll("text").data(xTicks).join("text").attr("class", "tick-label").attr("x", d => x(d)).attr("y", H - m.b + 16).attr("text-anchor", "middle").text(cfg.x.format || (d => d));
+  if (cfg.x.label) svg.append("text").attr("class", "axis-title").attr("x", (m.l + W - m.r) / 2).attr("y", H - 6).attr("text-anchor", "middle").text(cfg.x.label);
+  if (cfg.y.label) svg.append("text").attr("class", "axis-title").attr("transform", `translate(12,${(m.t + H - m.b) / 2}) rotate(-90)`).attr("text-anchor", "middle").text(cfg.y.label);
+
+  for (const r of cfg.refs || []) {
+    if (r.axis === "y") {
+      if (r.value < y.domain()[0] || r.value > y.domain()[1]) continue;
+      svg.append("line").attr("class", "ref-line").attr("x1", m.l).attr("x2", W - m.r).attr("y1", y(r.value)).attr("y2", y(r.value));
+      if (r.label) svg.append("text").attr("class", "ref-label").attr("x", W - m.r - 4).attr("y", y(r.value) - 4).attr("text-anchor", "end").text(r.label);
+    } else {
+      if (r.value < xDomain[0] || r.value > xDomain[1]) continue;
+      svg.append("line").attr("class", "limit-line").attr("y1", m.t).attr("y2", H - m.b).attr("x1", x(r.value)).attr("x2", x(r.value));
+      if (r.label) svg.append("text").attr("class", "ref-label").attr("x", x(r.value) + 4).attr("y", m.t + 10).text(r.label);
+    }
+  }
+  const clipId = "clip" + Math.random().toString(36).slice(2);
+  svg.append("clipPath").attr("id", clipId).append("rect").attr("x", m.l).attr("y", m.t - 4).attr("width", W - m.l - m.r).attr("height", H - m.t - m.b + 8);
+  const plot = svg.append("g").attr("clip-path", `url(#${clipId})`);
+  for (const s of cfg.series) {
+    const pts = s.points.filter(p => p.y !== null && p.y !== undefined && isFinite(p.y));
+    if (s.line !== false) {
+      plot.append("path").datum(pts).attr("d", d3.line().x(p => x(p.x)).y(p => y(p.y)))
+        .style("fill", "none").style("stroke", s.color).style("stroke-width", s.width || 2).style("stroke-linejoin", "round").style("stroke-linecap", "round").style("stroke-dasharray", s.dash || null);
+    }
+    if (s.dots) {
+      plot.append("g").selectAll("circle").data(pts).join("circle").attr("cx", p => x(p.x)).attr("cy", p => y(p.y)).attr("r", s.r || 4.5)
+        .style("fill", s.color).style("stroke", "var(--surface)").style("stroke-width", 2);
+    }
+  }
+
+  // hover: crosshair at the nearest x, every series' nearest point listed
+  const tip = h("div", { class: "tooltip", hidden: "" });
+  host.append(tip);
+  const cross = svg.append("line").attr("class", "crosshair").attr("y1", m.t).attr("y2", H - m.b).style("display", "none");
+  const marks = svg.append("g").style("pointer-events", "none");
+  const xs = [...new Set(points.map(p => p.x))].sort((a, b) => a - b);
+  svg.append("rect").attr("x", m.l).attr("y", m.t).attr("width", W - m.l - m.r).attr("height", H - m.t - m.b).style("fill", "transparent")
+    .on("pointermove", ev => {
+      const [px] = d3.pointer(ev);
+      const x0 = x.invert(px);
+      const near = xs[d3.minIndex(xs, v => Math.abs(v - x0))];
+      cross.style("display", null).attr("x1", x(near)).attr("x2", x(near));
+      marks.selectAll("*").remove();
+      tip.replaceChildren(h("div", { class: "tt-head" }, cfg.tipX ? cfg.tipX(near) : fmt(near, 2)));
+      for (const s of cfg.series) {
+        if (s.noTip) continue;
+        const pts = s.points.filter(p => p.y !== null && isFinite(p.y));
+        if (!pts.length) continue;
+        const p = pts[d3.minIndex(pts, q => Math.abs(q.x - near))];
+        if (Math.abs(x(p.x) - x(near)) > 24) continue;
+        marks.append("circle").attr("cx", x(p.x)).attr("cy", y(p.y)).attr("r", 4).style("fill", s.color).style("stroke", "var(--surface)").style("stroke-width", 2);
+        const key = h("span", { class: "key" }); key.style.background = s.color;
+        tip.append(h("div", { class: "tt-row" }, key, h("b", {}, cfg.tipValue ? cfg.tipValue(s, p) : fmt(p.y, 3)), h("span", {}, s.label)));
+      }
+      tip.hidden = false;
+      tip.style.left = Math.min(Math.max(0, (x(near) / W) * host.clientWidth + 12), host.clientWidth - tip.offsetWidth) + "px";
+      tip.style.top = "6px";
+    })
+    .on("pointerleave", () => { cross.style("display", "none"); marks.selectAll("*").remove(); tip.hidden = true; });
+  return { x, y, svg };
+}
+
+$("generated").textContent = D.generated;
+
+// ==================== Figure 1: anatomy of the response ====================
+onRedraw(() => {
+  const row = D.offline.nadir.find(r => r.scenario === "savnw_north" && r.island === 1);
+  const island = D.offline.islands.find(r => r.scenario === "savnw_north" && r.island === 1);
+  if (!row || !island) return;
+  const deficit = row.nadir_limit_mw / 100;                               // pu
+  const rocof = -NOM * deficit / (2 * island.H);                          // Hz/s at t = 0
+  const settle = row.f_euler[row.f_euler.length - 1];
+  const nadirIndex = d3.minIndex(row.f_euler);
+  const chart = lineChart($("anatomy-chart"), {
+    height: 300,
+    x: { label: "time after the boundary opens (s)", domain: [0, 20] },
+    y: { label: "frequency (Hz)", domain: [59.35, 60.1], format: d => d.toFixed(1) },
+    series: [
+      { label: "frequency", color: "var(--series-1)", points: row.t.map((t, i) => ({ x: t, y: row.f_euler[i] })) },
+      { label: "initial slope", color: "var(--series-2)", width: 1.5, noTip: true, points: [{ x: 0, y: NOM }, { x: 0.55, y: NOM + 0.55 * rocof }] },
+    ],
+    refs: [{ axis: "y", value: T.nadir, label: "59.5 Hz: first UFLS stage" }, { axis: "y", value: settle, label: "" }],
+    tipX: t => `t = ${fmt(t, 2)} s`,
+    tipValue: (s, p) => `${fmt(p.y, 3)} Hz`,
+  });
+  const { x, y, svg } = chart;
+  svg.append("text").attr("class", "annotation").attr("x", x(0.7)).attr("y", y(NOM + 0.55 * rocof) + 4).text(`RoCoF ${signed(rocof, 2)} Hz/s`);
+  svg.append("text").attr("class", "annotation").attr("x", x(row.t[nadirIndex]) + 10).attr("y", y(row.f_euler[nadirIndex]) + 18)
+    .text(`nadir ${fmt(row.f_euler[nadirIndex], 2)} Hz at ${fmt(row.t[nadirIndex], 1)} s`);
+  svg.append("text").attr("class", "annotation").attr("x", x(12)).attr("y", y(settle) - 8).text(`quasi-steady state ${fmt(settle, 2)} Hz`);
+});
+
+// ==================== Figure 2: thresholds ====================
+onRedraw(() => {
+  const host = $("scale");
+  host.replaceChildren();
+  const W = Math.max(280, host.clientWidth), H = 86;
+  const x = d3.scaleLinear().domain([57.5, 62.2]).range([16, W - 16]);
+  const svg = d3.select(host).append("svg").attr("width", "100%").attr("viewBox", `0 0 ${W} ${H}`).attr("role", "img").attr("aria-label", "Frequency thresholds from 57.8 to 61.8 Hz");
+  const ticks = [];
+  for (let f = 57.5; f <= 62.01; f += 0.5) ticks.push(+f.toFixed(1));
+  svg.append("rect").attr("x", x(59.5)).attr("width", x(60.5) - x(59.5)).attr("y", 30).attr("height", 14).attr("rx", 3).style("fill", "var(--band)");
+  svg.append("rect").attr("x", x(59.7)).attr("width", x(60.3) - x(59.7)).attr("y", 30).attr("height", 14).attr("rx", 3).style("fill", "var(--band)");
+  svg.append("line").attr("class", "base-line").attr("x1", x(57.5)).attr("x2", x(62.2)).attr("y1", 44).attr("y2", 44);
+  svg.append("g").selectAll("text").data(ticks).join("text").attr("class", "tick-label").attr("x", d => x(d)).attr("y", 60).attr("text-anchor", "middle").text(d => d % 1 === 0 ? d.toFixed(0) : d.toFixed(1));
+  const marks = [
+    { f: 57.8, text: "generator trip", up: true }, { f: 59.1, text: "UFLS 3", up: false }, { f: 59.3, text: "UFLS 2", up: true },
+    { f: 59.5, text: "UFLS 1 · nadir", up: false }, { f: 59.7, text: "QSS", up: true }, { f: 60.0, text: "60 Hz", up: false },
+    { f: 60.3, text: "QSS", up: true }, { f: 60.5, text: "zenith · trip after 10 s", up: false }, { f: 61.8, text: "generator trip", up: true },
+  ];
+  const narrow = W < 560;
+  for (const mk of marks) {
+    svg.append("line").attr("x1", x(mk.f)).attr("x2", x(mk.f)).attr("y1", 26).attr("y2", 48).style("stroke", mk.f === 60 ? "var(--ink)" : "var(--ink-2)").style("stroke-width", mk.f === 60 ? 2 : 1);
+    if (narrow && !["UFLS 1 · nadir", "zenith · trip after 10 s", "60 Hz"].includes(mk.text)) continue;
+    svg.append("text").attr("class", "ref-label").attr("x", x(mk.f)).attr("y", mk.up ? 20 : 78).attr("text-anchor", "middle").text(narrow ? mk.text.split(" ·")[0] : mk.text);
+  }
+});
+
+// ==================== 3.1 Machine data ====================
+(function machines() {
+  const cases = ["savnw", "ACTIVSg500"];
+  const rows = [];
+  for (const c of cases) {
+    const units = D.offline.dyr_check[c].units;
+    const noGov = units.filter(u => u.R_julia === null).length;
+    $("machine-stats").append(h("span", {}, h("b", {}, `${units.length - D.offline.dyr_check[c].mismatches}/${units.length}`), `${c} units agree`, noGov ? ` (${noGov} without governor)` : ""));
+    units.forEach(u => rows.push({ case: c, ...u }));
+  }
+  table($("machine-table"), [
+    { label: "Case", value: r => r.case },
+    { label: "Bus", n: true, value: r => r.bus },
+    { label: "ID", value: r => r.id },
+    { label: "MBASE (MVA)", n: true, value: r => fmt(r.mbase_julia, 1) },
+    { label: "H (s) Julia", n: true, value: r => fmt(r.H_julia, 3) },
+    { label: "H ANDES", n: true, value: r => fmt(r.H_andes, 3) },
+    { label: "R Julia", n: true, value: r => r.R_julia === null ? "none" : fmt(r.R_julia, 3) },
+    { label: "R ANDES", n: true, value: r => r.R_andes === null ? "none" : fmt(r.R_andes, 3) },
+    { label: "Governor", value: r => r.governor_andes || "none" },
+    { label: "", value: r => (r.H_match && r.R_match && r.mbase_match) ? chip("good", "same") : chip("bad", "differs") },
+  ], rows, { groupStart: (r, i) => i > 0 && rows[i - 1].case !== r.case });
+})();
+
+// ==================== 3.2 Islands ====================
+(function islands() {
+  const rows = D.offline.islands;
+  const checksPass = rows.filter(r => Object.values(r.checks).every(Boolean)).length;
+  $("island-stats").append(
+    h("span", {}, h("b", {}, new Set(rows.map(r => r.scenario)).size), "scenarios"),
+    h("span", {}, h("b", {}, rows.length), "islands with limits"),
+    h("span", {}, h("b", {}, `${checksPass}/${rows.length}`), "pass all 8 checks"),
+  );
+  table($("island-table"), [
+    { label: "Scenario", wrap: true, value: r => r.island === 1 ? scenarioName(r.scenario) : "" },
+    { label: "Island", value: r => h("span", {}, islandName(r.scenario, r.island), h("span", { class: "sub" }, `${r.n_buses} buses`)) },
+    { label: "Load MW", n: true, value: r => fmt(r.balance.load_mw, 0) },
+    { label: "Units", n: true, value: r => `${r.gens} (${r.governors})` },
+    { label: "H (s)", n: true, value: r => fmt(r.H, 1) },
+    { label: "K (pu)", n: true, value: r => fmt(r.K, 1) },
+    { label: "D (pu)", n: true, value: r => fmt(r.D, 1) },
+    { label: "RoCoF MW", n: true, value: r => fmt(r.limits_mw.rocof, 1) },
+    { label: "QSS MW", n: true, value: r => fmt(r.limits_mw.qss, 1) },
+    { label: "Nadir MW", n: true, value: r => fmt(r.limits_mw.nadir, 1) },
+    { label: "Smallest", value: r => LIMIT_NAMES[r.binding] },
+    { label: "Checks", value: r => { const n = Object.values(r.checks).filter(Boolean).length; return n === 8 ? chip("good", "8/8") : chip("bad", `${n}/8`); } },
+  ], rows, { groupStart: (r, i) => i > 0 && r.island === 1 });
+  const dead = rows.filter(r => r.island === 1 && r.dead_islands.length);
+  const deadText = dead.map(r => `${scenarioName(r.scenario)}: ${r.dead_islands.length} (${fmt(r.dead_islands.reduce((a, d) => a + d.load_mw, 0), 0)} MW)`).join("; ");
+  $("dead-note").textContent = `Result: all checks pass. Some splits also leave dead islands (no generation), which get no limit. Count and total load per scenario: ${deadText}. Their load was supplied over boundary lines from the live islands, so it is part of those islands' scheduled import and is accounted for.`;
+})();
+
+// ==================== 3.3 Nadir ====================
+(function nadir() {
+  const rows = D.offline.nadir;
+  const select = $("nadir-select");
+  rows.forEach((r, i) => select.append(h("option", { value: i }, `${scenarioName(r.scenario)} · ${islandName(r.scenario, r.island)}`)));
+  const start = rows.findIndex(r => r.scenario === "activsg_spartanb" && r.island === 1);
+  select.value = String(start >= 0 ? start : 0);
+  legend($("nadir-legend"), [{ color: "var(--series-1)", label: "forward Euler, 0.01 s (frequency.jl)" }, { color: "var(--series-2)", label: "exact solution", dash: "5 4" }]);
+  const draw = () => {
+    const r = rows[+select.value];
+    lineChart($("nadir-chart"), {
+      height: 250,
+      x: { label: "time after the split (s)" },
+      y: { label: "frequency (Hz)", format: d => d.toFixed(2) },
+      series: [
+        { label: "Euler", color: "var(--series-1)", points: r.t.map((t, i) => ({ x: t, y: r.f_euler[i] })) },
+        { label: "exact", color: "var(--series-2)", dash: "5 4", points: r.t.map((t, i) => ({ x: t, y: r.f_exact[i] })) },
+      ],
+      refs: [{ axis: "y", value: T.nadir, label: "59.5 Hz" }],
+      tipX: t => `t = ${fmt(t, 2)} s · step ${fmt(r.nadir_limit_mw, 1)} MW`,
+      tipValue: (s, p) => `${fmt(p.y, 4)} Hz`,
+    });
+  };
+  select.addEventListener("change", draw);
+  onRedraw(draw);
+  table($("nadir-table"), [
+    { label: "Scenario · island", wrap: true, value: r => `${scenarioName(r.scenario)} · ${islandName(r.scenario, r.island)}` },
+    { label: "Nadir limit MW", n: true, value: r => fmt(r.nadir_limit_mw, 2) },
+    { label: "At limit Hz", n: true, value: r => fmt(r.nadir_at_limit_hz, 4) },
+    { label: "Just above Hz", n: true, value: r => fmt(r.nadir_above_limit_hz, 4) },
+    { label: "Linearity", n: true, value: r => r.linearity_spread.toExponential(1) },
+    { label: "Exact MW", n: true, value: r => fmt(r.limit_exact_mw, 2) },
+    { label: "Code − exact", n: true, value: r => `${signed(r.euler_error_pct, 2)} %` },
+    { label: "Nadir at s", n: true, value: r => fmt(r.nadir_time_s, 2) },
+    { label: "In 20 s", value: r => r.nadir_inside_window ? chip("good", "yes") : chip("warn", "no") },
+  ], rows);
+})();
+
+// ==================== 3.4 Sensitivity ====================
+(function sensitivity() {
+  const names = Object.keys(D.offline.sensitivity);
+  const order = ["savnw_north", "activsg_spartanb", "activsg_midlands"].filter(n => names.includes(n));
+  let current = order[0];
+  const colors = { rocof: "var(--series-1)", qss: "var(--series-2)", nadir: "var(--series-3)" };
+  const dashes = { rocof: null, qss: null, nadir: "6 3" };
+  legend($("sens-legend"), ["rocof", "qss", "nadir"].map(k => ({ color: colors[k], dash: dashes[k], label: `${LIMIT_NAMES[k]} limit` })));
+  const draw = () => {
+    const s = D.offline.sensitivity[current];
+    for (const p of ["H", "K", "D"]) {
+      const sw = s.sweeps[p];
+      lineChart($(`sens-${p}`), {
+        height: 220,
+        x: { label: `${p} / island's ${p}`, scale: p === "H" ? "log" : "linear", format: d => p === "H" ? String(+d.toFixed(2)) : d },
+        y: { label: "limit (MW)", domain: [0, d3.max(sw.limits.flatMap(l => [l.rocof, l.qss, l.nadir])) * 1.05] },
+        series: ["rocof", "qss", "nadir"].map(k => ({ label: LIMIT_NAMES[k], color: colors[k], dash: dashes[k], points: sw.scale.map((v, i) => ({ x: v, y: sw.limits[i][k] })) })),
+        refs: [{ axis: "x", value: 1, label: "as is" }],
+        tipX: v => `${p} × ${fmt(v, 2)}`,
+        tipValue: (series, pt) => `${fmt(pt.y, 1)} MW`,
+      });
+    }
+    const host = $("sens-map");
+    host.replaceChildren();
+    const W = Math.max(260, host.clientWidth), H = 240, m = { t: 8, r: 10, b: 40, l: 48 };
+    const map = s.map;
+    const nx = map.scale_H.length, ny = map.scale_K.length;
+    const x = d3.scaleBand().domain(d3.range(nx)).range([m.l, W - m.r]);
+    const y = d3.scaleBand().domain(d3.range(ny)).range([H - m.b, m.t]);
+    const svg = d3.select(host).append("svg").attr("width", "100%").attr("viewBox", `0 0 ${W} ${H}`).attr("role", "img").attr("aria-label", "Smallest limit over H and K scaling");
+    const cells = [];
+    map.binding.forEach((row, j) => row.forEach((b, i) => cells.push({ i, j, b })));
+    svg.append("g").selectAll("rect").data(cells).join("rect").attr("x", d => x(d.i)).attr("y", d => y(d.j)).attr("width", x.bandwidth() + 0.5).attr("height", y.bandwidth() + 0.5).style("fill", d => colors[d.b]);
+    const iOne = d3.minIndex(map.scale_H, v => Math.abs(Math.log(v)));
+    const jOne = d3.minIndex(map.scale_K, v => Math.abs(v - 1));
+    svg.append("circle").attr("cx", x(iOne) + x.bandwidth() / 2).attr("cy", y(jOne) + y.bandwidth() / 2).attr("r", 5).style("fill", "var(--surface)").style("stroke", "var(--ink)").style("stroke-width", 2);
+    svg.append("g").selectAll("text").data([0.25, 0.5, 1, 2, 4]).join("text").attr("class", "tick-label").attr("text-anchor", "middle").attr("y", H - m.b + 16)
+      .attr("x", v => x(d3.minIndex(map.scale_H, s => Math.abs(Math.log(s / v)))) + x.bandwidth() / 2).text(v => v);
+    svg.append("g").selectAll("text").data([0, 1, 2, 3]).join("text").attr("class", "tick-label").attr("text-anchor", "end").attr("x", m.l - 6)
+      .attr("y", v => y(d3.minIndex(map.scale_K, s => Math.abs(s - v))) + y.bandwidth() / 2 + 4).text(v => v);
+    svg.append("text").attr("class", "axis-title").attr("x", (m.l + W - m.r) / 2).attr("y", H - 6).attr("text-anchor", "middle").text("H / island's H");
+    svg.append("text").attr("class", "axis-title").attr("transform", `translate(12,${(m.t + H - m.b) / 2}) rotate(-90)`).attr("text-anchor", "middle").text("K / island's K");
+    const tip = h("div", { class: "tooltip", hidden: "" }); host.append(tip);
+    svg.append("rect").attr("x", m.l).attr("y", m.t).attr("width", W - m.l - m.r).attr("height", H - m.t - m.b).style("fill", "transparent")
+      .on("pointermove", ev => {
+        const [px, py] = d3.pointer(ev);
+        const i = Math.min(nx - 1, Math.max(0, Math.floor((px - m.l) / x.step())));
+        const j = Math.min(ny - 1, Math.max(0, ny - 1 - Math.floor((py - m.t) / y.step())));
+        const key = h("span", { class: "key" }); key.style.background = colors[map.binding[j][i]];
+        tip.replaceChildren(h("div", { class: "tt-head" }, `H × ${fmt(map.scale_H[i], 2)} · K × ${fmt(map.scale_K[j], 2)}`),
+          h("div", { class: "tt-row" }, key, h("b", {}, `${fmt(map.tightest_mw[j][i], 1)} MW`), h("span", {}, `${LIMIT_NAMES[map.binding[j][i]]} smallest`)));
+        tip.hidden = false;
+        tip.style.left = Math.min(px / W * host.clientWidth + 12, host.clientWidth - tip.offsetWidth) + "px";
+        tip.style.top = "6px";
+      })
+      .on("pointerleave", () => { tip.hidden = true; });
+    const share = k => Math.round(100 * cells.filter(c => c.b === k).length / cells.length);
+    $("sens-text").replaceChildren(
+      h("p", {}, h("b", {}, scenarioName(current)), ` (${current.startsWith("savnw") ? "north island" : "zone"}): H = ${fmt(s.H, 1)} s, K = ${fmt(s.K, 1)} pu, D = ${fmt(s.D, 1)} pu.`),
+      h("p", {}, `Over this map RoCoF is the smallest limit at ${share("rocof")} % of the points, the nadir limit at ${share("nadir")} %, QSS at ${share("qss")} %.`),
+      h("p", {}, "RoCoF is smallest wherever inertia is low relative to governor gain. The nadir limit takes over when there is much more inertia than governor response, and QSS when K is small."),
+    );
+  };
+  seg($("sens-seg"), order.map(n => ({ value: n, label: scenarioName(n).replace("ACTIVSg500 · ", "") })), current, v => { current = v; draw(); });
+  onRedraw(draw);
+})();
+
+// ==================== 4 Model ====================
+(function model() {
+  const rows = D.model;
+  const keyIsland = r => {
+    const valid = r.islands.filter(i => i.import_off_mw !== null);
+    if (!valid.length) return r.islands[0];
+    return valid.reduce((a, b) => Math.abs(b.import_off_mw) / b.limit_mw > Math.abs(a.import_off_mw) / a.limit_mw ? b : a);
+  };
+  legend($("model-legend"), [{ kind: "hollow", color: "var(--series-2)", label: "frequency security off" }, { kind: "dot", color: "var(--series-1)", label: "on" }]);
+  onRedraw(() => {
+    const host = $("model-chart");
+    host.replaceChildren();
+    const W = Math.max(300, host.clientWidth), rowH = 26, m = { t: 8, r: 16, b: 38, l: Math.min(270, W * 0.42) };
+    const H = m.t + m.b + rowH * rows.length;
+    const ratios = rows.flatMap(r => { const i = keyIsland(r); return [i.import_off_mw / i.limit_mw, i.import_on_mw / i.limit_mw].filter(v => v !== null && isFinite(v)); });
+    const ext = Math.max(10, d3.max(ratios, v => Math.abs(v)) * 1.2);
+    const x = d3.scaleSymlog().constant(1).domain([-ext, ext]).range([m.l, W - m.r]);
+    const y = d3.scaleBand().domain(d3.range(rows.length)).range([m.t, H - m.b]).padding(0.2);
+    const svg = d3.select(host).append("svg").attr("width", "100%").attr("viewBox", `0 0 ${W} ${H}`).attr("role", "img").attr("aria-label", "Import relative to the limit, off and on, per test");
+    svg.append("rect").attr("x", x(-1)).attr("width", x(1) - x(-1)).attr("y", m.t).attr("height", H - m.t - m.b).style("fill", "var(--band)");
+    const ticks = [-1000, -100, -10, -1, 0, 1, 10, 100, 1000].filter(v => Math.abs(v) <= ext);
+    svg.append("g").selectAll("line").data(ticks).join("line").attr("class", "grid-line").attr("x1", d => x(d)).attr("x2", d => x(d)).attr("y1", m.t).attr("y2", H - m.b);
+    svg.append("g").selectAll("text").data(ticks).join("text").attr("class", "tick-label").attr("x", d => x(d)).attr("y", H - m.b + 16).attr("text-anchor", "middle").text(d => d === 0 ? "0" : `${d > 0 ? "" : "−"}${Math.abs(d)}×`);
+    svg.append("text").attr("class", "axis-title").attr("x", (m.l + W - m.r) / 2).attr("y", H - 6).attr("text-anchor", "middle").text("scheduled import / limit (negative: export)");
+    rows.forEach((r, k) => {
+      const i = keyIsland(r);
+      const cy = y(k) + y.bandwidth() / 2;
+      const label = `${scenarioName(r.scenario).replace("ACTIVSg500", "ACTIVSg")} · ${r.objective}${r.opf_model === "DC" ? " · DC" : ""}`;
+      svg.append("text").attr("class", "tick-label").attr("x", m.l - 8).attr("y", cy + 4).attr("text-anchor", "end").style("fill", r.passed ? "var(--ink-2)" : "var(--bad-ink)").text(W < 520 ? label.slice(0, 30) : label);
+      // a zero limit (no load, no governor): zero import is at 0, any other at the end of the axis
+      const ratioOf = v => v === null ? NaN : i.limit_mw >= 0.01 ? v / i.limit_mw : Math.abs(v) < 0.01 ? 0 : Math.sign(v) * ext;
+      const off = ratioOf(i.import_off_mw), on = ratioOf(i.import_on_mw);
+      const okOff = isFinite(off), okOn = isFinite(on);
+      if (i.limit_mw < 0.01 && okOff && off !== 0) svg.append("text").attr("class", "ref-label").attr("x", x(off) - Math.sign(off) * 8).attr("y", cy - 7)
+        .attr("text-anchor", off > 0 ? "end" : "start").text("limit 0 MW");
+      if (okOff && okOn) svg.append("line").attr("x1", x(off)).attr("x2", x(on)).attr("y1", cy).attr("y2", cy).style("stroke", "var(--line-strong)").style("stroke-width", 2);
+      if (okOff) svg.append("circle").attr("cx", x(off)).attr("cy", cy).attr("r", 4.5).style("fill", "var(--surface)").style("stroke", "var(--series-2)").style("stroke-width", 2);
+      if (okOn) svg.append("circle").attr("cx", x(on)).attr("cy", cy).attr("r", 4.5).style("fill", "var(--series-1)").style("stroke", "var(--surface)").style("stroke-width", 2);
+      else svg.append("text").attr("class", "ref-label").attr("x", x(0)).attr("y", cy + 4).attr("text-anchor", "middle").text(r.error ? "model build failed" : "infeasible");
+    });
+  });
+  const statusChip = s => s.includes("INFEASIBLE") ? chip("warn", "infeasible") : s === "ERROR" ? chip("bad", "error") : chip("good", "solved");
+  table($("model-table"), [
+    { label: "Test", wrap: true, value: r => h("span", {}, `${scenarioName(r.scenario)} · ${r.objective}${r.opf_model === "DC" ? " · DC" : ""}`, h("span", { class: "sub" }, r.purpose)) },
+    { label: "Expected", value: r => h("span", {}, r.expect, h("span", { class: "sub" }, r.passed ? chip("good", "pass") : chip("bad", "fail"))) },
+    { label: "On", value: r => statusChip(r.status_on) },
+    { label: "Limit, import off → on (MW)", value: r => h("span", {}, ...r.islands.map((i, k) => h("span", { class: k ? "sub" : null, style: "display:block; white-space:nowrap" },
+      `${islandName(r.scenario, i.island).replace(" (smaller)", "")}: ${fmt(i.limit_mw, 1)} ${LIMIT_NAMES[i.binding]} · ${signed(i.import_off_mw)} → ${signed(i.import_on_mw)}`))) },
+    { label: "Shed MW", n: true, value: r => `${fmt(Math.max(0, r.shed_off_mw ?? NaN), 0)} → ${fmt(r.shed_on_mw === null ? null : Math.max(0, r.shed_on_mw), 0)}` },
+    { label: "Solve s", n: true, value: r => `${fmt(r.solve_time_off_s, 2)} / ${fmt(r.solve_time_on_s, 2)}` },
+  ], rows);
+  const failing = rows.find(r => r.error);
+  const callout = $("bug-callout");
+  if (failing) {
+    callout.append(
+      h("div", {}, chip("bad", "bug"), " ", h("b", {}, "The failing test: a target line already out of service")),
+      h("p", {}, `${scenarioName(failing.scenario)}: line 152-3004 is out of service before the solve. With frequency security off the scenario solves. With it on, building the model fails with`),
+      h("pre", {}, failing.error.split("\n")[0]),
+      h("p", {}, "The key is the flow variable of line 5 (152-3004) at the island's bus 3004. calc_island_boundary_arcs lists the line as a boundary line because one end is in the island, without checking its status; PowerModels creates no variables for lines out of service. Fix in section 6.1."),
+    );
+  } else callout.hidden = true;
+})();
+
+// ==================== 5 Dynamic ====================
+const SWEEPS = D.sweeps;
+
+// ---------- 5.2 power, voltage and load steps ----------
+(function steps() {
+  legend($("step-legend"), [
+    { kind: "dot", color: "var(--series-1)", label: "zone / north island" },
+    { kind: "dot", color: "var(--series-2)", label: "rest of system / south island" },
+    { color: "var(--ink-2)", width: 1, label: "step = import (what the model assumes)" },
+  ]);
+  $("step-charts").replaceChildren(...SWEEPS.map((s, k) => h("div", {}, h("div", { class: "panel-title" }, scenarioName(s.scenario)), h("div", { class: "chart", id: `step-${k}` }))));
+  onRedraw(() => SWEEPS.forEach((s, k) => {
+    const pts = s.islands.flatMap(i => i.points.map(p => [p.import, p.power_step]));
+    const lim = d3.max(pts.flat(), v => Math.abs(v)) * 1.08;
+    lineChart($(`step-${k}`), {
+      height: 230,
+      x: { label: "scheduled import (MW)", domain: [-lim, lim] },
+      y: { label: "machine power step (MW)", domain: [-lim, lim] },
+      series: [
+        { label: "step = import", color: "var(--ink-2)", width: 1, noTip: true, points: [{ x: -lim, y: -lim }, { x: lim, y: lim }] },
+        ...s.islands.map((isl, i) => ({
+          label: islandName(s.scenario, i + 1), color: i ? "var(--series-2)" : "var(--series-1)", line: false, dots: true,
+          points: isl.points.map(p => ({ x: p.import, y: p.power_step, p })),
+        })),
+      ],
+      tipX: v => `import ${signed(v)} MW`,
+      tipValue: (series, pt) => pt.p ? `${signed(pt.y)} MW (load ${signed(pt.p.load_step)} MW, V ${signed(pt.p.voltage_step, 3)} pu)` : "",
+    });
+  }));
+  const roles = [{ label: "zone / north island", color: "var(--series-1)" }, { label: "rest of system / south island", color: "var(--series-2)" }];
+  legend($("volt-legend"), roles.map(r => ({ kind: "dot", color: r.color, label: r.label })));
+  const runsOf = role => SWEEPS.flatMap(s => s.islands[role] ? s.islands[role].points.map(p => ({ ...p, sweep: s.scenario })) : []);
+  onRedraw(() => {
+    for (const [hostId, key, unit, digits] of [["volt-chart", "voltage_step", "pu", 3], ["load-chart", "load_step", "MW", 1]]) {
+      lineChart($(hostId), {
+        height: 240,
+        x: { label: "reactive import before the split (Mvar)" },
+        y: { label: unit, format: d => digits === 3 ? d.toFixed(2) : d },
+        series: roles.map((r, i) => ({ label: r.label, color: r.color, line: false, dots: true, points: runsOf(i).map(p => ({ x: p.reactive_import, y: p[key], p })) })),
+        refs: [{ axis: "y", value: 0 }],
+        tipX: v => `reactive import ${signed(v)} Mvar`,
+        tipValue: (series, pt) => `${signed(pt.y, digits)} ${unit} · ${scenarioName(pt.p.sweep).split(" · ")[0]}, import ${signed(pt.p.import, 0)} MW`,
+      });
+    }
+  });
+})();
+
+// ---------- 5.3 sweeps ----------
+(function sweeps() {
+  const select = $("sweep-select");
+  SWEEPS.forEach((s, k) => select.append(h("option", { value: k }, scenarioName(s.scenario))));
+  let sweepIndex = 0, islandIndex = 0;
+  legend($("sweep-legend"), [
+    { kind: "dot", color: "var(--series-1)", label: "ANDES" },
+    { color: "var(--series-2)", label: "SFR model (frequency.jl)" },
+    { color: "var(--series-3)", dash: "6 3", label: "SFR model with D = 0" },
+  ]);
+  const islandSeg = () => seg($("sweep-island-seg"), SWEEPS[sweepIndex].islands.map((_, i) => ({ value: i, label: islandName(SWEEPS[sweepIndex].scenario, i + 1) })), islandIndex, v => { islandIndex = v; draw(); });
+  function draw() {
+    const s = SWEEPS[sweepIndex], isl = s.islands[islandIndex];
+    const pts = [...isl.points].sort((a, b) => a.import - b.import);
+    const limit = Math.min(...Object.values(isl.limits_mw));
+    $("sweep-title").textContent = `${scenarioName(s.scenario)} · ${islandName(s.scenario, islandIndex + 1)}: H ${fmt(isl.inertia, 1)} s, K ${fmt(isl.governor_gain, 0)} pu, limit ${fmt(limit, 1)} MW (${LIMIT_NAMES[isl.binding]})`;
+    $("sweep-excluded").textContent = s.excluded.length ? `Runs left out: ${s.excluded.map(e => `${signed(e.forced_import_mw, 0)} MW (${e.reason})`).join("; ")}.` : "";
+    const limitRefs = [{ axis: "x", value: limit, label: "+limit" }, { axis: "x", value: -limit, label: "−limit" }];
+    const xcfg = { label: "scheduled import (MW)", includeRefs: true };
+    const tipX = v => `import ${signed(v)} MW`;
+    const extreme = (p, model) => p.import >= 0 ? p[model].nadir_hz : p[model].zenith_hz;
+    const three = (get, unit, digits) => [
+      { label: "ANDES", color: "var(--series-1)", dots: true, width: 1.5, points: pts.map(p => ({ x: p.import, y: get(p, "sim") })) },
+      { label: "SFR", color: "var(--series-2)", points: pts.map(p => ({ x: p.import, y: get(p, "sfr") })) },
+      { label: "SFR, D = 0", color: "var(--series-3)", dash: "6 3", points: pts.map(p => ({ x: p.import, y: get(p, "sfr_no_damping") })) },
+    ];
+    lineChart($("sweep-rocof"), {
+      height: 240, x: xcfg, y: { label: "Hz/s", format: d => d.toFixed(1) },
+      series: three((p, m) => p[m].rocof_500ms), refs: [{ axis: "y", value: T.rocof, label: "+0.5" }, { axis: "y", value: -T.rocof, label: "−0.5" }, ...limitRefs],
+      tipX, tipValue: (se, p) => `${fmt(p.y, 3)} Hz/s`,
+    });
+    lineChart($("sweep-extreme"), {
+      height: 240, x: xcfg, y: { label: "Hz", format: d => d.toFixed(1) },
+      series: three((p, m) => extreme(p, m)), refs: [{ axis: "y", value: T.nadir, label: "59.5" }, { axis: "y", value: T.zenith, label: "60.5" }, ...limitRefs],
+      tipX, tipValue: (se, p) => `${fmt(p.y, 3)} Hz`,
+    });
+    lineChart($("sweep-settle"), {
+      height: 240, x: xcfg, y: { label: "Hz", format: d => d.toFixed(1) },
+      series: three((p, m) => p[m].settle_hz), refs: [{ axis: "y", value: NOM - T.qss, label: "59.7" }, { axis: "y", value: NOM + T.qss, label: "60.3" }, ...limitRefs],
+      tipX, tipValue: (se, p) => `${fmt(p.y, 3)} Hz`,
+    });
+  }
+  select.addEventListener("change", () => { sweepIndex = +select.value; islandIndex = 0; islandSeg(); draw(); });
+  islandSeg();
+  onRedraw(draw);
+
+  const rows = [];
+  SWEEPS.forEach(s => s.islands.forEach((isl, i) => rows.push({ s, isl, i })));
+  const crossing = (v, limit) => {
+    if (v === null || v === undefined) return h("span", { class: "sub" }, "not reached");
+    return h("span", {}, `${signed(v)} MW`, h("span", { class: "sub" }, `${fmt(Math.abs(v) / limit, 2)} × limit`));
+  };
+  table($("sweep-table"), [
+    { label: "Sweep · island", wrap: true, value: r => `${scenarioName(r.s.scenario)} · ${islandName(r.s.scenario, r.i + 1)}` },
+    { label: "frequency.jl limits (MW)", value: r => h("span", {}, `RoCoF ${fmt(r.isl.limits_mw.rocof, 1)}`, h("span", { class: "sub" }, `nadir ${fmt(r.isl.limits_mw.nadir, 1)}, QSS ${fmt(r.isl.limits_mw.qss, 1)}`)) },
+    { label: "RoCoF, import", n: true, value: r => crossing(r.isl.simulated_limits.rocof_import, r.isl.limits_mw.rocof) },
+    { label: "RoCoF, export", n: true, value: r => crossing(r.isl.simulated_limits.rocof_export, r.isl.limits_mw.rocof) },
+    { label: "59.5 Hz (import)", n: true, value: r => crossing(r.isl.simulated_limits.nadir_import, r.isl.limits_mw.nadir) },
+    { label: "60.5 Hz (export)", n: true, value: r => crossing(r.isl.simulated_limits.zenith_export, r.isl.limits_mw.nadir) },
+    { label: "QSS, import", n: true, value: r => crossing(r.isl.simulated_limits.qss_import, r.isl.limits_mw.qss) },
+    { label: "QSS, export", n: true, value: r => crossing(r.isl.simulated_limits.qss_export, r.isl.limits_mw.qss) },
+    { label: "Step / import", n: true, value: r => fmt(r.isl.step_ratio, 2) },
+    { label: "K_eff (pu)", n: true, value: r => h("span", {}, fmt(r.isl.effective_gain, 0), h("span", { class: "sub" }, `K + D ${fmt(r.isl.governor_gain + r.isl.damping, 0)}`),
+      r.isl.collapsed_imports.length ? h("span", { class: "sub" }, `> 1 Hz off from ${signed(d3.min(r.isl.collapsed_imports, Math.abs), 0)} MW`) : null) },
+    { label: "Offset at 0 MW", n: true, value: r => `${signed(r.isl.settle_offset_hz, 3)} Hz` },
+  ], rows, { groupStart: (r, k) => k > 0 && r.i === 0 });
+})();
+
+// ---------- 5.4 traces ----------
+(function traces() {
+  const sweepSelect = $("trace-sweep"), importSelect = $("trace-import");
+  SWEEPS.forEach((s, k) => sweepSelect.append(h("option", { value: k }, scenarioName(s.scenario))));
+  let sweepIndex = 0, islandIndex = 0;
+  legend($("trace-legend"), [{ color: "var(--series-1)", label: "ANDES (COI frequency)" }, { color: "var(--series-2)", label: "SFR model, same import", dash: "6 3" }]);
+  const sorted = () => [...SWEEPS[sweepIndex].islands[islandIndex].points].sort((a, b) => a.import - b.import);
+  const fillImports = () => {
+    const pts = sorted();
+    importSelect.replaceChildren(...pts.map((p, k) => h("option", { value: k }, `import ${signed(p.import, 0)} MW`)));
+    importSelect.value = String(pts.reduce((best, p, k) => Math.abs(p.import - 50) < Math.abs(pts[best].import - 50) ? k : best, 0));
+  };
+  const islandSeg = () => seg($("trace-island-seg"), SWEEPS[sweepIndex].islands.map((_, i) => ({ value: i, label: islandName(SWEEPS[sweepIndex].scenario, i + 1) })), islandIndex, v => { islandIndex = v; fillImports(); draw(); });
+  function draw() {
+    const p = sorted()[+importSelect.value];
+    if (!p) return;
+    lineChart($("trace-chart"), {
+      height: 280,
+      x: { label: "time after the split (s)" },
+      y: { label: "frequency (Hz)", format: d => d.toFixed(2) },
+      series: [
+        { label: "ANDES", color: "var(--series-1)", points: p.trace.t.map((t, i) => ({ x: t, y: p.trace.sim[i] })) },
+        { label: "SFR", color: "var(--series-2)", dash: "6 3", points: p.trace.t.map((t, i) => ({ x: t, y: p.trace.sfr[i] })) },
+      ],
+      refs: [{ axis: "y", value: T.nadir, label: "59.5" }, { axis: "y", value: T.zenith, label: "60.5" }],
+      tipX: t => `t = ${fmt(t, 2)} s`,
+      tipValue: (s, q) => `${fmt(q.y, 3)} Hz`,
+    });
+    const ext = model => p.import >= 0 ? p[model].nadir_hz : p[model].zenith_hz;
+    $("trace-caption").textContent = `Scheduled import ${signed(p.import)} MW. At the split the island's machines took up ${signed(p.power_step)} MW, because its load changed by ${signed(p.load_step)} MW as its voltage moved ${signed(p.voltage_step, 3)} pu. ANDES: RoCoF ${fmt(p.sim.rocof_500ms, 3)} Hz/s, ${p.import >= 0 ? "nadir" : "zenith"} ${fmt(ext("sim"), 3)} Hz, settling ${fmt(p.sim.settle_hz, 3)} Hz. Model: ${fmt(p.sfr.rocof_500ms, 3)} Hz/s, ${fmt(ext("sfr"), 3)} Hz, ${fmt(p.sfr.settle_hz, 3)} Hz.`;
+  }
+  sweepSelect.addEventListener("change", () => { sweepIndex = +sweepSelect.value; islandIndex = 0; islandSeg(); fillImports(); draw(); });
+  importSelect.addEventListener("change", draw);
+  islandSeg(); fillImports();
+  onRedraw(draw);
+})();
+
+// ---------- 5.5 off and on ----------
+(function passfail() {
+  const runs = D.passfail;
+  if (!runs.length) return;
+  const scenarios = [...new Set(runs.map(r => r.scenario))];
+  let islandIndex = 0;
+  legend($("pf-legend"), [{ color: "var(--series-2)", label: "frequency security off" }, { color: "var(--series-1)", label: "on" }]);
+  seg($("pf-island-seg"), [{ value: 0, label: "zone / smaller island" }, { value: 1, label: "rest / larger island" }], 0, v => { islandIndex = v; draw(); });
+  $("pf-charts").replaceChildren(...scenarios.map((s, k) => h("div", {}, h("div", { class: "panel-title" }, scenarioName(s)), h("div", { class: "chart", id: `pf-${k}` }))));
+  function draw() {
+    scenarios.forEach((s, k) => {
+      const series = [];
+      for (const [on, color, label] of [[false, "var(--series-2)", "off"], [true, "var(--series-1)", "on"]]) {
+        const run = runs.find(r => r.scenario === s && r.frequency_security === on);
+        const isl = run && run.islands[islandIndex];
+        if (isl) series.push({ label: `${label}: import ${signed(isl.import, 0)} MW`, color, points: isl.trace.t.map((t, i) => ({ x: t, y: isl.trace.sim[i] })) });
+      }
+      lineChart($(`pf-${k}`), {
+        height: 210, x: { label: "time after the split (s)" }, y: { label: "Hz", format: d => d.toFixed(1) },
+        series, refs: [{ axis: "y", value: T.nadir, label: "59.5" }, { axis: "y", value: T.zenith, label: "60.5" }],
+        tipX: t => `t = ${fmt(t, 2)} s`, tipValue: (se, q) => `${fmt(q.y, 3)} Hz`,
+      });
+    });
+  }
+  onRedraw(draw);
+  const rows = [];
+  runs.forEach(r => r.islands.forEach((isl, i) => rows.push({ r, isl, i })));
+  const verdict = (isl, run) => {
+    const notes = [];
+    if (run.busted) notes.push(h("span", { class: "sub" }, `simulation stopped ${fmt(run.sim_end_s, 1)} s after the split`));
+    if (!run.init_steady) notes.push(h("span", { class: "sub" }, "started out of steady state (governor minimum)"));
+    if (isl.secure && !run.busted) return h("span", {}, chip("good", "secure"), ...notes);
+    const fails = [];
+    if (!isl.checks.nadir) fails.push("nadir"); if (!isl.checks.zenith) fails.push("zenith");
+    if (!isl.checks.rocof) fails.push("RoCoF"); if (!isl.checks.qss) fails.push("QSS");
+    if (!isl.checks.no_ufls) fails.push("UFLS"); if (!isl.checks.no_trips) fails.push("trip");
+    return h("span", {}, fails.length ? chip("bad", fails.join(", ")) : chip("warn", "stopped"), ...notes);
+  };
+  table($("pf-table"), [
+    { label: "Scenario", wrap: true, value: r => r.i === 0 ? h("span", {}, scenarioName(r.r.scenario), h("span", { class: "sub" }, `security ${r.r.frequency_security ? "on" : "off"}`)) : "" },
+    { label: "Shed before", n: true, value: r => r.i === 0 ? `${fmt(r.r.preemptive_shed_mw, 1)} MW` : "" },
+    { label: "Island", value: r => islandName(r.r.scenario, r.i + 1) },
+    { label: "Import / limit MW", n: true, value: r => `${signed(r.isl.import)} / ${fmt(Math.min(...Object.values(r.isl.limits_mw)), 1)}` },
+    { label: "Step MW", n: true, value: r => signed(r.isl.power_step) },
+    { label: "Nadir Hz", n: true, value: r => fmt(r.isl.sim.nadir_hz, 3) },
+    { label: "Zenith Hz", n: true, value: r => fmt(r.isl.sim.zenith_hz, 3) },
+    { label: "RoCoF Hz/s", n: true, value: r => fmt(r.isl.sim.rocof_500ms, 3) },
+    { label: "Settle Hz", n: true, value: r => r.r.busted ? "—" : fmt(r.isl.sim.settle_hz, 3) },
+    { label: "UFLS MW", n: true, value: r => fmt(r.isl.ufls_mw, 1) },
+    { label: "Trips", n: true, value: r => r.isl.gen_trips.length ? `${r.isl.gen_trips.length} at ${fmt(r.isl.gen_trips[0].t, 1)} s` : "0" },
+    { label: "Verdict", value: r => verdict(r.isl, r.r) },
+  ], rows, { groupStart: (r, k) => k > 0 && r.i === 0 });
+})();
+</script>
+</body>
+</html>
