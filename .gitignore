@@ -18,3 +18,6 @@ config.json
 samples.txt
 proposal/
 __pycache__/
+CLAUDE.md
+pistory.md
+mydocs/
