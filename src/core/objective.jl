@@ -35,6 +35,7 @@ function _build_branch_flow_penalty(pm::AbstractPowerModel, branch_ids, p_model;
     q_penalty = JuMP.AffExpr()
 
     for i in branch_ids
+        haskey(ref(pm, :branch), i) || continue     # out of service: not in the model, no flow to penalize
         p_term, q_term = _get_target_branch_flow_terms(pm, i; is_ac=is_ac)
 
         if p_model == "abs_sum"

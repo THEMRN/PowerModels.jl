@@ -424,6 +424,7 @@ function print_branch_flows(result, modified_network_data, target_lines, detaile
     abs_total_flow_sum = 0.0
     for line in target_lines
         branch = modified_network_data["branch"][string(line)]
+        branch["br_status"] != 0 || continue        # out of service: no flow, no solution entry
         f_bus = Int(branch["f_bus"])
         t_bus = Int(branch["t_bus"])
 
