@@ -137,9 +137,9 @@ for name in sort(collect(keys(SCENARIOS)))
         rocof_by_hand = 2 * H * MAX_ROCOF / NOMINAL_FREQUENCY
         qss_by_hand = (D + K) * MAX_QSS_DEVIATION / NOMINAL_FREQUENCY
 
-        # boundary arcs: island end inside, far end outside, and every target line crossing the island edge listed
+        # boundary arcs: island end inside, far end outside, and every in-service target line crossing the island edge listed
         arcs_ok = all(arc[2] in island["buses"] && !(arc[3] in island["buses"]) for arc in island["boundary_arcs"])
-        crossing_lines = [line for line in target_lines if xor(network_data["branch"][string(line)]["f_bus"] in island["buses"],
+        crossing_lines = [line for line in target_lines if network_data["branch"][string(line)]["br_status"] != 0 && xor(network_data["branch"][string(line)]["f_bus"] in island["buses"],
             network_data["branch"][string(line)]["t_bus"] in island["buses"])]
         arcs_ok &= sort(crossing_lines) == sort([arc[1] for arc in island["boundary_arcs"]])
 
@@ -190,7 +190,8 @@ for name in sort(collect(keys(SCENARIOS)))
 
         # integration accuracy: limit with the code's Euler step, a 10x finer Euler step, and the exact solution
         limit_fine_euler = search_limit_of_response(deficit -> calc_sfr_response(island, deficit; time_step=SFR_TIME_STEP / 10)[2])
-        limit_exact = search_limit_of_response(deficit -> calc_sfr_response_exact(island, deficit; time_step=0.001)[2])
+        _, exact_at_unit = calc_sfr_response_exact(island, 1.0; time_step=0.001)     # linear, so one solution scales
+        limit_exact = (NOMINAL_FREQUENCY - MIN_NADIR_FREQUENCY) / (NOMINAL_FREQUENCY - minimum(exact_at_unit))
         _, exact_at_limit = calc_sfr_response_exact(island, nadir_limit; time_step=SFR_TIME_STEP)
 
         push!(nadir_rows, Dict(
@@ -231,6 +232,7 @@ function calc_scaled_limits(island, base_mva; scale_H=1.0, scale_K=1.0, scale_D=
     params = Dict(
         "inertia" => island["inertia"] * scale_H,
         "governor_gain" => island["governor_gain"] * scale_K,
+        "governor_units" => [merge(unit, (gain=unit.gain * scale_K,)) for unit in island["governor_units"]],
         "damping" => island["damping"] * scale_D,
     )
     return Dict(

@@ -7,9 +7,9 @@ Nothing here changes the pipeline: the scripts call the same functions `run_isla
 Run from the repository root, in order:
 
 ```bash
-julia --project=. runners/frequency_tests/1_offline.jl     # ~2.5 min
-julia --project=. runners/frequency_tests/2_model.jl       # ~4 min
-julia --project=. runners/frequency_tests/3_dynamic.jl     # ~1.5 h of ANDES runs ("sweeps" or "passfail" for one part)
+julia --project=. runners/frequency_tests/1_offline.jl     # ~1.5 min
+julia --project=. runners/frequency_tests/2_model.jl       # ~1 min
+julia --project=. runners/frequency_tests/3_dynamic.jl     # ~20 min of ANDES runs ("sweeps" or "passfail" for one part)
 python runners/frequency_tests/build_report.py             # HTML report
 python runners/frequency_tests/build_summary.py            # one-page summary (PDF) and its three figures
 ```

@@ -11,7 +11,8 @@ Plotly HTML report and the ANDES log.
 
 Not modelled by ANDES (approximated when reading the dyr): GENSAL is approximated by GENROU and
 SCRX by SEXS with default parameters. Generator frequency relays (FRQTPAT) and UFLS relays (LDSHBL)
-are our own ANDES models, in models/.
+are our own ANDES models, in models/. ANDES's HYGOV is corrected to the PSS®E block diagram after
+setup (correct_hygov).
 
 Run `andes prepare` and then `python prepare_models.py` once after installing or upgrading ANDES;
 they generate the model code.
@@ -39,6 +40,24 @@ EVENT_TIME = 5.0  # s, the outage lines trip
 SIM_END_TIME = 25.0  # s
 TIME_STEP = 1 / 120  # s, half a cycle as in PSS®E (the ANDES default of 1/30 s is too coarse for relays)
 TIME_COL = "Time(s)"
+
+
+def correct_hygov(ss):
+    """
+    Put ANDES 2.0's HYGOV back on the PSS®E block diagram. It keeps gate and flow on the system
+    base, which with S = Sn/Sb leaves three errors on the machine base: the integrator gain is 1/S
+    instead of 1/(r Tr) (`tr` = r*Tr is computed but never used), Tw acts as Tw*S and Dt is S too
+    large. Call after ss.setup(), when the parameters are on the system base. Recheck this when
+    upgrading ANDES.
+    """
+    hygov = ss.HYGOV
+    if hygov.n == 0:
+        return
+    machine_share = np.array(hygov.Sn.v, dtype=float) / ss.config.mva  # S
+    hygov.gtpos.t_const = hygov.tr
+    hygov.Tw.v[:] = hygov.Tw.vin / machine_share
+    hygov.Dt.v[:] = hygov.Dt.vin
+    print(f"-- HYGOV corrected on {hygov.n} units.")
 
 
 def read_raw_block(raw_file, block_name):
@@ -232,6 +251,7 @@ if run_dynamics:
         print(f"-- {len(dead_buses)} buses left without generation are de-energized at t={EVENT_TIME}s: {dead_buses}")
 
 ss.setup()
+correct_hygov(ss)
 
 # ==================== Power flow ====================
 # check mismatch for all buses before solving power flow (at the RAW voltages)

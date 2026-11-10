@@ -241,7 +241,6 @@ function calc_island_imports(network_data, islands, result)
     for island in islands
         scheduled_import = 0.0
         for (branch_id, island_bus, _) in island["boundary_arcs"]
-            haskey(sol_branches, string(branch_id)) || continue      # out of service: no flow, no solution entry
             island_end = network_data["branch"][string(branch_id)]["f_bus"] == island_bus ? "pf" : "pt"
             scheduled_import -= sol_branches[string(branch_id)][island_end]
         end
@@ -333,20 +332,17 @@ returning the whole trajectory. `damping` (pu) replaces the island's load dampin
 """
 function calc_sfr_response(params, deficit; damping=params["damping"], time_step=SFR_TIME_STEP)
     H = params["inertia"]
-    K = params["governor_gain"]
     D = damping
+    units = params["governor_units"]
 
     steps = round(Int, SFR_DURATION / time_step)
     times = collect(0:steps) .* time_step
     frequency = fill(NOMINAL_FREQUENCY, steps + 1)
     df = 0.0            # frequency deviation, pu
-    z = 0.0             # reheat stage state, pu
+    states = zeros(3, length(units))
     for k in 1:steps
-        governor_response = -K * (REHEAT_FRACTION * df + (1 - REHEAT_FRACTION) * z)
-        ddf = (governor_response - D * df - deficit) / (2 * H)
-        dz = (df - z) / REHEAT_TIME
-        df += time_step * ddf
-        z += time_step * dz
+        governor_response = step_governor_units!(states, units, df, time_step)
+        df += time_step * (governor_response - D * df - deficit) / (2 * H)
         frequency[k+1] = NOMINAL_FREQUENCY * (1 + df)
     end
     return times, frequency
@@ -358,23 +354,38 @@ exponential of the model (exact for a step deficit), to check the Euler integrat
 """
 function calc_sfr_response_exact(params, deficit; time_step=0.001)
     H = params["inertia"]
-    K = params["governor_gain"]
     D = params["damping"]
+    units = params["governor_units"]
 
-    # state x = [Δf, z] (pu), dx/dt = A x + b
-    A = [-(K * REHEAT_FRACTION + D)/(2H) -K*(1-REHEAT_FRACTION)/(2H);
-        1/REHEAT_TIME -1/REHEAT_TIME]
-    b = [-deficit / (2H), 0.0]
+    # state x = [Δf, then slow, gate, flow of each unit] (pu), dx/dt = A x + b
+    state_count = 1 + 3 * length(units)
+    A = zeros(state_count, state_count)
+    b = zeros(state_count)
+    A[1, 1] = -D / (2H)
+    b[1] = -deficit / (2H)
+    for (i, unit) in enumerate(units)
+        slow, gate, flow = 3i - 1, 3i, 3i + 1
+        A[1, 1] -= unit.turbine_damping / (2H)
+        A[1, gate] = -unit.gain * unit.water_ratio / (2H)
+        A[1, flow] = unit.gain * (1 + unit.water_ratio) / (2H)
+        A[slow, 1] = 1 / unit.slow_time
+        A[slow, slow] = -1 / unit.slow_time
+        A[gate, 1] = -unit.fast_share / unit.delay
+        A[gate, slow] = -(1 - unit.fast_share) / unit.delay
+        A[gate, gate] = -1 / unit.delay
+        A[flow, gate] = 1 / unit.second_delay
+        A[flow, flow] = -1 / unit.second_delay
+    end
 
     # exact one-step update x+ = Φ x + Γ, from the exponential of the augmented matrix [A b; 0 0]
-    augmented = exp([A b; zeros(1, 3)] .* time_step)
-    Φ = augmented[1:2, 1:2]
-    Γ = augmented[1:2, 3]
+    augmented = exp([A b; zeros(1, state_count + 1)] .* time_step)
+    Φ = augmented[1:state_count, 1:state_count]
+    Γ = augmented[1:state_count, state_count+1]
 
     steps = round(Int, SFR_DURATION / time_step)
     times = collect(0:steps) .* time_step
     frequency = fill(NOMINAL_FREQUENCY, steps + 1)
-    x = zeros(2)
+    x = zeros(state_count)
     for k in 1:steps
         x = Φ * x + Γ
         frequency[k+1] = NOMINAL_FREQUENCY * (1 + x[1])

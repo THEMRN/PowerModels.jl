@@ -199,25 +199,25 @@ details .table-wrap { border: 0; border-radius: 0 0 10px 10px; }
       <h1>Frequency Security Tests</h1>
       <p class="lede">The islanding workflow can limit, for every island it creates, the power the island exchanges with the rest of the system before the split, so that its frequency stays within its requirements after the split. This report explains what that frequency-security constraint computes, then tests it in three steps on the savnw and ACTIVSg500 cases: the numbers it computes before any optimization, its behaviour inside the optimization, and whether the islands it allows actually keep their frequency in dynamic simulations.</p>
       <div class="meta">
-        <span>Runs of <b>19 Oct 2026</b></span>
+        <span>Runs of <b>2 Nov 2026</b></span>
         <span>Page built <b id="generated">—</b></span>
         <span>Simulator <b>ANDES 2.0</b></span>
         <span>OPF solver <b>Ipopt</b></span>
       </div>
-      <p class="note">Numbers in the text are from these runs. Every table and figure is drawn from the result files in <code>results/frequency_tests/</code> when the page is built. Section 1 defines every symbol where it first appears; section 1.7 collects them in one table.</p>
+      <p class="note">Numbers in the text are from these runs, which use each generator's own governor in the nadir limit (1.4) and the corrected hydro governor in ANDES (F9). Every table and figure is drawn from the result files in <code>results/frequency_tests/</code> when the page is built. The first runs of 19 Oct 2026, with one steam governor for every unit and ANDES unmodified, are kept in <code>results/frequency_tests_old_model_2026-10-19/</code>. Section 1 defines every symbol where it first appears; section 1.7 collects them in one table.</p>
     </header>
 
     <!-- ==================== Summary ==================== -->
     <section id="summary">
       <h2>Summary</h2>
-      <p>The constraint is implemented correctly: it computes what its formulas say, and the optimization enforces it, apart from one bug. The weak part is the model behind the limits. When the islands it allows are simulated, the limits turn out about right for an island with a mix of steam, gas and hydro units, too generous for an island with only hydro units, and wrong in one direction when opening the boundary also changes the island's voltages.</p>
+      <p>The constraint is implemented correctly: it computes what its formulas say, and the optimization enforces it, apart from one bug. The nadir limit now uses each generator's own governor from the .dyr, and with that it tracks the simulated machines closely. The weak part left is what the model assumes the island loses. When the islands it allows are simulated, the limits are safe for an island with a mix of steam, gas and hydro units, about 40 % too generous for an island with only hydro units whose voltage rises at the split, and wrong in one direction when opening the boundary lowers the island's voltages. These runs also found and corrected a bug in ANDES's hydro governor model (F9), which had made the hydro zones look worse than they are.</p>
       <div class="table-wrap">
         <table class="text-table">
           <thead><tr><th>Test</th><th>Question</th><th>Result</th></tr></thead>
           <tbody>
-            <tr><td><a href="#test1">1 Offline limits</a></td><td>Before any optimization: does frequency.jl read the right machine data, find the right islands and compute the limits its formulas describe?</td><td><span class="chip good" data-icon="good">yes</span> All 62 online units read the same as ANDES reads them; all 31 islands pass 8 independent checks; the nadir limit is within 0.26 % of the exact value, on the safe side.</td></tr>
+            <tr><td><a href="#test1">1 Offline limits</a></td><td>Before any optimization: does frequency.jl read the right machine data, find the right islands and compute the limits its formulas describe?</td><td><span class="chip good" data-icon="good">yes</span> All 62 online units read the same as ANDES reads them; all 31 islands pass 8 independent checks; the nadir limit is within 0.40 % of the exact value, on the safe side.</td></tr>
             <tr><td><a href="#test2">2 The constraint</a></td><td>Does the optimization keep each island's import within its limit, in both directions, and only when it has to?</td><td><span class="chip warn" data-icon="warn">22 of 23</span> Yes, in every test but one. Bug: a boundary line that is already out of service makes the model build fail.</td></tr>
-            <tr><td><a href="#test3">3 ANDES simulations</a></td><td>After the boundary opens, do the islands the constraint allows keep their frequency within the requirements?</td><td><span class="chip bad" data-icon="bad">2 of 7</span> scenarios are fully secure with the constraint on. Without it, all 7 see load shedding, a unit trip or a collapse; with it, 3 still do, and 2 more violate a requirement without any relay acting.</td></tr>
+            <tr><td><a href="#test3">3 ANDES simulations</a></td><td>After the boundary opens, do the islands the constraint allows keep their frequency within the requirements?</td><td><span class="chip warn" data-icon="warn">3 of 7</span> scenarios are fully secure with the constraint on (2 of 7 in the first runs). Without it, all 7 see load shedding, a unit trip or a collapse; with it, 3 still do, and 1 more violates a requirement without any relay acting.</td></tr>
           </tbody>
         </table>
       </div>
@@ -228,16 +228,16 @@ details .table-wrap { border: 0; border-radius: 0 0 10px 10px; }
           <p>If one of the lines chosen for opening is already out of service (<code>br_status = 0</code>), frequency.jl still counts it as a boundary line of the island, but PowerModels leaves it out of the model, so the constraint looks up a flow variable that does not exist (<code>KeyError</code>). The report function has the same problem. Section <a href="#test2">4</a>, fix in <a href="#changes">6.1</a>.</p>
         </div></div>
         <div class="finding"><div class="id">F2</div><div class="body">
-          <h4><span class="chip bad" data-icon="bad">model</span> Hydro units respond far more slowly than the model assumes</h4>
-          <p>frequency.jl models every governor as a steam turbine. Hydro governors are deliberately slow at first, because the water in the pipe cannot be sped up quickly. The ACTIVSg500 SPARTANB zone has only hydro units. When its boundary opens, the model says its frequency stays above 59.5 Hz (where load shedding starts) for any import up to 58 MW. In the simulation it falls to 59.5 Hz at only 18 MW, about a third of that. The constraint lets the zone import 49 MW (the rate-of-fall limit is the tightest of the three), and the simulated frequency then falls to 59.26 Hz and underfrequency relays shed 72 MW of load. Section <a href="#hydro">5.6</a> goes through the numbers. Also sections <a href="#sweeps">5.3</a>, <a href="#passfail">5.5</a>, change in <a href="#changes">6.2</a>.</p>
+          <h4><span class="chip good" data-icon="good">changed</span> Hydro units respond far more slowly than a steam governor, and the model now knows it</h4>
+          <p>frequency.jl used to model every governor as a steam turbine. Hydro governors are deliberately slow at first, because the water in the pipe cannot be sped up quickly. It now reads each unit's governor from the .dyr (1.4). The ACTIVSg500 SPARTANB zone has only hydro units: its nadir limit falls from 62 MW to 39 MW, and that becomes the zone's limit in place of the 49 MW RoCoF limit. In the sweep version of the zone the model's frequency is now within 0.14 to 0.23 Hz of the simulation from 25 to 100 MW of import (0.41 to 1.26 Hz in the first runs, partly because of F9). Section <a href="#hydro">5.6</a> goes through the numbers. Also sections <a href="#sweeps">5.3</a>, <a href="#passfail">5.5</a>, <a href="#changes">6.2</a>.</p>
         </div></div>
         <div class="finding"><div class="id">F3</div><div class="body">
           <h4><span class="chip bad" data-icon="bad">model</span> Opening the boundary changes the island's voltages, and its load with them</h4>
-          <p>In savnw the boundary lines also supply reactive power to the north island (about 200 Mvar). When they open, its voltages drop by about 0.11 pu and its load falls by about 72 MW, because the simulated loads draw less power at lower voltage. The model assumes the island loses exactly its active import. As a result, imports are safe beyond their limit (59.5 Hz is reached at 99 MW against a 77 MW limit) but exports are not: 60.5 Hz is exceeded at 34 MW of export. With the constraint on, the heavily loaded north island avoids load shedding but overshoots to 60.89 Hz. Sections <a href="#step">5.2</a>, <a href="#sweeps">5.3</a>, change in <a href="#changes">6.3</a>.</p>
+          <p>In savnw the boundary lines also supply reactive power to the north island (about 200 Mvar). When they open, its voltages drop by about 0.11 pu and its load falls by about 72 MW, because the simulated loads draw less power at lower voltage. The model assumes the island loses exactly its active import. As a result, imports are safe beyond their limit (59.5 Hz is reached at 99 MW against a 77 MW limit) but exports are not: 60.5 Hz is exceeded at 34 MW of export. With the constraint on, the heavily loaded north island avoids load shedding but overshoots to 60.89 Hz. In SPARTANB the voltage rises instead, the load grows by about 13 MW, and this is now the main gap: 59.5 Hz is reached at 26 MW against a 36 MW nadir limit, and with the constraint on the frequency falls to 59.43 Hz and UFLS sheds 30 MW. Sections <a href="#step">5.2</a>, <a href="#sweeps">5.3</a>, <a href="#hydro">5.6</a>, change in <a href="#changes">6.3</a>.</p>
         </div></div>
         <div class="finding"><div class="id">F4</div><div class="body">
           <h4><span class="chip warn" data-icon="warn">model</span> The governors deliver less steady-state response than the model counts</h4>
-          <p>In the MIDLANDS zone the governors deliver about 192 pu of response against the 258 pu the model counts, so the frequency settles more than 0.3 Hz off at 96 MW of import, inside the 129 MW quasi-steady-state limit. At its limit the zone settles at 59.68 Hz. Its nadir limit, by contrast, is accurate (59.5 Hz at 105 MW against 102 MW). Section <a href="#sweeps">5.3</a>, change in <a href="#changes">6.2</a>.</p>
+          <p>In the MIDLANDS zone the governors deliver about 218 pu of response against the 258 pu the model counts, so the frequency settles more than 0.3 Hz off at 111 MW of import, inside the 129 MW quasi-steady-state limit. The zone's RoCoF limit of 102 MW is tighter, so at its limit it settles at 59.72 Hz, inside the band. Its nadir limit is 8 % too generous (59.5 Hz at 105 MW against 113 MW), which the RoCoF limit also covers. Section <a href="#sweeps">5.3</a>.</p>
         </div></div>
         <div class="finding"><div class="id">F5</div><div class="body">
           <h4><span class="chip warn" data-icon="warn">model</span> The simulated loads do not respond to frequency, and islands without governors depend on that response</h4>
@@ -249,11 +249,15 @@ details .table-wrap { border: 0; border-radius: 0 0 10px 10px; }
         </div></div>
         <div class="finding"><div class="id">F7</div><div class="body">
           <h4><span class="chip info" data-icon="info">note</span> The constraint costs no solve time; its cost is preemptive load shedding</h4>
-          <p>Solve times with and without it are the same. When an island cannot meet its limit by redispatch, the optimization sheds load before the split instead: 389 MW in SPARTANB, 78 MW in MIDLANDS, 372 MW outside the zone for YORK, 1,328 MW in GREENVIL (a zone with 12 MW of generation). Section <a href="#test2">4</a>.</p>
+          <p>Solve times with and without it are the same. When an island cannot meet its limit by redispatch, the optimization sheds load before the split instead: 399 MW in SPARTANB, 78 MW in MIDLANDS, 389 MW outside the zone for YORK, 1,328 MW in GREENVIL (a zone with 12 MW of generation). Section <a href="#test2">4</a>.</p>
         </div></div>
         <div class="finding"><div class="id">F8</div><div class="body">
           <h4><span class="chip good" data-icon="good">fixed</span> The batch runner called run_islanding with a keyword it no longer has</h4>
           <p><code>batch_islanding.jl</code> passed <code>run_psse=</code>, but <code>run_islanding</code> now takes <code>run_dynamic_sim</code>, so every batch run failed. Changed to <code>run_dynamic_sim=run_psse</code>.</p>
+        </div></div>
+        <div class="finding"><div class="id">F9</div><div class="body">
+          <h4><span class="chip good" data-icon="good">fixed</span> ANDES 2.0's hydro governor model had scaling errors</h4>
+          <p>ANDES keeps HYGOV's gate and flow on the system base. With <var>S</var> = machine MVA / 100, that leaves three errors on the machine base: the integrator gain is 1/<var>S</var> instead of 1/(r·Tr) (ANDES computes r·Tr but never uses it), Tw acts as Tw·<var>S</var>, and Dturb is <var>S</var> times too large. Hydro units here range from about 1 to 725 MVA, so the errors differ from unit to unit. Given the same speed, unmodified units were up to 8.8 times off the PSS®E block diagram; <code>correct_hygov</code> in <code>andes_scripts/dynamic.py</code> now brings them to a ratio of 1.00, except a few units of about 5 MVA or less, where ANDES's rate limit logic differs. This was checked against the block diagram as coded, not against a PSS®E run. The effect: SPARTANB reaches 59.5 Hz at 26 MW instead of 18 MW and no longer collapses at 150 MW; MIDLANDS settles closer to 60 Hz and becomes secure at its limit. TGOV1 and GAST do not have this problem. Sections <a href="#sweeps">5.3</a>, <a href="#hydro">5.6</a>.</p>
         </div></div>
       </div>
     </section>
@@ -294,20 +298,31 @@ details .table-wrap { border: 0; border-radius: 0 0 10px 10px; }
       </figure>
 
       <h3 id="sfr"><span class="num">1.4</span>The SFR model behind the limits</h3>
-      <p>frequency.jl represents each island as one equivalent machine driven by one equivalent governor: the <b>system frequency response (SFR) model</b> of Anderson and Mirheydar (1990). With <var>Δf</var> the frequency deviation in per unit (<var>Δf</var> = (<var>f</var> − 60)/60) and <var>t</var> = 0 the moment the lines open:</p>
+      <p>frequency.jl gives each island one frequency, the idea of the <b>system frequency response (SFR) model</b> of Anderson and Mirheydar (1990), and gives each online unit its own governor from the .dyr. With <var>Δf</var> the frequency deviation in per unit (<var>Δf</var> = (<var>f</var> − 60)/60) and <var>t</var> = 0 the moment the lines open:</p>
       <div class="equation">
-        <div>2<var>H</var> · d<var>Δf</var>/d<var>t</var> = <var>ΔP</var><sub>m</sub> − <var>D</var> · <var>Δf</var> − <var>ΔP</var></div>
-        <div><var>ΔP</var><sub>m</sub> = −<var>K</var> · ( <var>F</var><sub>H</sub> · <var>Δf</var> + (1 − <var>F</var><sub>H</sub>) · <var>z</var> )</div>
-        <div><var>T</var><sub>R</sub> · d<var>z</var>/d<var>t</var> = <var>Δf</var> − <var>z</var></div>
+        <div>2<var>H</var> · d<var>Δf</var>/d<var>t</var> = Σ<sub><var>i</var></sub> <var>ΔP</var><sub>m,<var>i</var></sub> − <var>D</var> · <var>Δf</var> − <var>ΔP</var></div>
+        <div><var>ΔP</var><sub>m,<var>i</var></sub> = <var>G<sub>i</sub></var> · ( (1 + <var>w<sub>i</sub></var>) · <var>q<sub>i</sub></var> − <var>w<sub>i</sub></var> · <var>x<sub>i</sub></var> ) − <var>d<sub>i</sub></var> · <var>Δf</var></div>
+        <div><var>T</var><sub>s,<var>i</var></sub> · d<var>z<sub>i</sub></var>/d<var>t</var> = <var>Δf</var> − <var>z<sub>i</sub></var>, &nbsp; <var>T</var><sub>1,<var>i</var></sub> · d<var>x<sub>i</sub></var>/d<var>t</var> = −( <var>s<sub>i</sub></var> · <var>Δf</var> + (1 − <var>s<sub>i</sub></var>) · <var>z<sub>i</sub></var> ) − <var>x<sub>i</sub></var>, &nbsp; <var>T</var><sub>2,<var>i</var></sub> · d<var>q<sub>i</sub></var>/d<var>t</var> = <var>x<sub>i</sub></var> − <var>q<sub>i</sub></var></div>
       </div>
       <ul>
-        <li><b>First line, the swing equation.</b> The rotating mass (inertia <var>H</var>) speeds up or slows down by the power imbalance: the extra mechanical power from the governors <var>ΔP</var><sub>m</sub>, minus the change of load with frequency <var>D</var>·<var>Δf</var>, minus the lost import <var>ΔP</var>.</li>
-        <li><b>Second and third lines, a reheat steam turbine.</b> A frequency drop makes the governor open the steam valve in proportion to the drop (total gain <var>K</var>, section 1.5). In a reheat turbine only a fraction <var>F</var><sub>H</sub> of the power comes from the high-pressure stage, which follows the valve at once. The remaining 1 − <var>F</var><sub>H</sub> comes from the intermediate- and low-pressure stages, after the steam has passed through the reheater, a large volume that delays it with time constant <var>T</var><sub>R</sub>. <var>z</var> is that delayed signal.</li>
-        <li><b>Fixed constants.</b> <var>F</var><sub>H</sub> = 0.3 (<code>REHEAT_FRACTION</code>) and <var>T</var><sub>R</sub> = 7 s (<code>REHEAT_TIME</code>) are the same for every island and every unit, whatever its actual governor. Governor limits (maximum and minimum output, rate limits) and deadbands are not modelled, so the response is linear: twice the deficit gives twice the deviation.</li>
+        <li><b>First line, the swing equation.</b> The rotating mass (inertia <var>H</var>) speeds up or slows down by the power imbalance: the extra mechanical power from all the governors, minus the change of load with frequency <var>D</var>·<var>Δf</var>, minus the lost import <var>ΔP</var>.</li>
+        <li><b>Second and third lines, each unit's governor and turbine.</b> A held frequency drop ends at gain <var>G<sub>i</sub></var>. The fast share <var>s<sub>i</sub></var> of that follows the frequency at once and the rest comes through the slow lag <var>T</var><sub>s,<var>i</var></sub>; the sum then passes two short lags, <var>T</var><sub>1,<var>i</var></sub> and <var>T</var><sub>2,<var>i</var></sub>. For a hydro unit <var>w<sub>i</sub></var> gives the water column's wrong-way start and <var>d<sub>i</sub></var> its turbine damping.</li>
+        <li><b>Numbers from the .dyr.</b> Table below, each gain scaled by MBASE<sub><var>i</var></sub>/100 (<code>calc_governor_unit</code>). For HYGOV this is the governor's exact linear form, gate/speed = (1/<var>R</var>)(1 + s·Tr)/(1 + s·Tr(r + <var>R</var>)/<var>R</var>), and in a single-unit test it stays within 1.5 % of the full block diagram's nadir limit on all 40 units. The gate opening <var>g</var> = <var>P</var><sub>g</sub>/(At·MBASE) + qNL comes from the case's dispatch before the solve. Governor limits (maximum and minimum output, rate limits) and deadbands are not modelled, so the response is linear: twice the deficit gives twice the deviation.</li>
         <li><b>RoCoF limit.</b> At <var>t</var> = 0 nothing has responded yet (<var>Δf</var> = 0, <var>ΔP</var><sub>m</sub> = 0), so d<var>Δf</var>/d<var>t</var> = −<var>ΔP</var>/(2<var>H</var>). In Hz/s that is 60·<var>ΔP</var>/(2<var>H</var>); keeping it within 0.5 Hz/s gives |<var>ΔP</var>| ≤ 2<var>H</var>·0.5/60.</li>
-        <li><b>QSS limit.</b> Once everything has settled (d<var>Δf</var>/d<var>t</var> = 0 and <var>z</var> = <var>Δf</var>), <var>Δf</var> = −<var>ΔP</var>/(<var>D</var> + <var>K</var>). Keeping it within 0.3/60 pu gives |<var>ΔP</var>| ≤ (<var>D</var> + <var>K</var>)·0.3/60.</li>
+        <li><b>QSS limit.</b> Once everything has settled, each unit gives its full response. The limit counts <var>K</var> = Σ 1/<var>R</var> (1.5), so <var>Δf</var> = −<var>ΔP</var>/(<var>D</var> + <var>K</var>), and keeping it within 0.3/60 pu gives |<var>ΔP</var>| ≤ (<var>D</var> + <var>K</var>)·0.3/60. For HYGOV the true final gain is At/<var>R</var>, about 1.2 times larger, so this errs on the safe side.</li>
         <li><b>Nadir limit.</b> There is no simple formula, so frequency.jl simulates the model: forward Euler integration with a 0.01 s step over 20 s (the simulated time after the split in dynamic.py). It finds by bisection the largest <var>ΔP</var> whose lowest frequency stays at or above 59.5 Hz, to 10<sup>−5</sup> pu (0.001 MW).</li>
       </ul>
+      <div class="table-wrap">
+        <table class="text-table">
+          <thead><tr><th>Governor</th><th>Gain <var>G</var></th><th>Fast share <var>s</var></th><th>Slow lag <var>T</var><sub>s</sub></th><th>Lag <var>T</var><sub>1</sub></th><th>Lag <var>T</var><sub>2</sub></th><th><var>w</var>, <var>d</var></th></tr></thead>
+          <tbody>
+            <tr><td>TGOV1 (steam)</td><td>1/<var>R</var></td><td>T2/T3</td><td>T3</td><td>T1</td><td></td><td></td></tr>
+            <tr><td>HYGOV (hydro)</td><td>At/<var>R</var></td><td><var>R</var>/(r + <var>R</var>)</td><td>Tr(r + <var>R</var>)/<var>R</var></td><td>Tg + Tf</td><td>0.5·<var>g</var>·Tw</td><td><var>w</var> = 2(<var>g</var> − qNL)/<var>g</var>, <var>d</var> = Dturb·<var>g</var></td></tr>
+            <tr><td>GAST (gas)</td><td>1/<var>R</var></td><td>1</td><td></td><td>T1</td><td>T2</td><td></td></tr>
+            <tr><td>IEEEG1, IEESGO</td><td>1/<var>R</var></td><td>0.3 (<code>REHEAT_FRACTION</code>)</td><td>7 s (<code>REHEAT_TIME</code>)</td><td></td><td></td><td></td></tr>
+          </tbody>
+        </table>
+      </div>
 
       <h3 id="hkd"><span class="num">1.5</span>Where H, K and D come from</h3>
       <p>Once per island, before the optimization (<code>add_frequency_security!</code>), from the online units and loads inside the island. Values are in <b>per unit (pu) on the system base</b>: power divided by 100 MVA (the base of both cases), frequency deviation divided by 60 Hz. So <var>K</var> = 200 pu means the island's governors add 200 × 100 MW for a 1 pu (60 Hz) drop, which is 333 MW per Hz.</p>
@@ -343,19 +358,20 @@ details .table-wrap { border: 0; border-radius: 0 0 10px 10px; }
             <tr><td><var>R</var>, droop</td><td>Per-unit frequency change that moves a unit from zero to full output</td><td>.dyr governor model; 0.04–0.07 here, mostly 0.05</td></tr>
             <tr><td><var>K</var>, governor gain</td><td>Extra mechanical power (pu) per pu of frequency drop, in steady state</td><td>Σ (MBASE<sub><var>i</var></sub>/100)/<var>R<sub>i</sub></var> (1.5)</td></tr>
             <tr><td><var>D</var>, load damping</td><td>Load reduction (pu) per pu of frequency drop</td><td>1.0 × island load in pu (<code>LOAD_DAMPING</code>)</td></tr>
-            <tr><td><var>F</var><sub>H</sub></td><td>Share of a reheat steam turbine's power that responds at once (high-pressure stage)</td><td>Constant 0.3 in frequency.jl (<code>REHEAT_FRACTION</code>)</td></tr>
-            <tr><td><var>T</var><sub>R</sub></td><td>Reheater time constant (s): delay of the remaining 1 − <var>F</var><sub>H</sub></td><td>Constant 7 s in frequency.jl (<code>REHEAT_TIME</code>)</td></tr>
-            <tr><td><var>ΔP</var><sub>m</sub>, <var>z</var></td><td>Extra mechanical power from the governors; the reheater-delayed frequency signal</td><td>States of the SFR model (1.4)</td></tr>
+            <tr><td><var>G<sub>i</sub></var>, <var>s<sub>i</sub></var></td><td>A unit's full governor response (pu per pu of frequency drop) and the share of it that follows the frequency at once</td><td>From its governor in the .dyr (1.4)</td></tr>
+            <tr><td><var>T</var><sub>s,<var>i</var></sub>, <var>T</var><sub>1,<var>i</var></sub>, <var>T</var><sub>2,<var>i</var></sub></td><td>A unit's slow lag and two short lags (s)</td><td>From its governor in the .dyr (1.4)</td></tr>
+            <tr><td><var>w<sub>i</sub></var>, <var>d<sub>i</sub></var>, <var>g</var></td><td>Hydro only: the water column's wrong-way start, turbine damping, and gate opening (pu)</td><td>HYGOV in the .dyr and the case's dispatch (1.4)</td></tr>
+            <tr><td><var>ΔP</var><sub>m,<var>i</var></sub>, <var>z<sub>i</sub></var>, <var>x<sub>i</sub></var>, <var>q<sub>i</sub></var></td><td>A unit's extra mechanical power; its slow-stage, gate and flow signals</td><td>States of the SFR model (1.4)</td></tr>
             <tr><td>RoCoF</td><td>Rate of change of frequency (Hz/s)</td><td>Model: the initial slope. Simulation: frequency change over the first 500 ms ÷ 0.5 s</td></tr>
             <tr><td>Nadir, zenith</td><td>Lowest frequency after a deficit, highest after a surplus (Hz)</td><td>Minimum / maximum of the frequency after the split</td></tr>
             <tr><td>QSS, settling frequency</td><td>Frequency the island settles at after the governors respond (Hz)</td><td>Model: <var>Δf</var> = −<var>ΔP</var>/(<var>D</var>+<var>K</var>). Simulation: mean frequency 19–20 s after the split</td></tr>
-            <tr><td>SFR model</td><td>System frequency response model: one equivalent machine and governor per island</td><td>Anderson &amp; Mirheydar (1990), as in 1.4</td></tr>
+            <tr><td>SFR model</td><td>System frequency response model: one frequency per island, with each unit's own governor</td><td>After Anderson &amp; Mirheydar (1990), as in 1.4</td></tr>
             <tr><td>UFLS</td><td>Underfrequency load shedding: relays that disconnect load when frequency falls</td><td>LDSHBL relays in the .dyr (Figure 2)</td></tr>
             <tr><td>Preemptive shedding</td><td>Load the OPF disconnects before the split</td><td>Objectives <code>opf_shed</code>, <code>flow_shed</code> (section 2)</td></tr>
             <tr><td>Dead island</td><td>Island left without any generating unit</td><td>No limit; de-energized in the simulation</td></tr>
             <tr><td>GENROU, GENSAL, GENCLS</td><td>Generator models: round rotor, salient pole, classical</td><td>.dyr; source of <var>H<sub>i</sub></var>. ANDES reads GENSAL as GENROU.</td></tr>
-            <tr><td>TGOV1</td><td>Steam turbine-governor. Parameters: <var>R</var>; T1 valve time constant; VMAX, VMIN valve limits (pu of MBASE); T2, T3 a lead-lag that represents the reheater; Dt turbine damping</td><td>.dyr. Its step response starts at T2/T3 of the final value and rises with time constant T3, so it is the SFR reheat model with <var>F</var><sub>H</sub> = T2/T3 and <var>T</var><sub>R</sub> = T3. Here T2/T3 = 0.30–0.33 and T3 = 6.3–10 s, except savnw units 101 and 102 with T2 = T3 = 1 s (no reheat delay). VMIN is 0.3 in savnw (those units cannot run below 30 % of their MVA rating) and 0 in ACTIVSg500.</td></tr>
-            <tr><td>HYGOV</td><td>Hydro turbine-governor. Parameters: <var>R</var> permanent droop; r temporary droop and Tr its reset time; Tf, Tg filter and gate servo time constants; VELM maximum gate speed; GMAX, GMIN gate limits; Tw water starting time; At turbine gain; Dturb; qNL no-load flow</td><td>.dyr. Right after a disturbance the governor acts with the much larger droop <var>R</var> + r (r = 0.07–0.97 here, against <var>R</var> = 0.04–0.07, so 2 to 25 times weaker), and moves to the permanent droop <var>R</var> over a few times Tr (0.6–9.9 s). This is deliberate: fast gate movement is unstable because of the water's inertia. Tw (0.13–1.25 s) is the time the water column needs to accelerate; when the gate opens, the power first dips before it rises.</td></tr>
+            <tr><td>TGOV1</td><td>Steam turbine-governor. Parameters: <var>R</var>; T1 valve time constant; VMAX, VMIN valve limits (pu of MBASE); T2, T3 a lead-lag that represents the reheater; Dt turbine damping</td><td>.dyr. Its step response starts at T2/T3 of the final value and rises with time constant T3. Here T2/T3 = 0.30–0.33 and T3 = 6.3–10 s, except savnw units 101 and 102 with T2 = T3 = 1 s (no reheat delay). VMIN is 0.3 in savnw (those units cannot run below 30 % of their MVA rating) and 0 in ACTIVSg500.</td></tr>
+            <tr><td>HYGOV</td><td>Hydro turbine-governor. Parameters: <var>R</var> permanent droop; r temporary droop and Tr its reset time; Tf, Tg filter and gate servo time constants; VELM maximum gate speed; GMAX, GMIN gate limits; Tw water starting time; At turbine gain; Dturb; qNL no-load flow</td><td>.dyr. Right after a disturbance the governor acts with the much larger droop <var>R</var> + r (r = 0.07–0.97 here, against <var>R</var> = 0.04–0.07, so 2 to 25 times weaker), and moves to the permanent droop <var>R</var> with time constant Tr(r + <var>R</var>)/<var>R</var> (3–197 s here). This is deliberate: fast gate movement is unstable because of the water's inertia. Tw (0.13–1.25 s) is the time the water column needs to accelerate; when the gate opens, the power first dips before it rises.</td></tr>
             <tr><td>GAST</td><td>Gas turbine-governor: <var>R</var>; T1 fuel valve and T2 turbine time constants; T3, AT and KT a load limiter; VMAX, VMIN; Dturb</td><td>.dyr. T1 = 0.1–0.5 s and T2 = 0.1–1 s here: much faster than a reheat steam turbine.</td></tr>
             <tr><td>SEXS, IEEET1, SCRX, IEEEST</td><td>Excitation systems and stabilizers (voltage control)</td><td>.dyr; not used by the constraint</td></tr>
             <tr><td>FRQTPAT</td><td>Generator frequency relay</td><td>savnw .dyr only; settings in Figure 2</td></tr>
@@ -416,7 +432,7 @@ details .table-wrap { border: 0; border-radius: 0 0 10px 10px; }
       <p>Before any optimization, frequency.jl reads the machine data, finds the islands and computes their limits. Test 1 recomputes each of these independently and compares (<code>1_offline.jl</code>), for every scenario of section 2.</p>
 
       <h3 id="machines"><span class="num">3.1</span>Machine data from the .dyr</h3>
-      <p><code>read_dyr_machine_data</code> reads <var>H<sub>i</sub></var> from each unit's generator model and <var>R<sub>i</sub></var> from its governor model, by parameter position. ANDES has its own .dyr reader; it stores the inertia as <var>M</var> = 2<var>H</var> on the unit's MVA base and the droop <var>R</var> on the same base. The test reads both cases with ANDES (<code>andes_dyr_check.py</code>) and compares, unit by unit, <var>H</var>, <var>R</var> and the MVA base.</p>
+      <p><code>read_dyr_machine_data</code> reads <var>H<sub>i</sub></var> from each unit's generator model, and <var>R<sub>i</sub></var> and the speed numbers of 1.4 from its governor model, by parameter position. ANDES has its own .dyr reader; it stores the inertia as <var>M</var> = 2<var>H</var> on the unit's MVA base and the droop <var>R</var> on the same base. The test reads both cases with ANDES (<code>andes_dyr_check.py</code>) and compares, unit by unit, <var>H</var>, <var>R</var> and the MVA base. The speed numbers' positions were checked once against ANDES's reader table.</p>
       <div class="statline" id="machine-stats"></div>
       <details>
         <summary>All online units, Julia against ANDES</summary>
@@ -457,7 +473,7 @@ details .table-wrap { border: 0; border-radius: 0 0 10px 10px; }
       </figure>
       <p class="columns">Columns: nadir limit; model frequency at the limit and just above it; linearity spread (relative); limit from the exact solution; difference of the code's limit from it; time of the lowest point; whether it lies inside the 20 s window.</p>
       <div class="table-wrap" id="nadir-table"></div>
-      <p>Result: the bisection is exact, the model is linear to rounding error, and Euler integration makes the limit at most 0.26 % smaller than exact (on the safe side). The lowest point comes 0.5–2.6 s after the split in every island with governors (0.5 s in GREENVIL, which has almost no inertia). Only the islands without a governor have no turning point within 20 s, which makes their nadir limit depend on the window length.</p>
+      <p>Result: the bisection is exact, the model is linear to rounding error, and Euler integration makes the limit at most 0.40 % smaller than exact (on the safe side). The lowest point comes 0.5–2.3 s after the split in every island with governors (0.5 s in GREENVIL, which has almost no inertia). Only the islands without a governor have no turning point within 20 s, which makes their nadir limit depend on the window length.</p>
 
       <h3 id="binding"><span class="num">3.4</span>Which limit binds</h3>
       <p>The RoCoF limit depends only on <var>H</var>, the QSS limit only on <var>D</var> and <var>K</var>, and the nadir limit on all three. Figure 4 scales one of them at a time for three islands and shows how the three limits move; the map scales <var>H</var> and <var>K</var> together and colours each point by the limit that is smallest.</p>
@@ -478,7 +494,7 @@ details .table-wrap { border: 0; border-radius: 0 0 10px 10px; }
         </div>
         <figcaption>The vertical line in each panel and the ringed cell in the map mark the island as it is (scale 1).</figcaption>
       </figure>
-      <p>Result: RoCoF is the smallest limit in 29 of the 31 islands; the other two have no governor, where QSS is smallest. In these cases the islands have little inertia relative to their governor gain, and for such islands RoCoF binds. The nadir limit only becomes the smallest for islands with much more inertia than governor response.</p>
+      <p>Result: RoCoF is the smallest limit in 19 of the 31 islands and the nadir limit in 10; the other two have no governor, where QSS is smallest. With one steam governor for every unit, RoCoF was the smallest in 29. The nadir limit takes over where the governors are slow relative to the inertia, as in SPARTANB and the savnw bottom island.</p>
     </section>
 
     <!-- ==================== 4. Test 2 ==================== -->
@@ -509,7 +525,7 @@ details .table-wrap { border: 0; border-radius: 0 0 10px 10px; }
       <p>Tests 1 and 2 show the constraint does what its formulas say. Test 3 checks whether the formulas describe what actually happens, by simulating the islands after the split (<code>3_dynamic.jl</code>).</p>
 
       <h3 id="method"><span class="num">5.1</span>How the runs work</h3>
-      <p>Every run exports the OPF solution as a PSS®E RAW file and runs <code>andes_scripts/dynamic.py</code>, as <code>run_islanding</code> does: ANDES solves the power flow of the exported case, opens the target lines at <var>t</var> = 5 s and simulates until 25 s, so 20 s after the split. dynamic.py converts every load the way the PSS®E script does: active power as constant current (<var>P</var> proportional to the voltage) and reactive power as constant admittance (<var>Q</var> proportional to the voltage squared). Neither depends on frequency, so the simulation has no load damping (<var>D</var> = 0).</p>
+      <p>Every run exports the OPF solution as a PSS®E RAW file and runs <code>andes_scripts/dynamic.py</code>, as <code>run_islanding</code> does: ANDES solves the power flow of the exported case, opens the target lines at <var>t</var> = 5 s and simulates until 25 s, so 20 s after the split. dynamic.py converts every load the way the PSS®E script does: active power as constant current (<var>P</var> proportional to the voltage) and reactive power as constant admittance (<var>Q</var> proportional to the voltage squared). Neither depends on frequency, so the simulation has no load damping (<var>D</var> = 0). It also corrects ANDES's HYGOV after setup (<code>correct_hygov</code>, F9).</p>
       <p>Two kinds of runs:</p>
       <ul>
         <li><b>Calibration sweeps</b> fix the scheduled import of one island at a series of values and simulate each. The import is fixed by an equality constraint added in the test only (the OPF otherwise as <code>opf</code>). The FRQTPAT and LDSHBL relays are removed from the .dyr, so the frequency shows what the system does on its own, without relays cutting load or units. Three sweeps: savnw north-south (−200 to +200 MW into the north island), ACTIVSg500 MIDLANDS with loads ×0.7 (−150 to +400 MW), SPARTANB with loads ×0.5 (−75 to +300 MW). Each run also gives the response of the other island, which receives about the opposite import.</li>
@@ -535,7 +551,7 @@ details .table-wrap { border: 0; border-radius: 0 0 10px 10px; }
       </div>
 
       <h3 id="step"><span class="num">5.2</span>Opening the boundary also changes voltages, and the load follows</h3>
-      <p>The model assumes the island loses exactly its scheduled import. Figure 6 compares that with the power step its machines actually take up. For the ACTIVSg500 zones the two agree within 2 %. In savnw they do not: deficits come out smaller and surpluses larger, and at zero import the north island still takes a 72 MW surplus.</p>
+      <p>The model assumes the island loses exactly its scheduled import. Figure 6 compares that with the power step its machines actually take up. For the ACTIVSg500 zones the slope agrees within 3 %, though SPARTANB's machines also take up about 13 MW at zero import (5.6). In savnw the two do not agree: deficits come out smaller and surpluses larger, and at zero import the north island still takes a 72 MW surplus.</p>
       <figure>
         <div class="fig-title">Figure 6. Scheduled import against the power step the island's machines take up at the split</div>
         <div class="legend" id="step-legend"></div>
@@ -575,10 +591,10 @@ details .table-wrap { border: 0; border-radius: 0 0 10px 10px; }
       <div class="table-wrap" id="sweep-table"></div>
       <h4>What the sweeps show, island by island</h4>
       <ul>
-        <li><b>MIDLANDS zone (hydro, gas and steam units).</b> RoCoF follows the model closely: the inertia is right. The nadir limit is accurate: 59.5 Hz is reached at 105 MW against a limit of 102 MW. The settling frequency is off: the governors deliver <var>K</var><sub>eff</sub> = 192 pu against <var>K</var> + <var>D</var> = 258 pu (partly the missing load damping, mostly governor behaviour), so the frequency settles more than 0.3 Hz off at 96 MW of import and 98 MW of export, inside the QSS limit of 129 MW. At 300 MW and more it settles more than 1 Hz off, as the same trend predicts (those runs are left out of the <var>K</var><sub>eff</sub> fit).</li>
-        <li><b>SPARTANB zone (hydro units only, explained step by step in 5.6).</b> RoCoF matches the model within a few percent at large imports, so the inertia is right. Everything after the first second is worse than modelled. 59.5 Hz is reached at 18 MW of import, against a nadir limit of 58 MW (0.32 times); 60.5 Hz at 33 MW of export; the settling band is left at 46 MW. The hydro governors' temporary droop makes their first seconds of response weak (section 1.7, HYGOV), exactly when the nadir happens; by 20 s they have delivered about two thirds of their steady-state gain (<var>K</var><sub>eff</sub> = 99 against 151 pu). From 150 MW of import the zone does not recover at all and settles near 51 Hz. A linear model cannot show that; which governor or turbine limit causes it was not investigated.</li>
+        <li><b>MIDLANDS zone (hydro, gas and steam units).</b> The limit is safe. RoCoF reaches 0.5 Hz/s at 130 MW against a limit of 102 MW. 59.5 Hz is reached at 105 MW against a nadir limit of 113 MW, 8 % too generous, but the RoCoF limit is tighter: at 102 MW the nadir is 59.52 Hz. The model's frequency is within 0.02 to 0.08 Hz of the simulation up to 150 MW. The governors deliver <var>K</var><sub>eff</sub> = 218 pu against <var>K</var> + <var>D</var> = 258 pu, so the frequency settles more than 0.3 Hz off at 111 MW of import and 112 MW of export, inside the QSS limit of 129 MW. At 400 MW it settles more than 1 Hz off (left out of the <var>K</var><sub>eff</sub> fit).</li>
+        <li><b>SPARTANB zone (hydro units only, explained step by step in 5.6).</b> RoCoF matches: 0.5 Hz/s at 52 MW against a limit of 49 MW. 59.5 Hz is reached at 26 MW of import, against a nadir limit of 36 MW (0.72 times), nearly all of it the voltage effect; 60.5 Hz at 40 MW of export; the settling band is left at 72 MW of import against 75 MW. The hydro governors now deliver their full response in the simulation (<var>K</var><sub>eff</sub> = 155 against 151 pu). The zone recovers up to 150 MW (nadir 57.62 Hz, settling 59.38 Hz). The first runs settled near 51 Hz from 150 MW; that went away with the correction of F9. At 200 and 300 MW the frequency falls to about 51 Hz and ANDES stops within about 10 s (time step reduced to zero), so those two runs are left out. Why it collapses there was not investigated.</li>
         <li><b>savnw north island.</b> The governor gain is right (<var>K</var><sub>eff</sub> = 194 against 207 pu: these are steam units, as the model assumes), but the split's own surplus (5.2) shifts everything upward: at zero import the island settles 0.10 Hz high. Imports are safer than modelled: 59.5 Hz at 99 MW against a limit of 77 MW, the settling band at 129 MW against 104 MW. Exports are less safe: 60.5 Hz at 34 MW of export, and RoCoF already exceeds 0.5 Hz/s at 7 MW of export, against a limit of 56.5 MW.</li>
-        <li><b>The large "rest of system" islands</b> (and the savnw south island on the import side) never reach a threshold within the sweep range. Only the south island's RoCoF crosses 0.5 Hz/s, at 195 MW of export, against a limit of 222 MW.</li>
+        <li><b>The large "rest of system" islands</b> (and the savnw south island on the import side) never reach a threshold within the sweep range. Only the south island's RoCoF crosses 0.5 Hz/s, at 188 MW of export, against a limit of 222 MW.</li>
       </ul>
 
       <h3 id="traces"><span class="num">5.4</span>Frequency traces</h3>
@@ -603,13 +619,13 @@ details .table-wrap { border: 0; border-radius: 0 0 10px 10px; }
         <table class="text-table">
           <thead><tr><th>Scenario</th><th>Frequency security off</th><th>Frequency security on</th></tr></thead>
           <tbody>
-            <tr><td>savnw · north-south, north ×1.6<br><span class="mono">opf_shed</span></td><td>The north island imports 341 MW. Its frequency falls to 58.23 Hz and UFLS sheds 188 MW. The south island, losing an export of 348 MW, peaks at 60.55 Hz.</td><td>70 MW shed beforehand, import 56.5 MW (the limit). No UFLS, but the north island loses about 270 MW of load as its voltage drops (5.2): it overshoots to 60.89 Hz with a RoCoF of 1.38 Hz/s. Not secure.</td></tr>
+            <tr><td>savnw · north-south, north ×1.6<br><span class="mono">opf_shed</span></td><td>The north island imports 341 MW. Its frequency falls to 58.23 Hz and UFLS sheds 188 MW. The south island, losing an export of 348 MW, peaks at 60.54 Hz.</td><td>70 MW shed beforehand, import 56.5 MW (the limit). No UFLS, but the north island loses about 270 MW of load as its voltage drops (5.2): it overshoots to 60.89 Hz with a RoCoF of 1.38 Hz/s. Not secure.</td></tr>
             <tr><td>savnw · top<br><span class="mono">opf</span></td><td>The island exports 417 MW. Its frequency passes 61.8 Hz after 0.62 s, the FRQTPAT relay trips unit 3011, and the island is left without generation (the simulation stops).</td><td>Export 50 MW. That needs unit 3011 at about 150 MW, below the 300 MW minimum of its governor model (TGOV1 VMIN = 0.3 of 1000 MVA). ANDES has to clamp the governor at initialization, the unit accelerates and trips at 61.8 Hz after 1.3 s.</td></tr>
             <tr><td>savnw · top, 3005 at 400 MW<br><span class="mono">opf</span></td><td>Export 271 MW; 61.8 Hz after 1.24 s, unit 3011 trips, the island is lost.</td><td>Export 50 MW. Zenith 60.33 Hz, RoCoF 0.26 Hz/s, settles at 60.14 Hz. Secure.</td></tr>
             <tr><td>savnw · left<br><span class="mono">opf_shed</span></td><td>Import 83 MW into an island whose only unit has no governor. UFLS sheds 33 MW, the frequency still reaches 57.8 Hz after 0.9 s and the unit trips.</td><td>82 MW shed beforehand, import 1 MW (the QSS limit). UFLS stage 1 sheds 5.7 MW after 1.2 s, which turns the small deficit into a surplus. Nothing holds the frequency (no governor, no load damping in the simulation): it climbs to 61.8 Hz and the unit trips after 13.4 s.</td></tr>
-            <tr><td>ACTIVSg500 · SPARTANB<br><span class="mono">opf_shed</span></td><td>Import 441 MW. UFLS sheds all it can (the three stages add up to 17 % of the load, 165 MW) and the zone collapses to 44.9 Hz.</td><td>389 MW shed beforehand, import 49 MW (the limit). The frequency still falls to 59.26 Hz and UFLS sheds 72 MW, then overshoots to 60.78 Hz. Not secure: the hydro response is too slow (5.3, 5.6).</td></tr>
-            <tr><td>ACTIVSg500 · MIDLANDS<br><span class="mono">opf_shed</span></td><td>Import 181 MW. Nadir 59.25 Hz, UFLS sheds 133 MW.</td><td>78 MW shed beforehand, import 102 MW (the limit). Nadir 59.52 Hz, no UFLS, but it settles at 59.68 Hz, 0.02 Hz outside the 0.3 Hz band (5.3). Not secure by that margin.</td></tr>
-            <tr><td>ACTIVSg500 · YORK<br><span class="mono">opf_shed</span></td><td>York exports 892 MW. Its frequency runs away to 65.1 Hz (ACTIVSg500 has no generator over-frequency relays) and the simulation stops after 7.9 s. The rest of the system loses that supply: UFLS sheds 321 MW there.</td><td>372 MW shed beforehand, all outside the zone, export 164 MW (the limit). Zenith 60.496 Hz, RoCoF 0.38 Hz/s. Secure, with both islands.</td></tr>
+            <tr><td>ACTIVSg500 · SPARTANB<br><span class="mono">opf_shed</span></td><td>Import 441 MW. UFLS sheds all it can (the three stages add up to 17 % of the load, 165 MW) and the zone collapses to about 45.6 Hz. ANDES stops 9.1 s after the split (time step reduced to zero).</td><td>399 MW shed beforehand, import 39 MW (the limit, now the nadir limit). The frequency falls to 59.43 Hz and UFLS stage 1 sheds 30 MW; it then peaks at 60.19 Hz and settles at 59.97 Hz. Not secure: the voltage effect adds 9 MW to the deficit (5.6).</td></tr>
+            <tr><td>ACTIVSg500 · MIDLANDS<br><span class="mono">opf_shed</span></td><td>Import 181 MW. Nadir 59.25 Hz, UFLS sheds 133 MW.</td><td>78 MW shed beforehand, import 102 MW (the limit). Nadir 59.52 Hz, no UFLS, settles at 59.72 Hz. Secure, with both islands.</td></tr>
+            <tr><td>ACTIVSg500 · YORK<br><span class="mono">opf_shed</span></td><td>York exports 892 MW. Its frequency runs away to 66.8 Hz (ACTIVSg500 has no generator over-frequency relays). The rest of the system loses that supply: UFLS sheds 321 MW there.</td><td>389 MW shed beforehand, all outside the zone, export 147 MW (the limit, now the nadir limit). Zenith 60.44 Hz, RoCoF 0.34 Hz/s. Secure, with both islands.</td></tr>
           </tbody>
         </table>
       </div>
@@ -626,11 +642,11 @@ details .table-wrap { border: 0; border-radius: 0 0 10px 10px; }
       <div class="table-wrap" id="pf-table"></div>
 
       <h3 id="hydro"><span class="num">5.6</span>The hydro-only zone SPARTANB, step by step</h3>
-      <p>This is the case behind finding F2. It shows how far a limit can be off when the model's governor is not the governor the units really have.</p>
+      <p>This is the case behind findings F2, F3 and F9. With the model's governors now right, it shows what is left.</p>
 
       <h4>What the constraint is meant to do here</h4>
       <p>SPARTANB has 8 generating units, all hydro (water turbines), with about 608 MW of generation, and 1,043 MW of load. It normally imports power from the rest of the grid over its 18 boundary lines. When those lines open, the imported power disappears at once. The zone is then short of power by about the amount it was importing, and its frequency starts to fall. The constraint caps the import so that the fall stays acceptable.</p>
-      <p>It computes three caps and applies the smallest. For the sweep version of the zone (loads halved, section 5.1) they are 49 MW for the speed of the fall (RoCoF), 58 MW for the lowest frequency (the nadir) and 75 MW for the frequency it settles at. The zone as it is in the off/on run has 49, 62 and 78 MW. So the constraint lets this zone import up to <b>49 MW</b>. The 58 MW is the nadir cap on its own, which is the one the simulation contradicts most.</p>
+      <p>It computes three caps and applies the smallest. For the sweep version of the zone (loads halved, section 5.1) they are 49 MW for the speed of the fall (RoCoF), 36 MW for the lowest frequency (the nadir) and 75 MW for the frequency it settles at. The zone as it is in the off/on run has 49, 39 and 78 MW. So the constraint lets this zone import up to <b>39 MW</b>, and the nadir sets it. With one steam governor for every unit the nadir cap was 62 MW and the limit was RoCoF's 49 MW.</p>
 
       <h4>What the model says and what the simulation shows</h4>
       <p>The sweep fixes the import at a series of values and simulates each one. The table compares the lowest frequency the model predicts with the lowest frequency ANDES gives. The requirement is to stay at or above 59.5 Hz, where the first underfrequency relays start to cut load.</p>
@@ -638,113 +654,114 @@ details .table-wrap { border: 0; border-radius: 0 0 10px 10px; }
         <table class="text-table">
           <thead><tr><th>Import (MW)</th><th class="n">Lowest frequency, model (Hz)</th><th class="n">Lowest frequency, simulation (Hz)</th><th class="n">Time of lowest point, model / simulation (s)</th><th>Against 59.5 Hz</th></tr></thead>
           <tbody>
-            <tr><td>0</td><td class="n">60.00</td><td class="n">59.86</td><td class="n">none / 2.18</td><td>Simulation dips even with no import</td></tr>
-            <tr><td>25</td><td class="n">59.78</td><td class="n">59.37</td><td class="n">2.25 / 2.83</td><td>Simulation fails</td></tr>
-            <tr><td>50</td><td class="n">59.57</td><td class="n">58.86</td><td class="n">2.25 / 2.98</td><td>Model passes, simulation fails by 0.64 Hz</td></tr>
-            <tr><td>75</td><td class="n">59.35</td><td class="n">58.36</td><td class="n">2.25 / 3.06</td><td>Both fail</td></tr>
-            <tr><td>100</td><td class="n">59.14</td><td class="n">57.87</td><td class="n">2.25 / 3.11</td><td>Both fail</td></tr>
-            <tr><td>150</td><td class="n">58.71</td><td class="n">50.99</td><td class="n">2.25 / 14.45</td><td>Simulation collapses to about 51 Hz and stays there (cause not investigated)</td></tr>
-            <tr class="group-start"><td><b>Import at which 59.5 Hz is reached</b></td><td class="n"><b>58 MW</b></td><td class="n"><b>18 MW</b></td><td class="n"></td><td>The simulation uses up the allowed drop at about a third of the model's import</td></tr>
+            <tr><td>0</td><td class="n">60.00</td><td class="n">59.88</td><td class="n">none / 1.78</td><td>Simulation dips even with no import</td></tr>
+            <tr><td>25</td><td class="n">59.65</td><td class="n">59.51</td><td class="n">2.26 / 2.33</td><td>Both pass, the simulation barely</td></tr>
+            <tr><td>50</td><td class="n">59.30</td><td class="n">59.12</td><td class="n">2.26 / 2.43</td><td>Both fail</td></tr>
+            <tr><td>75</td><td class="n">58.95</td><td class="n">58.74</td><td class="n">2.26 / 2.47</td><td>Both fail</td></tr>
+            <tr><td>100</td><td class="n">58.59</td><td class="n">58.37</td><td class="n">2.26 / 2.48</td><td>Both fail</td></tr>
+            <tr><td>150</td><td class="n">57.89</td><td class="n">57.62</td><td class="n">2.26 / 2.55</td><td>Both fail; the simulation still recovers</td></tr>
+            <tr class="group-start"><td><b>Import at which 59.5 Hz is reached</b></td><td class="n"><b>36 MW</b></td><td class="n"><b>26 MW</b></td><td class="n"></td><td>In the first runs this was 58 MW against 18 MW</td></tr>
           </tbody>
         </table>
       </div>
-      <p>In words. At 50 MW of import the model says the frequency bottoms out at 59.57 Hz, which is acceptable. The simulation says 58.86 Hz, 0.71 Hz lower, well past the point where relays cut load. Its lowest point also comes about 0.7 s later than the model's. The 0.5 Hz of room between 60 and 59.5 Hz is used up at 18 MW in the simulation and at 58 MW in the model.</p>
+      <p>In words. At 50 MW of import the model says the frequency bottoms out at 59.30 Hz and the simulation at 59.12 Hz, 0.17 Hz lower, at nearly the same moment. The gap stays between 0.14 and 0.27 Hz from 25 to 150 MW, and the simulation already dips 0.12 Hz at zero import. So the shape of the response is right, and the curve is shifted. The 0.5 Hz of room between 60 and 59.5 Hz is used up at 26 MW in the simulation and at 36 MW in the model. At 200 and 300 MW the simulated frequency falls to about 51 Hz before ANDES stops, which a linear model cannot show (5.3).</p>
 
-      <h4>Why the model is too optimistic</h4>
-      <p>The ratio between the model's 58 MW and the simulation's 18 MW is 3.15. It splits into three effects, shown in the table. The load damping is described in sections <a href="#hkd">1.5</a> and <a href="#changes">6.4</a>; the other two are explained below the table. The 30.5 MW is read off the sweep, interpolating the machines' power step between the 0 and 25 MW runs.</p>
+      <h4>Why the model is still too optimistic</h4>
+      <p>The ratio between the model's 36 MW and the simulation's 26 MW is 1.39. It splits into three effects, shown in the table. The load damping is described in sections <a href="#hkd">1.5</a> and <a href="#changes">6.4</a>; the other two are explained below the table. The 37.3 MW is read off the sweep, interpolating the machines' power step between the 25 and 50 MW runs.</p>
       <div class="table-wrap">
         <table class="text-table">
-          <thead><tr><th>Step</th><th class="n">MW</th><th class="n">Factor</th><th>Cause</th></tr></thead>
+          <thead><tr><th>Step</th><th class="n">MW</th><th class="n">Factor</th><th class="n">Factor in the first runs</th><th>Cause</th></tr></thead>
           <tbody>
-            <tr><td>Model's nadir cap, as frequency.jl computes it</td><td class="n">57.9</td><td class="n"></td><td></td></tr>
-            <tr><td>The same cap with no load damping</td><td class="n">54.0</td><td class="n">1.07</td><td>The model assumes the load shrinks as the frequency falls; the simulated loads do not</td></tr>
-            <tr><td>Deficit the simulated machines really see when 59.5 Hz is reached</td><td class="n">30.5</td><td class="n">1.77</td><td>What is left once the other two are accounted for, which is the governors: the hydro governors respond more slowly than the model's steam governor</td></tr>
-            <tr><td>Scheduled import at which that happens</td><td class="n">18.4</td><td class="n">1.66</td><td>Opening the lines raises the zone's voltage and its load, which adds about 12 MW of deficit that is not part of the import</td></tr>
-            <tr class="group-start"><td><b>Total</b></td><td class="n"></td><td class="n"><b>3.15</b></td><td></td></tr>
+            <tr><td>Model's nadir cap, as frequency.jl computes it</td><td class="n">35.5</td><td class="n"></td><td class="n"></td><td></td></tr>
+            <tr><td>The same cap with no load damping</td><td class="n">32.0</td><td class="n">1.11</td><td class="n">1.07</td><td>The model assumes the load shrinks as the frequency falls; the simulated loads do not</td></tr>
+            <tr><td>Deficit the simulated machines really see when 59.5 Hz is reached</td><td class="n">37.3</td><td class="n">0.86</td><td class="n">1.77</td><td>What is left, which is the governors: below 1 means the model's governors are now somewhat on the safe side. This remainder was not explained further</td></tr>
+            <tr><td>Scheduled import at which that happens</td><td class="n">25.6</td><td class="n">1.46</td><td class="n">1.66</td><td>Opening the lines raises the zone's voltage and its load, which adds about 12 MW of deficit that is not part of the import</td></tr>
+            <tr class="group-start"><td><b>Total</b></td><td class="n"></td><td class="n"><b>1.39</b></td><td class="n"><b>3.15</b></td><td></td></tr>
           </tbody>
         </table>
       </div>
+      <p>The first runs' factors mixed two things: the steam governor in the model and the error in ANDES's hydro governor (F9), which made the simulated units slower than the .dyr says.</p>
 
       <h4>The governors: slow on purpose</h4>
-      <p>A governor reacts to a frequency drop by letting more steam or water into the turbine. How strongly it reacts is set by its <b>droop</b>, and a smaller droop means a stronger reaction. A hydro governor has two. The permanent droop <var>R</var> (5 % for most units here) applies once everything has settled. On top of it sits a temporary droop <var>r</var> that applies at first and fades away over the reset time <var>T</var><sub>r</sub>. The reason is the water. A long column of water cannot be sped up quickly, so if the gate is opened fast the turbine's power first dips and the control becomes unstable. The temporary droop makes the governor open the gate gently at first.</p>
-      <p>In SPARTANB the three large units (236 MVA each) carry 97 % of the zone's governor response. Their temporary droop is 0.11, 0.47 and 0.29, so right after the split they act with a droop of 0.16, 0.52 and 0.34, which is 3, 10 and 7 times weaker than their permanent 0.05. The temporary droop fades with reset times of 1.5, 1.7 and 4.4 s, which overlaps with the 2 to 3 s in which the nadir is decided. On top of that, the water starting time of 0.3 to 0.8 s makes each unit's power dip briefly before it rises.</p>
-      <p>The model gives every unit a steam governor instead. Of its full response, 30 % acts at once and the rest within about 7 s. The first three rows of the table are hand estimates from the .dyr parameters (the sum over the zone's units of MVA/100 divided by the droop), not simulation outputs, and the hydro value ignores the gate servo delay, so the true early response is somewhat smaller still. The last row is measured.</p>
+      <p>A governor reacts to a frequency drop by letting more steam or water into the turbine. How strongly it reacts is set by its <b>droop</b>, and a smaller droop means a stronger reaction. A hydro governor has two. The permanent droop <var>R</var> (5 % for most units here) applies once everything has settled. On top of it sits a temporary droop <var>r</var> that applies at first and fades away. The reason is the water. A long column of water cannot be sped up quickly, so if the gate is opened fast the turbine's power first dips and the control becomes unstable. The temporary droop makes the governor open the gate gently at first.</p>
+      <p>In SPARTANB the three large units (236 MVA each) carry 97 % of the zone's governor response. Their temporary droop is 0.11, 0.47 and 0.29, so the fast part of their response is 31 %, 10 % and 15 % of the full one, and the rest arrives with time constants of 4.7, 18 and 30 s. The nadir is decided in the first 2 to 3 s, so most of that slow part comes too late for it. On top of that, the water starting time of 0.3 to 0.8 s makes each unit's power dip briefly before it rises. The model now has all of this (1.4).</p>
       <div class="table-wrap">
         <table class="text-table">
           <thead><tr><th></th><th class="n">Governor response (pu per pu of frequency drop)</th><th class="n">MW per Hz of drop</th></tr></thead>
           <tbody>
-            <tr><td>Full response once settled (the model's <var>K</var>)</td><td class="n">145.5</td><td class="n">243</td></tr>
-            <tr><td>Model, right after the split (30 % of <var>K</var>)</td><td class="n">43.7</td><td class="n">73</td></tr>
-            <tr><td>Hydro governors, right after the split (at most)</td><td class="n">27.3</td><td class="n">45</td></tr>
-            <tr><td>Hydro governors, delivered by 20 s in the simulation (<var>K</var><sub>eff</sub>)</td><td class="n">98.7</td><td class="n">165</td></tr>
+            <tr><td>Full response as the QSS limit counts it (<var>K</var>)</td><td class="n">145.5</td><td class="n">243</td></tr>
+            <tr><td>Full response in the nadir model (with At)</td><td class="n">177.0</td><td class="n">295</td></tr>
+            <tr><td>Fast part in the nadir model</td><td class="n">33.0</td><td class="n">55</td></tr>
+            <tr><td>The old steam model's fast part (30 % of <var>K</var>), for comparison</td><td class="n">43.7</td><td class="n">73</td></tr>
+            <tr><td>Delivered by 20 s in the simulation (<var>K</var><sub>eff</sub>)</td><td class="n">154.7</td><td class="n">258</td></tr>
           </tbody>
         </table>
       </div>
-      <p>Right after the split the hydro governors can deliver at most 27 pu against the model's 44 pu. How much of that gap is left at the moment of the nadir was not measured separately, but the simulation shows that the shortfall lasts: after 20 s the zone has delivered only two thirds of its full response (99 against 151 pu, counting the model's <var>K</var> + <var>D</var>). The inertia is right (the RoCoF agrees with the model at larger imports, section 5.3), and the load damping and the voltage effect are accounted for in the table above, so the governor response is what is left. That is the factor 1.77. It was found by elimination; the simulation was not rerun with a different governor model to confirm it.</p>
+      <p>The hydro units are slow, but they do deliver: 155 pu by 20 s, against the 99 pu ANDES gave before the correction of F9.</p>
 
       <h4>The voltage effect</h4>
-      <p>This is the effect of section 5.2, here with the opposite sign to savnw. When the 18 lines open, the voltage at the zone's load buses rises by about 0.03 pu. The simulated loads draw power in proportion to voltage, so the load rises by 14 MW. Even at zero import the machines therefore have to make up a 13 MW deficit in the first instant. At the 18 MW import where 59.5 Hz is reached, the machines see about 30 MW, not 18 MW. The model assumes they see exactly the import. That is the factor 1.66.</p>
+      <p>This is the effect of section 5.2, here with the opposite sign to savnw. When the 18 lines open, the voltage at the zone's load buses rises by about 0.03 pu. The simulated loads draw power in proportion to voltage, so the load rises by 13 to 14 MW. Even at zero import the machines therefore have to make up a 13 MW deficit in the first instant. At the 26 MW import where 59.5 Hz is reached, the machines see about 37 MW. The model assumes they see exactly the import. That is the factor 1.46, now the largest of the three.</p>
 
       <h4>What happens with the constraint on</h4>
-      <p>This is the off/on run of section 5.5, with the zone's real loads. To bring the import down to its 49.4 MW limit, the optimization first sheds 389 MW of the zone's load, leaving 654 MW. The model predicts a lowest frequency of 59.60 Hz for this import (59.54 Hz without load damping), so no relay should act. The simulation does this.</p>
+      <p>This is the off/on run of section 5.5, with the zone's real loads. To bring the import down to its 39.1 MW limit, the optimization first sheds 399 MW of the zone's load, leaving 644 MW. The model predicts a lowest frequency of 59.50 Hz for this import (59.39 Hz without load damping), so no relay should act. The simulation does this.</p>
       <div class="table-wrap">
         <table class="text-table">
           <thead><tr><th>Time after the split</th><th>What happens</th></tr></thead>
           <tbody>
-            <tr><td>0 s</td><td>The lines open. The machines take a 57.8 MW deficit, 8 MW more than the import because of the voltage effect. The speed of the fall over the first 0.5 s is 0.46 Hz/s, inside the 0.5 Hz/s limit, so the RoCoF cap does its job.</td></tr>
-            <tr><td>about 1.0 s</td><td>The frequency drops below 59.5 Hz. The relays wait 0.3 s before acting.</td></tr>
-            <tr><td>1.29 s</td><td>Underfrequency stage 1 acts: 30 MW (5 % of the load) shed across 34 loads. The frequency keeps falling.</td></tr>
-            <tr><td>1.79 s</td><td>Lowest point, 59.26 Hz, 0.34 Hz below the model's 59.60 Hz. Stage 2 (59.3 Hz) acts: 42 MW (7 %) shed.</td></tr>
-            <tr><td>5.2 s</td><td>The frequency has overshot to 60.78 Hz. The relays removed 72 MW against a deficit of 58 MW, and the governors had raised their output by then, so the zone is in surplus.</td></tr>
-            <tr><td>20 s</td><td>Settles at 60.17 Hz.</td></tr>
+            <tr><td>0 s</td><td>The lines open. The machines take a 48.4 MW deficit, 9 MW more than the import because of the voltage effect. The speed of the fall over the first 0.5 s is 0.39 Hz/s, inside the 0.5 Hz/s limit.</td></tr>
+            <tr><td>about 1.3 s</td><td>The frequency drops below 59.5 Hz. The relays wait 0.3 s before acting.</td></tr>
+            <tr><td>1.62 s</td><td>Underfrequency stage 1 acts: 30 MW (5 % of the load) shed across 34 loads.</td></tr>
+            <tr><td>1.78 s</td><td>Lowest point, 59.43 Hz, 0.07 Hz below the model's 59.50 Hz. Stage 2 (59.3 Hz) is not reached.</td></tr>
+            <tr><td>5.3 s</td><td>The frequency peaks at 60.19 Hz, inside the 60.5 Hz requirement.</td></tr>
+            <tr><td>20 s</td><td>Settles at 59.97 Hz.</td></tr>
           </tbody>
         </table>
       </div>
-      <p>The constraint still helps a great deal. Without it the zone imports 441 MW and collapses to 44.9 Hz even with 165 MW of load shed. With it the zone survives and 72 MW is shed. But the constraint's purpose was that no relay acts at all, and that is not achieved. These numbers are for a different operating point from the sweep (the zone carries a different load), so they should not be read against the table above digit by digit.</p>
-      <p>The fix is in sections <a href="#changes">6.2</a> (give the model each island's own governor, which for hydro units means the temporary droop and the reset time) and <a href="#changes">6.3</a> (account for the voltage change at the split).</p>
+      <p>The constraint helps a great deal. Without it the zone imports 441 MW and collapses to about 45.6 Hz even with 165 MW of load shed. With it the zone stays within every requirement except the nadir, by 0.07 Hz, and one relay stage sheds 30 MW. In the first runs the same case fell to 59.26 Hz, shed 72 MW and overshot to 60.78 Hz. But the constraint's purpose is that no relay acts at all, and that is not yet achieved. These numbers are for a different operating point from the sweep (the zone carries a different load), so they should not be read against the table above digit by digit.</p>
+      <p>The next fix is section <a href="#changes">6.3</a> (account for the voltage change at the split).</p>
     </section>
 
     <!-- ==================== 6. Changes ==================== -->
     <section id="changes">
       <h2><span class="num">6</span>What to change</h2>
-      <p>In order of importance. 6.1 is a bug fix; 6.2 to 6.5 change the model behind the limits; 6.6 uses the sweep results directly.</p>
+      <p>In order of importance. 6.1 is a bug fix; 6.2 is done in these runs; 6.3 to 6.5 change the model behind the limits; 6.6 uses the sweep results directly.</p>
 
       <h3><span class="num">6.1</span>Skip out-of-service lines when building the island's boundary</h3>
       <p><code>calc_island_boundary_arcs</code> lists every target line with one end in the island, including lines with <code>br_status = 0</code>. Such a line carries no flow, and PowerModels leaves it out of the model, so <code>constraint_island_frequency_security</code> fails when it looks up its flow variable, and <code>print_frequency_security</code> fails the same way on the solution. A guard that skips lines out of service in <code>calc_island_boundary_arcs</code> fixes both. The islands themselves need no change: they are computed on the network with the target lines opened, where an already-open line makes no difference.</p>
 
-      <h3><span class="num">6.2</span>Give the model each island's own governor dynamics</h3>
-      <p>frequency.jl gives every island the same governor: a reheat steam turbine with <var>F</var><sub>H</sub> = 0.3 and <var>T</var><sub>R</sub> = 7 s (1.4). The .dyr already describes how each unit's governor actually behaves, and the tests show where the difference matters:</p>
+      <h3><span class="num">6.2</span>Give the model each island's own governor dynamics (done)</h3>
+      <p>frequency.jl gave every island the same governor, a reheat steam turbine with a fast share of 0.3 and a slow lag of 7 s. It now gives each unit its own (1.4), still with one linear cap per island found by bisection:</p>
       <ul>
-        <li><b>Steam units (TGOV1).</b> TGOV1's T2 and T3 parameters are the reheat model itself: the turbine's power first jumps by T2/T3 of its final change and then rises with time constant T3, so <var>F</var><sub>H</sub> = T2/T3 and <var>T</var><sub>R</sub> = T3. For the TGOV1 units here that is <var>F</var><sub>H</sub> = 0.30–0.33 and <var>T</var><sub>R</sub> = 6.3–10 s, close to the constants, except savnw units 101 and 102 (T2 = T3 = 1 s: no reheat delay, faster than modelled). The savnw sweep confirms the model fits steam units (<var>K</var><sub>eff</sub> 194 against 207 pu).</li>
-        <li><b>Hydro units (HYGOV).</b> They respond in a different way, which the reheat model cannot represent. Their temporary droop r (0.07–0.97 here, against a permanent droop <var>R</var> = 0.04–0.07) makes their first response 2 to 25 times weaker than their steady-state one, recovering over the reset time Tr (0.6–9.9 s); and the water starting time Tw (0.13–1.25 s) makes their power dip briefly before it rises. The nadir happens in those first 2–3 seconds, which is why the hydro-only SPARTANB zone reaches 59.5 Hz at a third of its nadir limit.</li>
-        <li><b>Gas units (GAST)</b> have fuel-valve and turbine time constants of 0.1–1 s, so they respond much faster than a reheat steam turbine. In MIDLANDS, where 4 of the 11 online units are gas, the nadir limit comes out accurate.</li>
+        <li><b>Steam units (TGOV1).</b> Fast share T2/T3 and slow lag T3 are close to the old constants, except savnw units 101 and 102 (T2 = T3 = 1 s: no reheat delay). That is why the savnw south island's nadir limit rises from 277 to 403 MW; RoCoF still sets its limit.</li>
+        <li><b>Hydro units (HYGOV).</b> These changed the most: the SPARTANB nadir limit falls from 62 to 39 MW, YORK's from 220 to 147 MW, the savnw bottom island's from 136 to 98 MW.</li>
+        <li><b>Gas units (GAST)</b> are much faster than a reheat steam turbine. In MIDLANDS, where 4 of the 11 online units are gas, the nadir limit rises from 102 to 113 MW; RoCoF still sets its limit.</li>
       </ul>
-      <p>Two ways to use this while keeping the offline search and the linear constraint. (a) Split the governor term into one branch per governor type, each with its own parameters from the .dyr and its own share of <var>K</var>; the island is still one linear model, so the bisection for the nadir limit and the QSS formula stay as they are. (b) Bisect on a slightly larger reduced simulation, one equivalent machine per governor type. Either way, the sweeps here (5.3) are the check: the model should reproduce the SPARTANB and MIDLANDS curves.</p>
+      <p>No island's final limit got looser in the 31 islands tested, and the sweeps (5.3) confirm the change: the model's frequency is within 0.14 to 0.23 Hz of the simulation for SPARTANB from 25 to 100 MW, and within 0.08 Hz for MIDLANDS up to 150 MW. Governor limits are still not modelled (6.5).</p>
 
       <h3><span class="num">6.3</span>Account for the voltage change at the split</h3>
-      <p>The model assumes the island loses exactly its active import. In savnw the island also loses the reactive power the boundary lines supplied, its voltages drop by about 0.1 pu, and its load, which depends on voltage, falls by 70–160 MW (5.2). This makes deficits smaller and surpluses larger than modelled, so the symmetric limit is conservative for imports and unsafe for exports. Two options:</p>
+      <p>This is now the largest error left. The model assumes the island loses exactly its active import. In savnw the island also loses the reactive power the boundary lines supplied, its voltages drop by about 0.1 pu, and its load, which depends on voltage, falls by 70–160 MW (5.2). This makes deficits smaller and surpluses larger than modelled, so the symmetric limit is conservative for imports and unsafe for exports. In SPARTANB the voltage rises by about 0.03 pu and the load grows by about 13 MW, so the limit is unsafe for imports (5.6). Two options:</p>
       <ul>
         <li>Add the expected load change to the scheduled import before applying the limit: with constant-current loads, Δ<var>P</var><sub>load</sub> ≈ Σ <var>P</var><sub>load</sub> × Δ<var>V</var>, where Δ<var>V</var> is each load bus's voltage change at the split. <code>predict_voltage_change_from_opened_lines</code> in <code>islanding_core.jl</code> already predicts Δ<var>V</var> from the network Jacobian. That makes the effective imbalance, and the limit, depend on the direction of the import.</li>
         <li>Or limit the reactive import over the boundary as well, so the islands keep their voltage when it opens. This also relates to the voltage part of the proposal.</li>
       </ul>
 
       <h3><span class="num">6.4</span>Use the load damping the simulated loads actually have</h3>
-      <p>frequency.jl assumes the load falls 1 % per 1 % of frequency (<code>LOAD_DAMPING</code> = 1.0). The loads in dynamic.py (constant current and admittance) do not depend on frequency, so <code>LOAD_DAMPING</code> = 0 matches the simulation; for islands with governors it changes the limits by a few percent (the green dashed curves in Figure 8). For an island without any governor (<var>K</var> = 0) the QSS limit then becomes zero and the nadir limit tiny: such an island cannot be made frequency-secure, as the savnw left island shows (5.5). It should be reported as such rather than given a 1 MW limit.</p>
+      <p>frequency.jl assumes the load falls 1 % per 1 % of frequency (<code>LOAD_DAMPING</code> = 1.0). The loads in dynamic.py (constant current and admittance) do not depend on frequency, so <code>LOAD_DAMPING</code> = 0 matches the simulation; for islands with governors it lowers the nadir limit by 5 to 18 % in the zones checked (MIDLANDS with loads ×0.7, SPARTANB; the green dashed curves in Figure 8). For an island without any governor (<var>K</var> = 0) the QSS limit then becomes zero and the nadir limit tiny: such an island cannot be made frequency-secure, as the savnw left island shows (5.5). It should be reported as such rather than given a 1 MW limit.</p>
 
       <h3><span class="num">6.5</span>Keep the dispatch inside the governor limits</h3>
-      <p>The OPF uses each unit's pmin and pmax from the RAW file; the governor models have their own limits (TGOV1 and GAST VMIN and VMAX, HYGOV GMIN and GMAX, in pu of MBASE). In savnw every pmin is 0 while TGOV1 VMIN is 0.3 of MBASE, so the OPF can dispatch a unit to an output its governor model cannot hold (5.5, top island). Raising pmin to VMIN × MBASE before the solve avoids that. The same governor limits also cap the upward response: a unit dispatched near VMAX × MBASE contributes little to <var>K</var> in reality, which the model could account for by counting only units with headroom.</p>
+      <p>The OPF uses each unit's pmin and pmax from the RAW file; the governor models have their own limits (TGOV1 and GAST VMIN and VMAX, HYGOV GMIN and GMAX, in pu of MBASE). In savnw every pmin is 0 while TGOV1 VMIN is 0.3 of MBASE, so the OPF can dispatch a unit to an output its governor model cannot hold (5.5, top island). Raising pmin to VMIN × MBASE before the solve avoids that. The same governor limits also cap the upward response: a unit dispatched near VMAX × MBASE gives little response in reality. Now that the nadir model has one response per unit, the OPF can be made to keep the headroom each unit's response needs.</p>
 
       <h3><span class="num">6.6</span>Use the sweeps as the proposal's outer loop</h3>
-      <p>The proposal describes an outer loop: simulate the solution, tighten the limit where the simulation is worse than expected, solve again. The sweeps give the tightening directly: the ratios in the table of 5.3. For the islands here: the nadir limit of the hydro-only zone by 0.32, the QSS limit of MIDLANDS by 0.74, savnw north's export limit by 0.44. Applying those factors to <var>L</var> and solving again would make those islands secure under the same simulation; changes 6.2–6.4 would make the factors close to 1 in the first place.</p>
+      <p>The proposal describes an outer loop: simulate the solution, tighten the limit where the simulation is worse than expected, solve again. The sweeps give the tightening directly: the ratios in the table of 5.3. For the islands here: the nadir limit of the hydro-only zone by 0.72, the QSS limit of MIDLANDS by 0.86, savnw north's export limit by 0.44. Applying those factors to <var>L</var> and solving again would make those islands secure under the same simulation; changes 6.3 and 6.4 would make the factors close to 1 in the first place.</p>
     </section>
 
     <!-- ==================== 7. Reproduce ==================== -->
     <section id="reproduce">
       <h2><span class="num">7</span>Files and reproduction</h2>
       <p>From the repository root, in order:</p>
-      <div class="cmd">julia --project=. runners/frequency_tests/1_offline.jl     # test 1, about 2.5 min
-julia --project=. runners/frequency_tests/2_model.jl       # test 2, about 4 min
-julia --project=. runners/frequency_tests/3_dynamic.jl     # test 3, about 1.5 h of ANDES runs ("sweeps" or "passfail" for one part)
+      <div class="cmd">julia --project=. runners/frequency_tests/1_offline.jl     # test 1, about 1.5 min
+julia --project=. runners/frequency_tests/2_model.jl       # test 2, about 1 min
+julia --project=. runners/frequency_tests/3_dynamic.jl     # test 3, about 20 min of ANDES runs ("sweeps" or "passfail" for one part)
 python runners/frequency_tests/build_report.py             # this page</div>
       <div class="table-wrap">
         <table class="text-table">
@@ -761,7 +778,7 @@ python runners/frequency_tests/build_report.py             # this page</div>
         </table>
       </div>
       <p>All in <code>runners/frequency_tests/</code>. Results in <code>results/frequency_tests/</code>: <code>offline/</code>, <code>model/</code>, <code>dynamic/sweep_*/</code> and <code>dynamic/passfail/</code>, plus <code>report_data.json</code> with everything this page shows. Each ANDES run folder keeps the exported case, the lines tripped, the channels (<code>output_andes_*.csv.gz</code>), the console output and the measurements (<code>metrics.json</code>); the off/on runs also keep dynamic.py's own HTML report.</p>
-      <p>Not changed: <code>frequency.jl</code>, <code>src/</code>, <code>islanding_core.jl</code> and the ANDES scripts. One fix in <code>batch_islanding.jl</code> (F8).</p>
+      <p>Changed since the first runs: <code>frequency.jl</code> (each unit's own governor) and <code>andes_scripts/dynamic.py</code> (<code>correct_hygov</code>). Not changed: <code>src/</code> and <code>islanding_core.jl</code>. One fix in <code>batch_islanding.jl</code> (F8).</p>
     </section>
   </main>
 </div>
@@ -1161,7 +1178,7 @@ onRedraw(() => {
     $("sens-text").replaceChildren(
       h("p", {}, h("b", {}, scenarioName(current)), ` (${current.startsWith("savnw") ? "north island" : "zone"}): H = ${fmt(s.H, 1)} s, K = ${fmt(s.K, 1)} pu, D = ${fmt(s.D, 1)} pu.`),
       h("p", {}, `Over this map RoCoF is the smallest limit at ${share("rocof")} % of the points, the nadir limit at ${share("nadir")} %, QSS at ${share("qss")} %.`),
-      h("p", {}, "RoCoF is smallest wherever inertia is low relative to governor gain. The nadir limit takes over when there is much more inertia than governor response, and QSS when K is small."),
+      h("p", {}, "RoCoF is smallest wherever inertia is low relative to the governors' response. The nadir limit takes over when there is much more inertia than governor response, or the governors are slow, and QSS when K is small."),
     );
   };
   seg($("sens-seg"), order.map(n => ({ value: n, label: scenarioName(n).replace("ACTIVSg500 · ", "") })), current, v => { current = v; draw(); });

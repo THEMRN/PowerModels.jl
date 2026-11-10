@@ -2,9 +2,9 @@
 # (proposal, "Frequency security": RoCoF, quasi-steady-state and nadir bounds).
 #
 # When the boundary opens, each island loses the import its boundary lines were carrying,
-# ΔP = Σ P_ij into the island. The single-machine system frequency response (SFR) model of
-# Anderson & Mirheydar (1990) turns the island's three frequency requirements into limits
-# on that one number:
+# ΔP = Σ P_ij into the island. The system frequency response (SFR) model of Anderson &
+# Mirheydar (1990), one frequency for the whole island with each generator's own governor
+# from the .dyr, turns the island's three frequency requirements into limits on that one number:
 #   RoCoF:               |ΔP| <= 2 H MAX_ROCOF / f0
 #   quasi-steady state:  |ΔP| <= (D + K) MAX_QSS_DEVIATION / f0
 #   nadir:               |ΔP| <= ΔP_nadir, the largest step whose nadir stays above
@@ -26,10 +26,10 @@ const MAX_ROCOF = 0.5                   # Hz/s, initial rate of change of freque
 const MAX_QSS_DEVIATION = 0.3           # Hz, deviation of the settling frequency
 const MIN_NADIR_FREQUENCY = 59.5        # Hz, first UFLS stage of the PSS®E model
 
-# SFR model: the island as one machine with one reheat steam governor-turbine
+# SFR model: one frequency for the whole island
 const LOAD_DAMPING = 1.0                # pu load change per pu frequency change
-const REHEAT_FRACTION = 0.3             # F_H, power share of the high-pressure turbine
-const REHEAT_TIME = 7.0                 # s, T_R, reheat time constant
+const REHEAT_FRACTION = 0.3             # F_H, fast share of governors read without speed data (IEEEG1, IEESGO)
+const REHEAT_TIME = 7.0                 # s, T_R, slow time of those governors
 const SFR_DURATION = 20.0               # s, post-event window simulated in dynamic.py
 const SFR_TIME_STEP = 0.01              # s
 const NADIR_SEARCH_TOLERANCE = 1e-5     # pu (system base)
@@ -38,14 +38,19 @@ const NADIR_SEARCH_TOLERANCE = 1e-5     # pu (system base)
 # ==================== Machine data from the .dyr file ====================
 # Position of the parameter among the values after `bus 'MODEL' id` in a PSS®E .dyr record
 const DYR_INERTIA_POSITION = Dict("GENROU" => 5, "GENROE" => 5, "GENTPJ" => 5, "GENTPF" => 5, "GENSAL" => 4, "GENSAE" => 4, "GENCLS" => 1)
-const DYR_DROOP_POSITION = Dict("TGOV1" => 1, "HYGOV" => 1, "GAST" => 1)      # permanent droop R
+const DYR_GOVERNOR_POSITIONS = Dict(                # permanent droop R and the numbers that set the speed
+    "TGOV1" => Dict("R" => 1, "T1" => 2, "T2" => 5, "T3" => 6),
+    "HYGOV" => Dict("R" => 1, "r" => 2, "Tr" => 3, "Tf" => 4, "Tg" => 5, "Tw" => 9, "At" => 10, "Dturb" => 11, "qNL" => 12),
+    "GAST" => Dict("R" => 1, "T1" => 2, "T2" => 3),
+)
 const DYR_GAIN_POSITION = Dict("IEEEG1" => 3, "IEESGO" => 7)                   # governor gain 1/R
 
 """
     read_dyr_machine_data(dyr_file)
 
-Inertia `"H"` (s) and governor droop `"R"` (pu), both on the machine base, for each
-generator `(bus, id)` of a PSS®E .dyr file. Models missing from the tables above are ignored.
+Inertia `"H"` (s), governor droop `"R"` (pu), governor `"model"` and its speed numbers (named
+as in `DYR_GOVERNOR_POSITIONS`), all on the machine base, for each generator `(bus, id)` of a
+PSS®E .dyr file. Models missing from the tables above are ignored.
 """
 function read_dyr_machine_data(dyr_file)
     # a record can span several lines and ends at '/', the rest of that line is a comment
@@ -60,7 +65,7 @@ function read_dyr_machine_data(dyr_file)
         end
     end
 
-    machines = Dict{Tuple{Int,String},Dict{String,Float64}}()
+    machines = Dict{Tuple{Int,String},Dict{String,Any}}()
     for record in records
         fields = split(replace(record, ',' => ' '))
         length(fields) >= 3 || continue
@@ -68,13 +73,17 @@ function read_dyr_machine_data(dyr_file)
         bus === nothing && continue
         model = strip(fields[2], '\'')
         gen_id = String(strip(fields[3], [' ', '\'']))
-        machine = get!(machines, (bus, gen_id), Dict{String,Float64}())
+        machine = get!(machines, (bus, gen_id), Dict{String,Any}())
 
         if haskey(DYR_INERTIA_POSITION, model)
             machine["H"] = parse(Float64, fields[3+DYR_INERTIA_POSITION[model]])
-        elseif haskey(DYR_DROOP_POSITION, model)
-            machine["R"] = parse(Float64, fields[3+DYR_DROOP_POSITION[model]])
+        elseif haskey(DYR_GOVERNOR_POSITIONS, model)
+            machine["model"] = String(model)
+            for (name, position) in DYR_GOVERNOR_POSITIONS[model]
+                machine[name] = parse(Float64, fields[3+position])
+            end
         elseif haskey(DYR_GAIN_POSITION, model)
+            machine["model"] = String(model)
             machine["R"] = 1 / parse(Float64, fields[3+DYR_GAIN_POSITION[model]])
         end
     end
@@ -93,11 +102,12 @@ function calc_islands_after_opening(network_data, target_lines)
     return sort(collect(calc_connected_components(opened_network)), by=length)
 end
 
-"Target lines on the island's boundary, as arcs `(branch, island bus, outside bus)` leaving the island."
+"In-service target lines on the island's boundary, as arcs `(branch, island bus, outside bus)` leaving the island."
 function calc_island_boundary_arcs(network_data, target_lines, island_buses)
     arcs = Tuple{Int,Int,Int}[]
     for line in target_lines
         branch = network_data["branch"][string(line)]
+        branch["br_status"] != 0 || continue        # out of service: no flow, no variable in the model
         f_bus = branch["f_bus"]
         t_bus = branch["t_bus"]
         if f_bus in island_buses && !(t_bus in island_buses)
@@ -110,13 +120,70 @@ function calc_island_boundary_arcs(network_data, target_lines, island_buses)
 end
 
 """
+Linear response of one generator's governor and turbine to a frequency deviation, for the SFR
+model, on the system base. A held deviation of 1 pu ends at `gain` (pu). `fast_share` of that
+follows frequency at once and the rest comes through the lag `slow_time` (s); the sum then
+passes the lags `delay` and `second_delay` (s). `pg` (pu, system base) sets a hydro unit's gate
+opening, which sets its water column's wrong-way start `water_ratio` and `turbine_damping` (pu).
+"""
+function calc_governor_unit(machine, machine_share, pg)
+    gain = 1 / machine["R"]
+    fast_share = REHEAT_FRACTION
+    slow_time = REHEAT_TIME
+    delay = 0.0
+    second_delay = 0.0
+    water_ratio = 0.0
+    turbine_damping = 0.0
+
+    if machine["model"] == "TGOV1"
+        # (1 + s T2) / (1 + s T3) = T2/T3 + (1 - T2/T3) / (1 + s T3)
+        fast_share = machine["T2"] / machine["T3"]
+        slow_time = machine["T3"]
+        delay = machine["T1"]
+
+    elseif machine["model"] == "HYGOV"
+        R, r, Tr, Tw, At, qNL = machine["R"], machine["r"], machine["Tr"], machine["Tw"], machine["At"], machine["qNL"]
+        gate_opening = clamp(pg / (machine_share * At) + qNL, max(qNL, 0.01), 1.0)      # pu, from the case dispatch
+
+        # gate / speed = (1/R) (1 + s Tr) / (1 + s Tr (r + R)/R), R being a gate droop
+        gain = At / R
+        fast_share = R / (r + R)
+        slow_time = Tr * (r + R) / R
+        delay = machine["Tg"] + machine["Tf"]           # servo and filter as one lag
+
+        # power / gate = (1 - s Tw (g - qNL)) / (1 + 0.5 s Tw g), linearized at the gate opening g
+        second_delay = 0.5 * gate_opening * Tw
+        water_ratio = 2 * (gate_opening - qNL) / gate_opening
+        turbine_damping = machine["Dturb"] * gate_opening
+
+    elseif machine["model"] == "GAST"
+        fast_share = 1.0
+        slow_time = Inf
+        delay = machine["T1"]
+        second_delay = machine["T2"]
+    end
+
+    return (
+        gain=machine_share * gain,
+        fast_share=fast_share,
+        slow_time=slow_time,
+        delay=max(delay, SFR_TIME_STEP),                # forward Euler needs a lag of at least one step
+        second_delay=max(second_delay, SFR_TIME_STEP),
+        water_ratio=water_ratio,
+        turbine_damping=machine_share * turbine_damping,
+    )
+end
+
+"""
 Frequency response of an island on the system base: inertia `H` (s), governor gain
-`K` = Σ 1/R (pu) and load damping `D` (pu), from its online generators and loads.
+`K` = Σ 1/R (pu), load damping `D` (pu) and each governor's own response `governor_units`
+(`calc_governor_unit`), from its online generators and loads.
 """
 function calc_island_frequency_params(network_data, island_buses, machines)
     base_mva = network_data["baseMVA"]
     inertia = 0.0
     governor_gain = 0.0
+    governor_units = []
     gens = 0
     governors = 0
 
@@ -124,7 +191,7 @@ function calc_island_frequency_params(network_data, island_buses, machines)
         gen["gen_status"] == 1 || continue
         gen["gen_bus"] in island_buses || continue
         gen_id = strip(string(gen["source_id"][3]))
-        machine = get(machines, (gen["gen_bus"], gen_id), Dict{String,Float64}())
+        machine = get(machines, (gen["gen_bus"], gen_id), Dict{String,Any}())
         haskey(machine, "H") || println("Gen $(gen_id) at bus $(gen["gen_bus"]) has no machine model in the .dyr, counted with zero inertia")
 
         machine_share = gen["mbase"] / base_mva             # machine base -> system base
@@ -132,6 +199,7 @@ function calc_island_frequency_params(network_data, island_buses, machines)
         gens += 1
         if haskey(machine, "R")
             governor_gain += machine_share / machine["R"]
+            push!(governor_units, calc_governor_unit(machine, machine_share, gen["pg"]))
             governors += 1
         end
     end
@@ -144,6 +212,7 @@ function calc_island_frequency_params(network_data, island_buses, machines)
     return Dict{String,Any}(
         "inertia" => inertia,
         "governor_gain" => governor_gain,
+        "governor_units" => identity.(governor_units),      # a concretely typed vector, for the nadir search
         "damping" => LOAD_DAMPING * island_load,
         "gens" => gens,
         "governors" => governors,
@@ -153,28 +222,44 @@ end
 
 # ==================== Nadir limit by search ====================
 """
+Total power (pu) of the governor `units` at frequency deviation `df` (pu), advancing each one
+forward Euler step. `states` has one column per unit: slow stage, gate and flow deviations (pu).
+"""
+function step_governor_units!(states, units, df, time_step)
+    total_response = 0.0
+    for (i, unit) in enumerate(units)
+        slow, gate, flow = states[1, i], states[2, i], states[3, i]
+
+        demand = -(unit.fast_share * df + (1 - unit.fast_share) * slow)
+        output = (1 + unit.water_ratio) * flow - unit.water_ratio * gate
+        total_response += unit.gain * output - unit.turbine_damping * df
+
+        states[1, i] += time_step * (df - slow) / unit.slow_time
+        states[2, i] += time_step * (demand - gate) / unit.delay
+        states[3, i] += time_step * (gate - flow) / unit.second_delay
+    end
+    return total_response
+end
+
+"""
 Lowest frequency (Hz) after the island loses `deficit` (pu) at t = 0, from the SFR model
 
-    2H dΔf/dt = ΔPm - D Δf - deficit
-    ΔPm = -K (F_H Δf + (1 - F_H) z),    T_R dz/dt = Δf - z
+    2H dΔf/dt = ΣΔPm - D Δf - deficit,    ΔPm from each unit of `step_governor_units!`
 
 integrated with forward Euler over `SFR_DURATION`. Governor limits and deadbands are not
 modeled, so the nadir deviation scales linearly with the deficit.
 """
 function simulate_frequency_nadir(params, deficit)
     H = params["inertia"]
-    K = params["governor_gain"]
     D = params["damping"]
+    units = params["governor_units"]
 
     df = 0.0            # frequency deviation, pu
-    z = 0.0             # reheat stage state, pu
+    states = zeros(3, length(units))
     df_min = 0.0
     for _ in 1:round(Int, SFR_DURATION / SFR_TIME_STEP)
-        governor_response = -K * (REHEAT_FRACTION * df + (1 - REHEAT_FRACTION) * z)
-        ddf = (governor_response - D * df - deficit) / (2 * H)
-        dz = (df - z) / REHEAT_TIME
-        df += SFR_TIME_STEP * ddf
-        z += SFR_TIME_STEP * dz
+        governor_response = step_governor_units!(states, units, df, SFR_TIME_STEP)
+        df += SFR_TIME_STEP * (governor_response - D * df - deficit) / (2 * H)
         df_min = min(df_min, df)
     end
 
