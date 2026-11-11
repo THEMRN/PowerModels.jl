@@ -27,7 +27,7 @@ const MAX_QSS_DEVIATION = 0.3           # Hz, deviation of the settling frequenc
 const MIN_NADIR_FREQUENCY = 59.5        # Hz, first UFLS stage of the PSS®E model
 
 # SFR model: one frequency for the whole island
-const LOAD_DAMPING = 1.0                # pu load change per pu frequency change
+const LOAD_DAMPING = 0.0                # pu load change per pu frequency change
 const REHEAT_FRACTION = 0.3             # F_H, fast share of governors read without speed data (IEEEG1, IEESGO)
 const REHEAT_TIME = 7.0                 # s, T_R, slow time of those governors
 const SFR_DURATION = 20.0               # s, post-event window simulated in dynamic.py
@@ -257,7 +257,7 @@ function simulate_frequency_nadir(params, deficit)
     df = 0.0            # frequency deviation, pu
     states = zeros(3, length(units))
     df_min = 0.0
-    for _ in 1:round(Int, SFR_DURATION / SFR_TIME_STEP)
+    for _ in 1:round(Int, SFR_DURATION/SFR_TIME_STEP)
         governor_response = step_governor_units!(states, units, df, SFR_TIME_STEP)
         df += SFR_TIME_STEP * (governor_response - D * df - deficit) / (2 * H)
         df_min = min(df_min, df)
