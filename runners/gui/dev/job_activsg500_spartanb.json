@@ -1,0 +1,24 @@
+{
+    "type": "run",
+    "settings": {
+        "schema": 1,
+        "case": "cases/psse/ACTIVSg500",
+        "objective": "flow_shed",
+        "opf_model": "AC",
+        "flow_model": "squared",
+        "lambda": 500,
+        "boundary": {"kind": "zone", "name": "spartanb", "bus_pairs": []},
+        "penalties": {
+            "uniform": null,
+            "groups": [{"kind": "zone", "name": "spartanb", "times_lambda": 2.5}],
+            "buses": {},
+            "others": null
+        },
+        "frequency_security": false,
+        "voltage_security": false,
+        "run_dynamic_sim": false,
+        "simulator": "andes",
+        "output_tag": "gui_test",
+        "modifications": {}
+    }
+}

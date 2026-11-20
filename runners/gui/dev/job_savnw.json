@@ -1,0 +1,19 @@
+{
+    "type": "run",
+    "settings": {
+        "schema": 1,
+        "case": "cases/psse/savnw",
+        "objective": "flow_shed",
+        "opf_model": "AC",
+        "flow_model": "squared",
+        "lambda": 500,
+        "boundary": {"kind": "bus_pairs", "name": "", "bus_pairs": [[154, 3008], [154, 153], [152, 153], [152, 3004]]},
+        "penalties": {"uniform": null, "groups": [], "buses": {}, "others": null},
+        "frequency_security": false,
+        "voltage_security": false,
+        "run_dynamic_sim": false,
+        "simulator": "andes",
+        "output_tag": "gui_test",
+        "modifications": {}
+    }
+}
