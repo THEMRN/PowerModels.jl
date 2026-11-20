@@ -1,4 +1,5 @@
 include("../../runners/frequency.jl")
+include("../../runners/voltage.jl")
 
 function solve_ac_opf(file, optimizer; kwargs...)
     return solve_opf(file, ACPPowerModel, optimizer; kwargs...)
@@ -77,6 +78,10 @@ function build_custom_pf(pm::AbstractPowerModel)
 
     if haskey(pm.data, "frequency_islands")
         constraint_island_frequency_security(pm)
+    end
+
+    if contains(obj, "shed")
+        constraint_voltage_shed_requirement(pm)
     end
 end
 

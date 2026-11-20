@@ -44,6 +44,7 @@ if use_config_file
     opf_model = get(cfg, "opf_model", "AC")
     flow_model = get(cfg, "p_model", "squared")
     frequency_security = get(cfg, "frequency_security", false)
+    voltage_security = get(cfg, "voltage_security", false)
 
     # load shedding penalties
     raw_penalties = get(cfg, "load_shedding_penalties", Dict())
@@ -83,6 +84,7 @@ else
     opf_model = "AC"
     flow_model = "squared"  # "abs_sum", "squared", "combined"
     frequency_security = false   # RoCoF, QSS and nadir limits on each island's import (frequency.jl)
+    voltage_security = false     # loop between the optimizer and each island's voltage collapse indicator (voltage.jl)
     uniform_shedding = false
     uniform_penalty = 0 * lambda
     load_shedding_penalties = Dict()
@@ -192,5 +194,6 @@ result = run_islanding(
     target_zone=(@isdefined(target_zone) ? target_zone : nothing),
     selected_buses=(@isdefined(selected_buses) ? selected_buses : nothing),
     frequency_security=frequency_security,
+    voltage_security=voltage_security,
     simulator=dynamic_simulator,
 )

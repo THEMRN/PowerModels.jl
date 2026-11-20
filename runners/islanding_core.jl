@@ -156,6 +156,9 @@ same case/objective don't overwrite each other.
 `frequency_security=true` limits each island's scheduled import by its RoCoF,
 quasi-steady-state and nadir bounds (see frequency.jl); it needs the case .dyr.
 
+`voltage_security=true` wraps the solve in the loop between the optimizer and the
+voltage collapse indicator of each island (see voltage.jl); it needs the AC model.
+
 `simulator` picks the dynamic simulation run after the export: "psse"
 (psse_scripts/dynamic.py) or "andes" (andes_scripts/dynamic.py).
 
@@ -177,9 +180,11 @@ function run_islanding(network_data;
     selected_buses=nothing,
     output_tag=nothing,
     frequency_security::Bool=false,
+    voltage_security::Bool=false,
     simulator::AbstractString="psse",
 )
     simulator in ("psse", "andes") || error("unknown simulator \"$simulator\", use \"psse\" or \"andes\"")
+    voltage_security && opf_model != "AC" && error("voltage_security needs the AC model (bus voltages and reactive power)")
 
     # embed additional configurations in the network data
     network_data["objective"] = ObjectiveType[objective]
@@ -200,7 +205,12 @@ function run_islanding(network_data;
 
     # solve the power flow
     optimizer = optimizer_with_attributes(Ipopt.Optimizer, "print_level" => 4)
-    result = PowerModels.solve_custom_opf(network_data, power_model, optimizer)
+    if voltage_security
+        # re-solved until the voltage indicator of every island clears its threshold
+        result = PowerModels.solve_voltage_secure_opf(network_data, power_model, optimizer, target_lines)
+    else
+        result = PowerModels.solve_custom_opf(network_data, power_model, optimizer)
+    end
     println("---------------------------")
     println("Power Flow Solved")
     println("objective:", result["objective"])
@@ -233,7 +243,12 @@ function run_islanding(network_data;
         "flow_model" => flow_model,
         "uniform_shedding" => uniform_shedding,
         "frequency_security" => frequency_security,
+        "voltage_security" => voltage_security,
     )
+    if voltage_security
+        # distance between the indicator threshold and the worst bus indicator, positive when verified
+        run_info["voltage_margin"] = round(INDICATOR_THRESHOLD - result["voltage_security"]["worst_indicator"], digits=4)
+    end
     if target_zone !== nothing
         run_info["target_zone"] = target_zone
     end

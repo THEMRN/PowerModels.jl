@@ -12,6 +12,8 @@
 #   "opf_model"              : String or Vector{String} (sweep), default "AC"
 #   "frequency_security"     : Bool (default false), RoCoF/QSS/nadir limits on
 #                              each island's import (frequency.jl), needs .dyr
+#   "voltage_security"       : Bool (default false), loop between the optimizer and
+#                              each island's voltage collapse indicator (voltage.jl)
 #   "target_lines"           : Vector of (from_bus, to_bus) tuples. Takes
 #                              precedence over target_zones for line selection.
 #   "target_zones"           : zone name(s). A String is a single zone; a
@@ -43,7 +45,6 @@ using JSON3
 using XLSX
 using LinearAlgebra
 include("excel_generator.jl")
-include("calc_line_flow.jl")
 include("utils.jl")
 include("islanding_core.jl")
 
@@ -185,6 +186,7 @@ for (run_idx, (scenario_idx, run, swept)) in enumerate(all_runs)
     opf_model = get(run, "opf_model", "AC")
     flow_model = get(run, "flow_model", "squared")
     frequency_security = get(run, "frequency_security", false)
+    voltage_security = get(run, "voltage_security", false)
 
     # output tag from swept fields (plus scenario index when several scenarios)
     tag_parts = String[]
@@ -265,6 +267,7 @@ for (run_idx, (scenario_idx, run, swept)) in enumerate(all_runs)
             selected_buses=selected_buses,
             output_tag=output_tag,
             frequency_security=frequency_security,
+            voltage_security=voltage_security,
         )
         row["status"] = string(result["termination_status"])
         row["objective_value"] = result["objective"]
