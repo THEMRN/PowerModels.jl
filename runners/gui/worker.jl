@@ -27,8 +27,12 @@ const OBJECTIVES = ["opf", "flow", "flow_shed", "opf_shed"]
 const OPF_MODELS = ["AC", "DC"]
 const FLOW_MODELS = ["squared", "abs_sum", "combined"]
 const SIMULATORS = ["psse", "andes"]
-const BOUNDARY_KINDS = ["zone", "bus_pairs"]      # "area" comes in phase 2
-const GROUP_KINDS = ["zone"]                      # kinds a penalty group may use; "area" comes in phase 2
+const BOUNDARY_KINDS = ["zone", "area", "bus_pairs"]
+const GROUP_KINDS = ["zone", "area"]              # kinds a group of buses may be (bus field of the same name)
+const GROUP_RECORDS = Dict(                       # kind => (network data key of its records, name field)
+    "zone" => ("zone", "zoname"),
+    "area" => ("area interchange", "arname"),
+)
 const MAX_ERROR_MESSAGE = 2000                    # characters of an error message sent in @@error
 
 
@@ -98,35 +102,48 @@ case_name_of(case_path::AbstractString) = basename(rstrip(case_path, ['/', '\\']
 
 
 # ==================== Case information ====================
-"Zones of the case: index, name, bus count and in-service load (MW), sorted by index."
-function calc_zone_table(network_data)
+"""
+Groups of kind `kind` ("zone" or "area") that the buses belong to: index, name, bus count and
+in-service load (MW), sorted by index. Names come from the case's records, or are the index when
+a group has no record. Empty when the case has fewer than two such groups (nothing to choose).
+"""
+function calc_group_table(network_data, kind::AbstractString)
     base_mva = network_data["baseMVA"]
-    zone_by_bus = Dict{Int,Int}()
+    records_key, name_field = GROUP_RECORDS[kind]
+
+    group_by_bus = Dict{Int,Int}()
     bus_count = Dict{Int,Int}()
     for (_, bus) in network_data["bus"]
-        zone = Int(get(bus, "zone", 0))
-        zone_by_bus[Int(bus["bus_i"])] = zone
-        bus_count[zone] = get(bus_count, zone, 0) + 1
+        group = Int(bus[kind])
+        group_by_bus[Int(bus["bus_i"])] = group
+        bus_count[group] = get(bus_count, group, 0) + 1
     end
+    length(bus_count) < 2 && return Dict{String,Any}[]
 
     load_mw = Dict{Int,Float64}()
     for (_, load) in network_data["load"]
         get(load, "status", 1) == 0 && continue
-        zone = zone_by_bus[Int(load["load_bus"])]
-        load_mw[zone] = get(load_mw, zone, 0.0) + load["pd"] * base_mva
+        group = group_by_bus[Int(load["load_bus"])]
+        load_mw[group] = get(load_mw, group, 0.0) + load["pd"] * base_mva
     end
 
-    zones = Dict{String,Any}[]
-    for (_, zone) in get(network_data, "zone", Dict())
-        index = Int(zone["i"])
-        push!(zones, Dict{String,Any}(
+    name_by_index = Dict{Int,String}()
+    for (_, record) in get(network_data, records_key, Dict())
+        name_by_index[Int(record["i"])] = strip(string(record[name_field]))
+    end
+
+    groups = Dict{String,Any}[]
+    for (index, buses) in bus_count
+        name = get(name_by_index, index, "")
+        isempty(name) && (name = string(index))
+        push!(groups, Dict{String,Any}(
             "index" => index,
-            "name" => strip(string(zone["zoname"])),
-            "buses" => get(bus_count, index, 0),
+            "name" => name,
+            "buses" => buses,
             "load_mw" => round(get(load_mw, index, 0.0), digits=2),
         ))
     end
-    return sort(zones, by=zone -> zone["index"])
+    return sort(groups, by=group -> group["index"])
 end
 
 "Loads of the case: id, bus, pd (MW), qd (Mvar) and status, sorted by id."
@@ -208,32 +225,43 @@ function find_settings_problems(settings)
     return problems
 end
 
-"Buses of a group of kind `kind` (\"zone\") named `name`."
+"Buses of the group of kind `kind` (\"zone\" or \"area\") named `name`, sorted."
 function find_group_buses(network_data, kind::AbstractString, name::AbstractString)
     kind == "zone" && return find_buses_by_zone(network_data, name)
+    kind == "area" && return find_buses_by_area(network_data, name)
+    error("unknown group kind \"$kind\"")
+end
+
+"Boundary branches (exactly one end inside) of the group of kind `kind` named `name`, sorted ids."
+function find_group_branches(network_data, kind::AbstractString, name::AbstractString)
+    kind == "zone" && return find_branches_by_zone(network_data, name)
+    kind == "area" && return find_branches_by_area(network_data, name)
     error("unknown group kind \"$kind\"")
 end
 
 """
-Boundary lines, the buses of the target group (to orient the flows) and the target zone name,
-from the settings' `boundary`. Bus-pair boundaries have no target group.
+Boundary lines, the buses of the target group (to orient the flows) and the target zone or
+area name, from the settings' `boundary`. Bus-pair boundaries have no target group.
 """
 function find_target(network_data, boundary)
-    if boundary["kind"] == "zone"
-        zone_name = string(boundary["name"])
-        target_lines = find_branches_by_zone(network_data, zone_name)
-        selected_buses = find_buses_by_zone(network_data, zone_name)
-        target_zone = zone_name
-        description = "zone $zone_name"
-    else
+    kind = boundary["kind"]
+    if kind == "bus_pairs"
         bus_pairs = [(Int(pair[1]), Int(pair[2])) for pair in boundary["bus_pairs"]]
         target_lines = find_branches_by_bus_pairs(network_data, bus_pairs)
-        selected_buses = nothing
-        target_zone = nothing
-        description = "bus pairs $(join(["$(pair[1])-$(pair[2])" for pair in bus_pairs], ", "))"
+        pair_text = join(["$(pair[1])-$(pair[2])" for pair in bus_pairs], ", ")
+        isempty(target_lines) && error("no boundary line found for bus pairs $pair_text")
+        return (lines=target_lines, buses=nothing, zone=nothing, area=nothing)
     end
-    isempty(target_lines) && error("no boundary line found for $description")
-    return (lines=target_lines, buses=selected_buses, zone=target_zone)
+
+    name = string(boundary["name"])
+    target_lines = find_group_branches(network_data, kind, name)
+    isempty(target_lines) && error("no boundary line found for $kind $name")
+    return (
+        lines=target_lines,
+        buses=find_group_buses(network_data, kind, name),
+        zone=(kind == "zone" ? name : nothing),
+        area=(kind == "area" ? name : nothing),
+    )
 end
 
 """
@@ -305,6 +333,7 @@ function run_from_settings(settings)
         uniform_penalty=uniform_penalty,
         load_shedding_penalties=load_shedding_penalties,
         target_zone=target.zone,
+        target_area=target.area,
         selected_buses=target.buses,
         output_tag=output_tag,
         frequency_security=settings["frequency_security"] == true,
@@ -321,14 +350,15 @@ handle_ping(job) = send_data(job, Dict("pong" => true, "julia" => string(VERSION
 "Reply with the case folders that hold a .raw file."
 handle_list_cases(job) = send_data(job, Dict("cases" => find_cases()))
 
-"Reply with the zones, loads and generators of a case, and whether it has a .dyr file."
+"Reply with the zones, areas, loads and generators of a case, and whether it has a .dyr file."
 function handle_case_info(job)
     case_path = string(job["case"])
     case_files = find_case_files(case_path)
     network_data = find_parsed_case(case_files.raw)
     send_data(job, Dict(
         "case" => case_path,
-        "zones" => calc_zone_table(network_data),
+        "zones" => calc_group_table(network_data, "zone"),
+        "areas" => calc_group_table(network_data, "area"),
         "loads" => calc_load_table(network_data),
         "gens" => calc_gen_table(network_data),
         "has_dyr" => case_files.dyr !== nothing,

@@ -153,12 +153,27 @@ function get_zone_name_by_index(network_data, zone_index)
 end
 
 function get_zone_index_by_name(network_data, zone_name::AbstractString)
-    for (_, zone) in network_data["zone"]
+    for (_, zone) in get(network_data, "zone", Dict())
         if lowercase(strip(zone["zoname"])) == lowercase(strip(zone_name))
             return zone["i"]
         end
     end
-    error("Zone '$zone_name' not found in network data")
+    zone_index = find_group_index_by_number(network_data, "zone", zone_name)
+    zone_index === nothing && error("Zone '$zone_name' not found in network data")
+    return zone_index
+end
+
+"""
+The group index written in `name` (e.g. "3"), when some bus carries it in its `kind` field
+("zone" or "area"), else `nothing`. Lets cases without zone or area records name groups by number.
+"""
+function find_group_index_by_number(network_data, kind::AbstractString, name::AbstractString)
+    index = tryparse(Int, strip(name))
+    index === nothing && return nothing
+    for (_, bus) in network_data["bus"]
+        bus[kind] == index && return index
+    end
+    return nothing
 end
 
 function find_buses_by_zone(network_data, zone_name::AbstractString)
@@ -189,6 +204,46 @@ function find_branches_by_zone(network_data, zone_name::AbstractString)
         f_bus = Int(branch["f_bus"])
         t_bus = Int(branch["t_bus"])
         if xor(f_bus in zone_buses, t_bus in zone_buses)
+            push!(branch_keys, parse(Int, branch_key))
+        end
+    end
+
+    return sort(collect(branch_keys))
+end
+
+"Index of the area named `area_name` (case insensitive, or its number when the case has no area records)."
+function get_area_index_by_name(network_data, area_name::AbstractString)
+    for (_, area) in get(network_data, "area interchange", Dict())
+        if lowercase(strip(area["arname"])) == lowercase(strip(area_name))
+            return area["i"]
+        end
+    end
+    area_index = find_group_index_by_number(network_data, "area", area_name)
+    area_index === nothing && error("Area '$area_name' not found in network data")
+    return area_index
+end
+
+"Buses of the area named `area_name`, sorted."
+function find_buses_by_area(network_data, area_name::AbstractString)
+    area_index = get_area_index_by_name(network_data, area_name)
+    area_buses = Set{Int}()
+    for (_, bus) in network_data["bus"]
+        if bus["area"] == area_index
+            push!(area_buses, Int(bus["bus_i"]))
+        end
+    end
+    return sort(collect(area_buses))
+end
+
+"Branches with exactly one end in the area named `area_name` (the area's boundary), sorted ids."
+function find_branches_by_area(network_data, area_name::AbstractString)
+    area_buses = Set(find_buses_by_area(network_data, area_name))
+
+    branch_keys = Set{Int}()
+    for (branch_key, branch) in network_data["branch"]
+        f_bus = Int(branch["f_bus"])
+        t_bus = Int(branch["t_bus"])
+        if xor(f_bus in area_buses, t_bus in area_buses)
             push!(branch_keys, parse(Int, branch_key))
         end
     end
@@ -414,7 +469,13 @@ end
 function print_branch_flows(result, modified_network_data, target_lines, detailed=false, zone=nothing)
     println("---------------------------")
 
-    zone_buses = zone === nothing ? nothing : find_buses_by_zone(modified_network_data, zone)
+    # flows are oriented into `zone`: a zone name, or the target buses themselves (e.g. an area's)
+    zone_buses = nothing
+    if zone isa AbstractString
+        zone_buses = find_buses_by_zone(modified_network_data, zone)
+    elseif zone !== nothing
+        zone_buses = Set(zone)
+    end
 
     p_flow_sum = 0.0
     q_flow_sum = 0.0

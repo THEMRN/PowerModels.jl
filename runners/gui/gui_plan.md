@@ -24,7 +24,7 @@ A local GUI for running islanding scenarios without editing code. It sets the ru
 | Phase | Title | Depends on | Status |
 |---|---|---|---|
 | 1 | Julia worker | none | done (2026-11-20) |
-| 2 | Areas as well as zones | 1 | not started |
+| 2 | Areas as well as zones | 1 | done (2026-11-20) |
 | 3 | Run hooks: stages and per-run settings file | 1 | not started |
 | 4a | Report data: calc/print split | 2 | not started |
 | 4b | Result summary from the worker | 3, 4a | not started |
@@ -209,7 +209,7 @@ A run that throws leaves `"started"`, and History shows that as incomplete.
   "case_name": "ACTIVSg500",
   "objective": "flow_shed", "lambda": 500, "opf_model": "AC", "flow_model": "squared",
   "target_lines": [{"id": 12, "from": 154, "to": 3008, "ckt": "1"}],
-  "target_zone": "spartanb",
+  "target_zone": "spartanb", "target_area": null,
   "load_shedding_penalties": {"3005": 1250.0},
   "uniform_shedding": false, "uniform_penalty": 0.0,
   "frequency_security": false, "voltage_security": false,
@@ -497,7 +497,7 @@ The summary is in MW and Mvar, rounded as the console reports round. Keys whose 
    - **Boundary:** kind (zone, area or bus pairs; zone and area appear only when `case_info` lists them), group name from `case_info`, bus-pairs text.
    - **Load shedding penalties:** a uniform switch and value; rows of group or bus with a × λ value, which can be added and removed; and "all other loads", blank by default, with the hint "default: 1e4, absolute".
    - **Security and simulation:** frequency security, voltage security (disabled under DC), dynamic simulation, simulator, output tag.
-3. **Case changes.** Changing the case calls `case_info` and refreshes the group lists.
+3. **Case changes.** Changing the case calls `case_info` and refreshes the group lists. `list_cases` also returns folders whose `.raw` does not parse (`savnw_orig`, `simple`, `simple3`). For those, show the `@@error` message next to the case selector and keep the form usable.
 4. **Buttons.**
    - **Run** validates the settings and sends the job. It is disabled while the worker is busy.
    - **Stop** kills and restarts the worker.
@@ -725,7 +725,49 @@ Test folders left in `results/psse`:
 
 `dev/send_jobs.py --full` prints control lines without cutting them (useful for checking `@@result` in phase 4b).
 
+**Phase 2 (2026-11-20).**
+
+*What changed:*
+- **`utils.jl`.** New `get_area_index_by_name`, `find_buses_by_area` and `find_branches_by_area`. The zone and area lookups now fall back to the group number (`find_group_index_by_number`) when a name matches no record, for cases such as case9 that have no records at all.
+- **`print_branch_flows`.** It accepts either a zone name or the target buses themselves as its fifth argument.
+- **`run_islanding`.** It has a new keyword, `target_area`. An area target is written to `run_info.json` as `"target_area"`, so the Python report does not label it "Zone". The penalty scope reads "inside area" or "outside area". Zone runs take exactly the old path.
+- **Worker.** It takes `area` boundaries and penalty groups (`find_group_buses`, `find_group_branches`). `case_info` returns `zones` and `areas` built from the buses, with record names or the number as the name, and an empty list when a case has fewer than two such groups.
+
+*How it was verified:*
+- **Area helpers.** Checked against a direct count from each bus's `area` field on savnw (FLAPCO 6 buses and 7 lines, LIGHTCO 7 and 4, WORLD 10 and 3) and AU14GenModel (areas "1", "3", "5").
+- **Number fallback.** On case9, zone and area "1" gave 9 buses each, and "2" or "x" gave a readable error.
+- **Zone runs unchanged.** The ACTIVSg500 SPARTANB job gave a console output identical, line for line (66 lines), to phase 1, and a `run_info.json` identical to the `islanding.jl` reference.
+- **Area runs.**
+  - savnw LIGHTCO: 25.88 MW shed, net P = 0.191.
+  - AU14GenModel area "3": 183.82 MW shed, net P = -0.09.
+- **Errors.** An unknown area gave "Area 'NOWHERE' not found in network data".
+- **Area path equals zone path.** In savnw, zone SECOND and area LIGHTCO hold the same buses and boundary lines. A zone SECOND run and an area LIGHTCO run gave identical console output (51 lines, apart from the once-per-process Ipopt banner): objective 9097.028165220057, 25.88 MW shed, P = 0.191. Their `run_info.json` files differ only in `target_zone`/`target_area` and the scope word.
+
+Not exercised:
+- an area run with the dynamic simulation (that the report ignores `target_area` rests on reading `report.py` and `dynamic.py`);
+- a penalty list that mixes zone and area groups.
+
+Groups in the cases:
+
+| case | zones | areas |
+|---|---|---|
+| savnw | 4: FIRST, SECOND, FIFTH, PLANT | 3: FLAPCO, LIGHTCO, WORLD |
+| AU14GenModel | 1 | 5, named "1" to "5" |
+| ACTIVSg200 | 6 (7 records, zone 1 has no buses) | 1 |
+| ACTIVSg500, ACTIVSg500z | 6 | 1 |
+| IEEE39, Hawaii40_20231026 | 1 | 1 |
+| case9, case9_edited_dyr | no records | no records |
+| savnw_orig, simple, simple3 | not parsed | not parsed |
+
+The last three fail to parse ("'@!IC' for IC is not of type Int64"), an issue that predates this phase; `case_info` on them gives an error.
+
+New test folders: `savnw_flow_shed_gui_test_area`, `savnw_flow_shed_gui_test_zone_second` and `AU14GenModel_flow_shed_gui_test_area`.
+
+*For the next phases:*
+- **Phase 3.** Its `CLAUDE.md` update should mention the new `run_info.json` key `target_area`.
+- **Ask the user.** An "Area" row in the Python report header would be a change to the report, so ask before adding one.
+
 *For the next phases:*
 - **Phase 2.** The extension points are `BOUNDARY_KINDS`, `GROUP_KINDS` and `find_group_buses` in `worker.jl`. `find_target` and `case_info` (`calc_zone_table`) need the area cases.
-- **Target zone name.** `target_zone` is passed exactly as given, so `run_info.json` shows the name as the GUI sends it ("SPARTANB" from `case_info`, where `islanding.jl` writes "spartanb").
+- **Target zone name.** `target_zone` is passed exactly as given, so `run_info.json` shows the name as the GUI sends it. That is the record name from `case_info`, for example "Spartanb" for ACTIVSg500 and "SPARTANB" for ACTIVSg500z, where `islanding.jl` writes "spartanb".
 - **Not yet supported.** Settings with a non-empty `modifications` are rejected until phase 9.

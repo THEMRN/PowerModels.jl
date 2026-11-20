@@ -162,6 +162,10 @@ voltage collapse indicator of each island (see voltage.jl); it needs the AC mode
 `simulator` picks the dynamic simulation run after the export: "psse"
 (psse_scripts/dynamic.py) or "andes" (andes_scripts/dynamic.py).
 
+`target_zone` or `target_area` names the group the boundary encloses; `selected_buses`
+are its buses (flows are reported into them). An area goes to run_info as
+"target_area", which the Python report does not show as a zone.
+
 Returns the solve `result`.
 """
 function run_islanding(network_data;
@@ -177,6 +181,7 @@ function run_islanding(network_data;
     uniform_penalty::Real=0.0,
     load_shedding_penalties=Dict(),
     target_zone=nothing,
+    target_area=nothing,
     selected_buses=nothing,
     output_tag=nothing,
     frequency_security::Bool=false,
@@ -222,6 +227,8 @@ function run_islanding(network_data;
     end
     if target_zone !== nothing
         print_branch_flows(result, network_data, target_lines, false, target_zone)
+    elseif target_area !== nothing
+        print_branch_flows(result, network_data, target_lines, false, selected_buses)
     else
         print_branch_flows(result, network_data, target_lines)
     end
@@ -252,6 +259,10 @@ function run_islanding(network_data;
     if target_zone !== nothing
         run_info["target_zone"] = target_zone
     end
+    if target_area !== nothing
+        run_info["target_area"] = target_area
+    end
+    group_word = target_area !== nothing ? "area" : "zone"     # in the penalty scope text
     if uniform_shedding
         run_info["uniform_penalty_rel"] = lambda != 0 ? uniform_penalty / lambda : uniform_penalty
     elseif !isempty(load_shedding_penalties) && lambda != 0
@@ -261,9 +272,9 @@ function run_islanding(network_data;
             penalized_buses = Set(parse(Int, k) for k in keys(load_shedding_penalties))
             zone_buses = Set(selected_buses)
             if issubset(penalized_buses, zone_buses)
-                run_info["shed_penalty_scope"] = "inside zone"
+                run_info["shed_penalty_scope"] = "inside $group_word"
             elseif isempty(intersect(penalized_buses, zone_buses))
-                run_info["shed_penalty_scope"] = "outside zone"
+                run_info["shed_penalty_scope"] = "outside $group_word"
             else
                 run_info["shed_penalty_scope"] = "mixed"
             end
