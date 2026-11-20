@@ -142,6 +142,36 @@ function predict_voltage_change_from_opened_lines(network_data, result, target_l
     return Dict(:rows => rows, :endpoint_rows => endpoint_rows, :delta_p => delta_p, :delta_q => delta_q, :delta_v => delta_v)
 end
 
+# Per-run settings file -------------------------------------------------------
+"Bus pair and circuit id of a branch, from its RAW `source_id` (branch or transformer record)."
+function calc_branch_source(branch)
+    source = branch["source_id"]
+    circuit_index = source[1] == "branch" ? 4 : 5
+    return (from=source[2], to=source[3], ckt=source[circuit_index])
+end
+
+"Write the per-run settings record (`settings_<timestamp>.json`) as indented JSON."
+function write_run_record(path::AbstractString, record)
+    open(path, "w") do io
+        JSON3.pretty(io, record; allow_inf=true)
+        println(io)
+    end
+end
+
+"Newest `dynamic_channels_*.html` report in `output_path` modified at or after `since` (Unix time), or `nothing`."
+function find_new_report(output_path::AbstractString, since::Real)
+    newest_report = nothing
+    newest_time = since
+    for file in readdir(output_path)
+        startswith(file, "dynamic_channels_") && endswith(file, ".html") || continue
+        modified = mtime(joinpath(output_path, file))
+        modified >= newest_time || continue
+        newest_report = file
+        newest_time = modified
+    end
+    return newest_report
+end
+
 """
     run_islanding(network_data; kwargs...)
 
@@ -166,6 +196,15 @@ voltage collapse indicator of each island (see voltage.jl); it needs the AC mode
 are its buses (flows are reported into them). An area goes to run_info as
 "target_area", which the Python report does not show as a zone.
 
+Every run writes `settings_<timestamp>.json` into its results folder: the settings with
+`"status": "started"` before the solve, rewritten at the end with `"finished"`, the file
+names (the Excel report shares the timestamp), a short summary and the durations. A run
+that throws keeps `"started"`. `run_settings` (the GUI's settings, or `nothing`) is stored
+in it as `gui_settings`.
+
+`progress`, when given, is called with the name of each stage as it starts:
+"frequency_limits", "solve", "reports", "excel", "export", "dynamic_sim".
+
 Returns the solve `result`.
 """
 function run_islanding(network_data;
@@ -187,9 +226,54 @@ function run_islanding(network_data;
     frequency_security::Bool=false,
     voltage_security::Bool=false,
     simulator::AbstractString="psse",
+    progress=nothing,
+    run_settings=nothing,
 )
     simulator in ("psse", "andes") || error("unknown simulator \"$simulator\", use \"psse\" or \"andes\"")
     voltage_security && opf_model != "AC" && error("voltage_security needs the AC model (bus voltages and reactive power)")
+    report_stage(stage) = progress === nothing || progress(stage)
+
+    # results folder and the per-run settings file
+    run_started = time()
+    timestamp = get_timestamp()                 # shared by the settings file and the Excel report
+    output_path = "results/psse/$(case_name)_$(objective)"
+    if output_tag !== nothing && !isempty(string(output_tag))
+        output_path *= "_$(output_tag)"
+    end
+    mkpath(output_path)
+    target_line_records = []
+    for line in target_lines
+        source = calc_branch_source(network_data["branch"][string(line)])
+        push!(target_line_records, (id=line, from=source.from, to=source.to, ckt=source.ckt))
+    end
+    settings_file = "$output_path/settings_$(timestamp).json"
+    run_record = (
+        status="started",
+        started=Dates.format(now(), "yyyy-mm-ddTHH:MM:SS"),
+        finished=nothing,
+        case_name=case_name,
+        case_files=(raw=case_files.raw, dyr=case_files.dyr),
+        objective=objective,
+        lambda=lambda,
+        opf_model=opf_model,
+        flow_model=flow_model,
+        target_lines=target_line_records,
+        target_zone=target_zone,
+        target_area=target_area,
+        load_shedding_penalties=load_shedding_penalties,
+        uniform_shedding=uniform_shedding,
+        uniform_penalty=uniform_penalty,
+        frequency_security=frequency_security,
+        voltage_security=voltage_security,
+        run_dynamic_sim=run_dynamic_sim,
+        simulator=simulator,
+        output_tag=output_tag,
+        gui_settings=run_settings,
+        files=nothing,
+        summary=nothing,
+        seconds=nothing,
+    )
+    write_run_record(settings_file, run_record)
 
     # embed additional configurations in the network data
     network_data["objective"] = ObjectiveType[objective]
@@ -204,11 +288,14 @@ function run_islanding(network_data;
 
     # frequency limits on each island's import, computed offline once per island
     if frequency_security
+        report_stage("frequency_limits")
         case_files.dyr === nothing && error("frequency_security needs the case .dyr file (inertia and governor droop)")
         add_frequency_security!(network_data, target_lines, case_files.dyr)
     end
 
     # solve the power flow
+    report_stage("solve")
+    solve_started = time()
     optimizer = optimizer_with_attributes(Ipopt.Optimizer, "print_level" => 4)
     if voltage_security
         # re-solved until the voltage indicator of every island clears its threshold
@@ -216,6 +303,8 @@ function run_islanding(network_data;
     else
         result = PowerModels.solve_custom_opf(network_data, power_model, optimizer)
     end
+    solve_seconds = time() - solve_started
+    report_stage("reports")
     println("---------------------------")
     println("Power Flow Solved")
     println("objective:", result["objective"])
@@ -237,14 +326,8 @@ function run_islanding(network_data;
     end
     println("---------------------------")
 
-    # generate excel report
-    output_path = "results/psse/$(case_name)_$(objective)"
-    if output_tag !== nothing && !isempty(string(output_tag))
-        output_path *= "_$(output_tag)"
-    end
-    mkpath(output_path)
-
     # write run information for the python report header
+    report_stage("excel")
     run_info = Dict{String,Any}(
         "objective" => objective,
         "flow_model" => flow_model,
@@ -293,14 +376,19 @@ function run_islanding(network_data;
     open("$output_path/run_info.json", "w") do io
         JSON3.write(io, run_info)
     end
-    excel_file = "$output_path/pm_res_$(objective)_$(get_timestamp()).xlsx"
+    # generate excel report
+    excel_file = "$output_path/pm_res_$(objective)_$(timestamp).xlsx"
     create_excel_report(result, network_data, excel_file, powerworld=true)
     println("Excel file created successfully!")
 
     # voltage_prediction = predict_voltage_change_from_opened_lines(network_data, result, target_lines)
 
     # dynamic simulation -------------------------------------------------------------
+    raw_file = nothing
+    report_file = nothing
+    simulation_seconds = nothing
     if run_dynamic_sim
+        report_stage("export")
         # generate psse raw file
         PowerModels.update_data!(network_data, result["solution"])
         pti_network_data = prepare_for_pti_export(network_data)
@@ -312,14 +400,11 @@ function run_islanding(network_data;
         line_outage_file = "$(output_path)/line_outage.json"
         outages = Vector{Dict{String,Any}}()
         for br_id in target_lines
-            branch = network_data["branch"][string(br_id)]
-            src = branch["source_id"]  # expected: (from, to, id)
-            line_type = src[1]
-            id_idx = line_type == "branch" ? 4 : 5
+            source = calc_branch_source(network_data["branch"][string(br_id)])
             push!(outages, Dict(
-                "from" => src[2],
-                "to" => src[3],
-                "id" => src[id_idx],
+                "from" => source.from,
+                "to" => source.to,
+                "id" => source.ckt,
             ))
         end
         open(line_outage_file, "w") do io
@@ -339,11 +424,39 @@ function run_islanding(network_data;
         end
 
         # call python dynamic simulation script
+        report_stage("dynamic_sim")
         println("Running $simulator simulation script...")
         python_script = joinpath(@__DIR__, "$(simulator)_scripts", "dynamic.py")
         simulation_seconds = @elapsed run(`python $python_script $raw_file $dyr_file $excel_file`)
         println("$simulator simulation script finished in $(round(simulation_seconds, digits=1)) s")
+        report_file = find_new_report(output_path, run_started)
     end
+
+    # the outcome of the run, in its settings file
+    files = (
+        excel=basename(excel_file),
+        raw=(raw_file === nothing ? nothing : basename(raw_file)),
+        report=report_file,
+    )
+    summary = (
+        termination_status=string(result["termination_status"]),
+        objective=result["objective"],
+        preemptive_shed_mw=get(run_info, "preemptive_shed_mw", nothing),
+        voltage_security=get(result, "voltage_security", nothing),
+    )
+    seconds = (
+        solve=round(solve_seconds, digits=2),
+        dynamic_sim=(simulation_seconds === nothing ? nothing : round(simulation_seconds, digits=2)),
+        total=round(time() - run_started, digits=2),
+    )
+    finished_record = merge(run_record, (
+        status="finished",
+        finished=Dates.format(now(), "yyyy-mm-ddTHH:MM:SS"),
+        files=files,
+        summary=summary,
+        seconds=seconds,
+    ))
+    write_run_record(settings_file, finished_record)
 
     return result
 end

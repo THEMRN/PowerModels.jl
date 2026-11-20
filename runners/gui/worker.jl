@@ -34,6 +34,17 @@ const GROUP_RECORDS = Dict(                       # kind => (network data key of
     "area" => ("area interchange", "arname"),
 )
 const MAX_ERROR_MESSAGE = 2000                    # characters of an error message sent in @@error
+const STAGE_LABELS = Dict(                        # stage => label shown by the GUI (gui_plan.md, "Stages")
+    "load_case" => "Load case",
+    "prepare" => "Prepare",
+    "frequency_limits" => "Frequency limits",
+    "solve" => "Solve",
+    "reports" => "Reports",
+    "excel" => "Excel report",
+    "export" => "Export",
+    "dynamic_sim" => "Dynamic simulation",
+    "summary" => "Summary",
+)
 
 
 # ==================== Protocol ====================
@@ -55,6 +66,15 @@ function send_data(job, payload::AbstractDict)
     reply = Dict{String,Any}("id" => get(job, "id", nothing))
     merge!(reply, payload)
     send_control("data", reply)
+end
+
+"Send the start of a run stage (`@@stage`) for a job."
+function send_stage(job, stage::AbstractString)
+    send_control("stage", Dict(
+        "id" => get(job, "id", nothing),
+        "stage" => stage,
+        "label" => get(STAGE_LABELS, stage, stage),
+    ))
 end
 
 
@@ -289,18 +309,23 @@ function calc_shed_penalties(network_data, penalties, lambda::Real)
     return bus_penalty
 end
 
-"Run one islanding scenario from settings (schema v1), the way islanding.jl's hardcoded block does. Returns the solve result."
-function run_from_settings(settings)
+"""
+Run one islanding scenario from settings (schema v1), the way islanding.jl's hardcoded block does.
+`progress` is called with each stage name (gui_plan.md, "Stages"). Returns the solve result.
+"""
+function run_from_settings(settings; progress=stage -> nothing)
     problems = find_settings_problems(settings)
     isempty(problems) || error("invalid settings:\n  " * join(problems, "\n  "))
 
     # load the network data
+    progress("load_case")
     case_path = string(settings["case"])
     run_dynamic_sim = settings["run_dynamic_sim"] == true
     case_files = find_case_files(case_path; require_dyr=run_dynamic_sim)
     network_data = load_case(case_files.raw)
 
     # boundary lines
+    progress("prepare")
     target = find_target(network_data, settings["boundary"])
 
     # load shedding penalties
@@ -339,6 +364,8 @@ function run_from_settings(settings)
         frequency_security=settings["frequency_security"] == true,
         voltage_security=settings["voltage_security"] == true,
         simulator=settings["simulator"],
+        progress=progress,
+        run_settings=settings,
     )
 end
 
@@ -365,10 +392,11 @@ function handle_case_info(job)
     ))
 end
 
-"Run a scenario: re-include the runner files so edits apply, then run the settings."
+"Run a scenario: re-include the runner files so edits apply, then run the settings, reporting each stage."
 function handle_run(job)
     include_runner_files()
-    Base.invokelatest(run_from_settings, job["settings"])
+    progress = stage -> send_stage(job, stage)
+    Base.invokelatest(run_from_settings, job["settings"]; progress=progress)
     return nothing
 end
 

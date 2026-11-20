@@ -25,7 +25,7 @@ A local GUI for running islanding scenarios without editing code. It sets the ru
 |---|---|---|---|
 | 1 | Julia worker | none | done (2026-11-20) |
 | 2 | Areas as well as zones | 1 | done (2026-11-20) |
-| 3 | Run hooks: stages and per-run settings file | 1 | not started |
+| 3 | Run hooks: stages and per-run settings file | 1 | done (2026-11-20) |
 | 4a | Report data: calc/print split | 2 | not started |
 | 4b | Result summary from the worker | 3, 4a | not started |
 | 5 | GUI shell and worker client | 1 | not started |
@@ -207,6 +207,7 @@ A run that throws leaves `"started"`, and History shows that as incomplete.
   "status": "finished",
   "started": "2026-11-21T10:15:02", "finished": "2026-11-21T10:16:40",
   "case_name": "ACTIVSg500",
+  "case_files": {"raw": "cases/psse/ACTIVSg500\\ACTIVSg500.raw", "dyr": "cases/psse/ACTIVSg500\\ACTIVSg500.dyr"},
   "objective": "flow_shed", "lambda": 500, "opf_model": "AC", "flow_model": "squared",
   "target_lines": [{"id": 12, "from": 154, "to": 3008, "ckt": "1"}],
   "target_zone": "spartanb", "target_area": null,
@@ -217,7 +218,7 @@ A run that throws leaves `"started"`, and History shows that as incomplete.
   "gui_settings": null,
   "files": {"excel": "pm_res_flow_shed_<ts>.xlsx", "raw": "...", "report": "dynamic_channels_<ts>.html"},
   "summary": {"termination_status": "LOCALLY_SOLVED", "objective": 0.0, "preemptive_shed_mw": 0.0, "voltage_security": null},
-  "seconds": {"solve": 0.0, "dynamic_sim": 0.0}
+  "seconds": {"solve": 0.0, "dynamic_sim": 0.0, "total": 0.0}
 }
 ```
 
@@ -399,6 +400,7 @@ The summary is in MW and Mvar, rounded as the console reports round. Keys whose 
    - In `solve_voltage_secure_opf`, collect each round's data (see `voltage` → `details` in **Contracts: Result summary**) in a local vector, because `result` is replaced every round. Attach it to the final `result["voltage_security"]["details"]`.
    - Keep the values in per unit, with `baseMVA`, as the file does internally.
    - The same rules as `frequency.jl` apply: the names are exported, and editing triggers a recompile.
+   - `run_islanding` copies `result["voltage_security"]` into the per-run settings file's `summary`. Keep only `verified`, `rounds` and `worst_indicator` there, without `details`, so the settings files stay small. The details go to the GUI through `@@result` only (phase 4b).
 
 **Done when:**
 - **Identical console logs.** The full console log is identical before and after this phase, apart from timestamps and timings, for:
@@ -627,6 +629,7 @@ The summary is in MW and Mvar, rounded as the console reports round. Keys whose 
 
 **Steps:**
 1. **`results_index.py`.** Scan `results/psse/*/settings_*.json` into rows: time, folder, case, objective, boundary (kind and name, or "bus pairs"), λ, penalty summary, shed MW, simulator, frequency and voltage flags, status and report.
+   - **Incomplete runs.** A run that failed, even before the solve, leaves a settings file with `"status": "started"` and no report. Show it as incomplete.
    - **Older runs.** Report files without a settings file (from before phase 3) become rows with the time from `dynamic_channels_<ts>.html` and "no settings".
    - **The newest older row** of a folder may also show `run_info.json` values, marked "latest only".
 2. **The page.**
@@ -766,6 +769,51 @@ New test folders: `savnw_flow_shed_gui_test_area`, `savnw_flow_shed_gui_test_zon
 *For the next phases:*
 - **Phase 3.** Its `CLAUDE.md` update should mention the new `run_info.json` key `target_area`.
 - **Ask the user.** An "Area" row in the Python report header would be a change to the report, so ask before adding one.
+
+**Phase 3 (2026-11-20).**
+
+*What changed:*
+- **`islanding_core.jl` helpers:**
+  - `calc_branch_source`: bus pair and circuit from `source_id`. The line outage file now uses it too.
+  - `write_run_record`: indented JSON through `JSON3.pretty(...; allow_inf=true)`, so a NaN objective does not break it.
+  - `find_new_report`: the newest `dynamic_channels_*.html` modified after the run started.
+- **`run_islanding`:**
+  - New keywords `progress` and `run_settings`.
+  - The results folder and one timestamp are made at the start. The Excel name now carries the start time of the run instead of the time after the solve.
+  - `settings_<timestamp>.json` is written as `"started"` before the solve and rewritten as `"finished"` at the end.
+- **Worker:** `STAGE_LABELS` and `send_stage`, its own stages `load_case` and `prepare`, and the settings passed as `run_settings`.
+- **`CLAUDE.md`:** documents the settings file, `target_area`, the new keywords and `runners/gui/`.
+
+*How it was verified:*
+- **Stage order** in three savnw worker runs:
+  - dynamic simulation off: load_case > prepare > solve > reports > excel;
+  - with frequency security: frequency_limits comes before solve;
+  - dynamic simulation on: export > dynamic_sim come after excel.
+- **A temporary copy of `islanding.jl`** (ACTIVSg500 SPARTANB, ANDES on, tag `gui_test_ref`) left a `"finished"` settings file with:
+  - the same timestamp as its Excel file;
+  - the report it created (`dynamic_channels_20261120_161441.html`);
+  - `gui_settings` null;
+  - objective 12140.983057017995 and 407.43 MW shed.
+
+  Its Julia report block was identical to before (36 lines), and its `line_outage.json` was byte-identical to the user's October SPARTANB run. The plan asked for this check on savnw, but `islanding.jl`'s hardcoded block is ACTIVSg500, so that case was used; savnw was covered by the worker runs.
+- **Voltage summary.** A savnw worker run with voltage security filled `summary.voltage_security`: verified in round 1, worst indicator 0.396.
+- **Other callers.** `batch_islanding.jl` and `frequency_tests/3_dynamic.jl` pass `find_case_files` results, which always have `.raw`. They were read, not run.
+- **Failure test.** A failure injected through `progress` at the `export` stage (scratch script, no file edited) left `"status": "started"` with `files` null.
+
+*Watch out for:*
+- **Captured logs scramble the order.** When Julia's output is redirected to a file, Julia buffers its own lines and the `dynamic.py` lines land first. The worker reads a pipe and its output stays in order.
+- **`gui_settings` keys** come out in arbitrary order (a `Dict`).
+- **`load_shedding_penalties`** lists every penalized bus (85 entries for a SPARTANB run).
+
+- **Before the solve.** The results folder and its `"started"` record now appear before the solve, so a run that fails early leaves both.
+- **Hand edits are not recorded.** For `islanding.jl` runs the record holds only what `run_islanding` receives. Edits made by hand before the call (`scale_loads!`, `pd` overrides, `pmin`) are not in it.
+
+Not exercised:
+- report detection after a PSS®E run (only ANDES was run);
+- the batch runner;
+- editing a runner file while the worker runs.
+
+Test folders added or reused: `savnw_flow_shed_gui_test_stages`, `_gui_test_freq`, `_gui_test_dyn`, `_gui_test_fail`, `_gui_test_volt`, and `ACTIVSg500_flow_shed_gui_test_ref`.
 
 *For the next phases:*
 - **Phase 2.** The extension points are `BOUNDARY_KINDS`, `GROUP_KINDS` and `find_group_buses` in `worker.jl`. `find_target` and `case_info` (`calc_zone_table`) need the area cases.
