@@ -19,6 +19,8 @@ using JSON3
 using XLSX
 using LinearAlgebra  # matrix solves/inverses for Jacobian sensitivities
 
+include(joinpath(@__DIR__, "network_layout.jl"))    # calc_network_layout, for the Network page
+
 
 # ==================== Settings ====================
 const RUNNERS_DIR = normpath(joinpath(@__DIR__, ".."))
@@ -36,6 +38,7 @@ const GROUP_RECORDS = Dict(                       # kind => (network data key of
 )
 const MAX_ERROR_MESSAGE = 2000                    # characters of an error message sent in @@error
 const MW_DIGITS = 2                               # MW, Mvar and % in @@result, as the console prints them
+const LAYOUT_DIGITS = 3                           # positions and radii of the network layout (line lengths)
 const PU_DIGITS = 3                               # H, K, D, voltages (pu) and voltage indicators in @@result, as the console prints them
 const STAGE_LABELS = Dict(                        # stage => label shown by the GUI (gui_plan.md, "Stages")
     "load_case" => "Load case",
@@ -871,7 +874,211 @@ function calc_result_summary(finished_run)
         "boundary_flows" => calc_flow_summary(network_data, result, target),
         "frequency" => frequency,
         "voltage" => voltage,
+        "network" => calc_network_summary(network_data, result),
         "files" => calc_files_summary(finished_run.output_path, run_record),
+    )
+end
+
+
+# ==================== Network ====================
+"""
+The bus pairs joined by branches: `(from, to)` with from < to => the `ids` of its branches (every
+circuit, in service or not, sorted), those `in_service`, and whether it is a `transformer` (all
+its circuits are). The Network page draws one line per pair.
+"""
+function find_bus_pairs(network_data)
+    pairs = Dict{Tuple{Int,Int},Any}()
+    for (id, branch) in network_data["branch"]
+        pair = minmax(Int(branch["f_bus"]), Int(branch["t_bus"]))
+        pair[1] == pair[2] && continue
+        entry = get!(pairs, pair) do
+            Dict{String,Any}("ids" => Int[], "in_service" => Int[], "transformer" => true)
+        end
+        push!(entry["ids"], parse(Int, id))
+        branch["br_status"] != 0 && push!(entry["in_service"], parse(Int, id))
+        entry["transformer"] = entry["transformer"] && Bool(branch["transformer"])
+    end
+    for entry in values(pairs)
+        sort!(entry["ids"])
+        sort!(entry["in_service"])
+    end
+    return pairs
+end
+
+"""
+The values of every bus, sorted by bus number: voltage `vm` (pu), and in MW and Mvar the load
+(`pd_mw`, `qd_mvar`), the generation (`pg_mw`, `qg_mvar`) and the capacity (`pmax_mw`,
+`qmax_mvar`) of what is in service at the bus, with the number of such generators (`gens`).
+
+Voltages and generation are the case's own, or come from `bus_solution` and `gen_solution` (a
+run's solution) when those are given; a value the solution does not have is `nothing`.
+"""
+function calc_bus_values(network_data; bus_solution=nothing, gen_solution=nothing)
+    base_mva = network_data["baseMVA"]
+    sums = Dict{Int,Dict{String,Float64}}()
+    for (_, bus) in network_data["bus"]
+        sums[Int(bus["bus_i"])] = Dict("pd" => 0.0, "qd" => 0.0, "pg" => 0.0, "qg" => 0.0, "pmax" => 0.0, "qmax" => 0.0, "gens" => 0.0)
+    end
+    for (_, load) in network_data["load"]
+        get(load, "status", 1) == 0 && continue
+        bus_sums = sums[Int(load["load_bus"])]
+        bus_sums["pd"] += load["pd"]
+        bus_sums["qd"] += load["qd"]
+    end
+    for (id, gen) in network_data["gen"]
+        get(gen, "gen_status", 1) == 0 && continue
+        bus_sums = sums[Int(gen["gen_bus"])]
+        output = gen_solution === nothing ? gen : get(gen_solution, id, Dict())
+        bus_sums["pg"] += get(output, "pg", NaN)
+        bus_sums["qg"] += get(output, "qg", NaN)
+        bus_sums["pmax"] += gen["pmax"]
+        bus_sums["qmax"] += gen["qmax"]
+        bus_sums["gens"] += 1
+    end
+
+    buses = Dict{String,Any}[]
+    for (id, bus) in network_data["bus"]
+        number = Int(bus["bus_i"])
+        bus_sums = sums[number]
+        voltage = bus_solution === nothing ? bus : get(bus_solution, id, Dict())
+        push!(buses, Dict{String,Any}(
+            "bus" => number,
+            "vm" => round_value(get(voltage, "vm", NaN), PU_DIGITS),
+            "pd_mw" => to_mw(bus_sums["pd"], base_mva),
+            "qd_mvar" => to_mw(bus_sums["qd"], base_mva),
+            "pg_mw" => to_mw(bus_sums["pg"], base_mva),
+            "qg_mvar" => to_mw(bus_sums["qg"], base_mva),
+            "pmax_mw" => to_mw(bus_sums["pmax"], base_mva),
+            "qmax_mvar" => to_mw(bus_sums["qmax"], base_mva),
+            "gens" => Int(bus_sums["gens"]),
+        ))
+    end
+    return sort(buses, by=bus -> bus["bus"])
+end
+
+"""
+The flow on every bus pair, sorted: `from` and `to` (from < to), with the power that enters the
+pair's in-service circuits at the `from` bus (`p_mw`, `q_mvar`; negative when it comes out
+there) and at the `to` bus (`p_to_mw`, `q_to_mvar`). The two ends differ by the losses and the
+line charging. `branch_flows` are the flows by branch id, in per unit (`pf`, `qf`, `pt`, `qt`);
+a flow that is not there is `nothing`.
+"""
+function calc_line_flows(network_data, pairs, branch_flows)
+    base_mva = network_data["baseMVA"]
+    lines = Dict{String,Any}[]
+    for (from, to) in sort(collect(keys(pairs)))
+        p_from, q_from, p_to, q_to = 0.0, 0.0, 0.0, 0.0
+        for id in pairs[(from, to)]["in_service"]
+            branch = network_data["branch"][string(id)]
+            flow = get(branch_flows, string(id), Dict())
+            from_end, to_end = Int(branch["f_bus"]) == from ? ("f", "t") : ("t", "f")
+            p_from += Float64(something(get(flow, "p" * from_end, NaN), NaN))
+            q_from += Float64(something(get(flow, "q" * from_end, NaN), NaN))
+            p_to += Float64(something(get(flow, "p" * to_end, NaN), NaN))
+            q_to += Float64(something(get(flow, "q" * to_end, NaN), NaN))
+        end
+        push!(lines, Dict{String,Any}(
+            "from" => from, "to" => to,
+            "p_mw" => to_mw(p_from, base_mva), "q_mvar" => to_mw(q_from, base_mva),
+            "p_to_mw" => to_mw(p_to, base_mva), "q_to_mvar" => to_mw(q_to, base_mva),
+        ))
+    end
+    return lines
+end
+
+"""
+The layout of the case for one kind of group (`"zone"`, `"area"`, or `"none"` for no groups), as
+the Network page draws it: `x` and `y` of every bus in the order of the bus numbers (line
+lengths), and the `circles`, one per cluster with its `group` (index), `x`, `y`, `radius` and
+`buses` (how many are laid out in it), with `circle_of_bus` (1 is the first circle).
+"""
+function calc_layout(network_data, pairs, kind::AbstractString)
+    bus_numbers = sort([Int(bus["bus_i"]) for (_, bus) in network_data["bus"]])
+    index_of = Dict(number => index for (index, number) in enumerate(bus_numbers))
+    group_of_bus = zeros(Int, length(bus_numbers))
+    if kind != "none"
+        for (_, bus) in network_data["bus"]
+            group_of_bus[index_of[Int(bus["bus_i"])]] = Int(bus[kind])
+        end
+    end
+    drawn = sort([pair for (pair, entry) in pairs if !isempty(entry["in_service"])])
+    edges = [(index_of[from], index_of[to]) for (from, to) in drawn]
+    is_transformer = [pairs[pair]["transformer"] for pair in drawn]
+
+    layout = calc_network_layout(length(bus_numbers), edges, is_transformer, group_of_bus)
+    return Dict{String,Any}(
+        "x" => round.(layout.x, digits=LAYOUT_DIGITS),
+        "y" => round.(layout.y, digits=LAYOUT_DIGITS),
+        "circle_of_bus" => layout.cluster_of_bus,
+        "circles" => [Dict{String,Any}(
+            "group" => cluster.group,
+            "x" => round(cluster.x, digits=LAYOUT_DIGITS),
+            "y" => round(cluster.y, digits=LAYOUT_DIGITS),
+            "radius" => round(cluster.radius, digits=LAYOUT_DIGITS),
+            "buses" => length(cluster.buses),
+        ) for cluster in layout.clusters],
+    )
+end
+
+"The layouts of the case: one per kind of group it has more than one of, or `\"none\"` when it has no groups."
+function calc_layouts(network_data, pairs)
+    layouts = Dict{String,Any}()
+    for kind in GROUP_KINDS
+        length(unique(Int(bus[kind]) for (_, bus) in network_data["bus"])) > 1 || continue
+        layouts[kind] = calc_layout(network_data, pairs, kind)
+    end
+    isempty(layouts) && (layouts["none"] = calc_layout(network_data, pairs, "none"))
+    return layouts
+end
+
+"""
+The case as the Network page shows it (gui_plan.md, "Worker protocol"): the buses with their
+name, voltage level, zone and area and the values of calc_bus_values, the lines (one per bus
+pair, with its branch ids and the flow that the case's voltages give), the zones and areas, and
+a layout per kind of group.
+"""
+function calc_network(network_data)
+    pairs = find_bus_pairs(network_data)
+    buses = calc_bus_values(network_data)
+    bus_data = Dict(Int(bus["bus_i"]) => bus for (_, bus) in network_data["bus"])
+    for bus in buses
+        data = bus_data[bus["bus"]]
+        bus["name"] = strip(string(get(data, "name", "")))
+        bus["kv"] = round_value(get(data, "base_kv", NaN), MW_DIGITS)
+        bus["zone"] = Int(data["zone"])
+        bus["area"] = Int(data["area"])
+    end
+
+    # the flows the case's own voltages give; a case that is not a solved power flow shows what it holds
+    branch_flows = try
+        PowerModels.calc_branch_flow_ac(network_data)["branch"]
+    catch
+        Dict{String,Any}()
+    end
+    lines = calc_line_flows(network_data, pairs, branch_flows)
+    for line in lines
+        entry = pairs[(line["from"], line["to"])]
+        line["ids"] = entry["ids"]
+        line["in_service"] = length(entry["in_service"])
+        line["transformer"] = entry["transformer"]
+    end
+
+    return Dict{String,Any}(
+        "buses" => buses,
+        "lines" => lines,
+        "zones" => calc_group_table(network_data, "zone"),
+        "areas" => calc_group_table(network_data, "area"),
+        "group_names" => Dict(kind => Dict(string(index) => name for (index, name) in find_group_names(network_data, kind)) for kind in GROUP_KINDS),
+        "layouts" => calc_layouts(network_data, pairs),
+    )
+end
+
+"A run's values for the Network page: the buses (calc_bus_values with the solution) and the lines (calc_line_flows)."
+function calc_network_summary(network_data, result)
+    solution = get(result, "solution", Dict())
+    return Dict{String,Any}(
+        "buses" => calc_bus_values(network_data; bus_solution=get(solution, "bus", Dict()), gen_solution=get(solution, "gen", Dict())),
+        "lines" => calc_line_flows(network_data, find_bus_pairs(network_data), get(solution, "branch", Dict())),
     )
 end
 
@@ -898,6 +1105,15 @@ function handle_case_info(job)
     ))
 end
 
+"Reply with the network of a case as the Network page draws it: buses, lines, groups and layouts."
+function handle_network(job)
+    case_path = string(job["case"])
+    network_data = find_parsed_case(find_case_files(case_path).raw)
+    reply = calc_network(network_data)
+    reply["case"] = case_path
+    send_data(job, reply)
+end
+
 """
 Run a scenario: re-include the runner files so edits apply, run the settings reporting each
 stage, then send the report information as @@result. Both calls go through invokelatest, so they
@@ -918,6 +1134,7 @@ const HANDLERS = Dict{String,Function}(
     "ping" => handle_ping,
     "list_cases" => handle_list_cases,
     "case_info" => handle_case_info,
+    "network" => handle_network,
     "run" => handle_run,
 )
 

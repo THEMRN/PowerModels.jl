@@ -275,6 +275,7 @@ class RunForm:
         run_settings, _ = self.read()
         self.ctx.state.pop("cases", None)
         self.ctx.state.pop("case_infos", None)
+        self.ctx.state.pop("networks", None)
         self.cases_loaded = False
         await self.load_cases()
         if self.cases_loaded and run_settings["case"]:
@@ -389,6 +390,55 @@ class RunForm:
             self.writing = False
         self.update_view()
 
+    async def take(self, case, *, boundary=None, penalty_rows=()):
+        """
+        Fill in what another page chose for `case` (the Network page): a boundary (as in the
+        settings), or penalty rows ({kind, name, times_lambda}). The rest of the form stays, except
+        that a change of case drops what named the other case, as choosing the case by hand does.
+
+        Returns (refused, notes): why nothing was taken ("" when it was), and what else changed
+        in the form, as sentences.
+        """
+        run_settings, _ = self.read()
+        notes = []
+        if run_settings["case"] != case:
+            if run_settings["modifications"]:
+                notes.append("The network modifications were for the other case and were removed.")
+            run_settings["case"] = case
+            run_settings["boundary"] = {"kind": "bus_pairs", "name": "", "bus_pairs": []}
+            run_settings["penalties"] = dict(run_settings["penalties"], groups=[], buses={})
+            run_settings["modifications"] = {}
+            notes.append("The form is now on this case.")
+        if boundary is not None:
+            run_settings["boundary"] = boundary
+
+        # a study is by zone or by area (decision 11): a penalty for a group of the other kind does not fit
+        case_info, case_error = await self._find_case_info(case)
+        if case_error:
+            return f"the case could not be read: {case_error}", []
+        study_kind = run_settings["boundary"]["kind"]
+        if study_kind not in GROUP_KINDS:
+            study_kind = next((kind for kind in GROUP_KINDS if case_info.get(f"{kind}s")), None)
+        penalties = run_settings["penalties"]
+        for row in penalty_rows:
+            if row["kind"] == "bus":
+                penalties["buses"][str(row["name"])] = row["times_lambda"]
+                continue
+            if row["kind"] != study_kind:
+                return f"The study in the Run form is by {study_kind}, so a penalty for {row['kind']} {row['name']} does not fit it. Use it as the target first, or select its buses.", []
+            penalties["groups"] = [group for group in penalties["groups"] if (group["kind"], group["name"].lower()) != (row["kind"], str(row["name"]).lower())]
+            penalties["groups"].append({"kind": row["kind"], "name": str(row["name"]), "times_lambda": row["times_lambda"]})
+        if penalty_rows and penalties["uniform"] is not None:
+            penalties["uniform"] = None
+            notes.append("Uniform shedding was switched off, because it ignores penalty rows.")
+        dropped = [group for group in penalties["groups"] if group["kind"] != study_kind]
+        if dropped:
+            penalties["groups"] = [group for group in penalties["groups"] if group["kind"] == study_kind]
+            notes.append(f"{len(dropped)} penalty row{'s' if len(dropped) > 1 else ''} of the other kind of group went, because the study is now by {study_kind}.")
+
+        await self.write(run_settings)
+        return "", notes
+
     # -------------------- keeping the form consistent --------------------
     def _find_boundary_kinds(self):
         """Boundary kinds the case offers: zone and area only when it has at least two of them."""
@@ -476,6 +526,7 @@ class RunForm:
 def build(ctx):
     """The Run page of one browser tab: the toolbar, the settings sheet, the results, the session's runs and the status strip."""
     form = RunForm(ctx)
+    ctx.client_state()["run_form"] = form          # the Network page of this browser tab fills it (RunForm.take)
 
     def show_summary(opened):
         """While the sheet is folded, the toolbar says what the settings are."""

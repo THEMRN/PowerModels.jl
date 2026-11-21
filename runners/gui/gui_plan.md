@@ -34,7 +34,7 @@ A local GUI for running islanding scenarios without editing code. It sets the ru
 | 8 | Run page: results panel | 4b, 7 | done (2026-11-20) |
 | 9 | Advanced settings dialog | 6 | done (2026-11-21) |
 | 10 | History page | 3, 6 | not started |
-| 11 | Network page | 2, 6 | not started |
+| 11 | Network page | 2, 6 | done (2026-11-21) |
 | 12 | Presets (optional, ask the user first) | 6 | not started |
 
 Phases 2, 3 and 5 can run in any order once phase 1 is done. The GUI is usable for real runs after phase 6.
@@ -53,7 +53,7 @@ These were made by the user. Do not reopen them.
    - a **Full log** button that opens the raw log, for errors and details.
 6. **Advanced settings.** Load scaling, generator settings, load overrides and later additions go in an **Advanced settings dialog with tabs**, not on the main form.
 7. **Per-run settings file.** Each run writes `settings_<timestamp>.json` next to its report in the results folder. `run_islanding` writes it, so runs from `islanding.jl` get one too. There is no separate GUI log. Deleting a results folder deletes its settings.
-8. **Network page.** Start with the easiest clean drawing: an automatic force layout, with no bus coordinates.
+8. **Network page.** The network is drawn as a clean graph without bus coordinates: the buses of a zone or an area stand together in a circle, a bus whose zone number sits among another zone's buses keeps its colour and does not pull the picture apart, and the page zooms and pans without becoming slow. Buses, lines and circles can be coloured by what the case holds or a run found. (The first decision was "the easiest clean drawing, an automatic force layout"; the user replaced it on 2026-11-21, when phase 11 was started.)
 9. **Zones and areas.** Some cases group buses by area rather than by zone. Wherever a group of buses is chosen, the choice is `{kind: "zone" | "area", name}`. That covers the boundary, penalties, load scaling, generator settings, results grouping and network colouring.
 10. **Voltage security details as tables, behind a button.** The results panel shows only the main voltage results (verified, rounds, worst indicator). A Details button opens a dialog with tables, one block per round:
     - each island's state;
@@ -91,17 +91,20 @@ Planned files:
 runners/gui/
   gui_plan.md            this plan
   worker.jl              Julia side: job loop, handlers, settings → run
+  network_layout.jl      Julia side: where the buses of a case stand on the Network page (no PowerModels in it)
   app.py                 entry point: python runners/gui/app.py [--port N] [--no-browser]
   start_gui.bat          double-click launcher for app.py (passes its arguments on)
   julia_worker.py        Python client for worker.jl
   session_runs.py        the runs of this app session (settings, status, result), shared by all tabs
   settings.py            settings schema v1: defaults, form values <-> settings, validation, JSON files
+  network_view.py        what the Network page shows, as plain data: values, colours, selection, boundary
   theme.py               the look: element defaults, icons, building blocks (panel, sheet, Section, fields, button, State, FoldButton)
   theme.css              the look: colours and sizes as variables, the building blocks, Quasar without the Material look
   results_index.py       scans results/psse for the History page
   components/            reusable UI pieces: status_strip.py (where a run is), log_dialog.py (log lines as text),
                          results_view.py (a run's report numbers as tables), voltage_details.py (the voltage rounds),
-                         row_list.py (rows to edit, with Add row and remove)
+                         row_list.py (rows to edit, with Add row and remove),
+                         network_canvas.py with network_canvas.js (the network drawing: a canvas with zoom and pan)
   pages/                 one file per page: run.py, history.py, network.py
   advanced/              the advanced settings: __init__.py (the tab list, the dialog, what the modifications say),
                          one file per tab (load_scaling.py, loads.py, generators.py) and where.py (a row's zone,
@@ -123,11 +126,11 @@ runners/gui/
   - `build(study, rows, on_change)`, the tab's content. A tab of rows builds them with `components/row_list.RowList` and a grid class of its own in `theme.css`.
 
   `study` (`advanced.Study`) holds the case, its `case_info` and the study's kind of group. A tab whose rows name a zone, an area or a list of buses takes that part from `advanced/where.py`, and its Julia function takes the buses from `find_entry_buses`.
-- **Pages pass values to each other** through `ctx.state`. For example, History's "Load into Run" and Network's "Use as target" both fill the Run form.
+- **Pages pass values to each other** through `ctx.client_state()`, the dict of the browser tab. The Run page puts its form there (`"run_form"`), `app.py` the function that shows a page (`"show_page"`), and the Network page's "Use as target" calls `RunForm.take` and shows the Run page. History's "Load into Run" goes the same way. `ctx.state` is shared by every open browser tab, so it only holds what was read from Julia.
 - **What `ctx` holds** (since phase 6):
   - `ctx.worker`, the `JuliaWorker`;
   - `ctx.runs`, the `SessionRuns`: one record per run of this session, with its settings, status, the stages it reached with their times, its latest log line, its warnings and its `@@result` summary (the fields are listed in the class's docstring);
-  - `ctx.state`, which also caches what was read from Julia: `"cases"` (the case list) and `"case_infos"` (case path to its `case_info`, or to the error that reading it gave). The worker answers one job at a time, so a question asked during a run would wait for the run to end.
+  - `ctx.state`, which caches what was read from Julia: `"cases"` (the case list), `"case_infos"` (case path to its `case_info`, or to the error that reading it gave) and `"networks"` (the same for the `network` reply). The worker answers one job at a time, so a question asked during a run would wait for the run to end.
 
 ### Look
 
@@ -148,6 +151,7 @@ Decision 14. The look lives in `theme.py` and `theme.css` and nowhere else, so e
 - **A choice of two or three** is a `ui.toggle` (drawn as a segmented control); more options are a `ui.select`.
 - **Rows to edit** (a list the user adds to and removes from) are a `components/row_list.RowList`.
 - **A dialog that changes something** edits a copy and ends with a row of the class `dialog-foot`: what clears on the left, then Cancel and the dialog's own primary button. A click beside it does not close it (`no-backdrop-dismiss`). Its problems show above that row, in the class `problems`.
+- **Colours that show data** (the Network page) are in `network_view.py`, not in the stylesheet, and follow three rules. Groups get the eight colours of `GROUP_COLORS` in a fixed order, a ninth group and later ones share one grey, and a group is always named as well (on its circle, in the legend, in the tooltip). An amount is one hue from light to dark. A value around a middle (a voltage around 1 pu) is two hues with grey in the middle. What is selected is marked by shape (a ring, a dashed line with a white edge), because the colours are already taken.
 - **Class names:** before adding a class to `theme.css`, check that Quasar and Tailwind do not use the name (`inline` and `row` are taken).
 - **A Quasar part used for the first time** (a dialog, a table, a chart) still has its Material look. Add its rules to `theme.css`, section "Quasar, without the Material look", and check a screenshot. Popups are where Material comes back most easily.
 
@@ -169,7 +173,7 @@ The GUI writes **one JSON object per line** to the worker's stdin:
 | `list_cases` | none | `@@data {"id", "cases": ["cases/psse/savnw", ...]}` (folders with a `.raw`) |
 | `case_info` | `"case"` | `@@data {"id", "zones": [...], "areas": [...], "loads": [...], "gens": [...], "has_dyr"}` |
 | `run` | `"settings"` | `@@stage` lines, then `@@result`, then `@@done` |
-| `network` (phase 11) | `"case"` | `@@data {"id", "buses": [...], "branches": [...]}` |
+| `network` | `"case"` | `@@data {"id", "case", "buses": [...], "lines": [...], "zones", "areas", "group_names", "layouts"}`, see "Network reply" |
 
 The worker writes ordinary log lines (its own prints, Ipopt and `dynamic.py`) plus **control lines** that start with `@@`. Each control line has a kind and one-line JSON:
 
@@ -194,6 +198,17 @@ Rules on the GUI side:
 - **Long lines.** asyncio's `readline` fails on lines longer than its 64 KiB default, and the `@@result`, `case_info` and `network` lines for ACTIVSg500 can be longer. Pass a large `limit` (for example 16 MiB) when creating the subprocess.
 - **Stop.** Run `taskkill /T /F /PID <pid>` so the `dynamic.py` child dies too, then restart the worker.
 - **Own process group.** Start the worker with `CREATE_NEW_PROCESS_GROUP`. Ctrl+Break in the app's console then reaches only the app, whose shutdown stops the worker tree. A keyboard Ctrl+C still reaches Julia, which handles it itself even in its own group (phase 6 test); the app shuts down at the same time and stops whatever is left.
+
+### Network reply (`network`)
+
+The case as the Network page draws it. Values are in MW, Mvar and pu, rounded as in `@@result`.
+
+- `buses`, sorted by number: `bus`, `name`, `kv`, `zone` and `area` (numbers), `vm`, and what is in service at the bus: `pd_mw`, `qd_mvar`, `pg_mw`, `qg_mvar`, `pmax_mw`, `qmax_mvar` and `gens` (how many generators).
+- `lines`, **one per pair of buses** with `from` < `to`, sorted:
+  - `ids`, the branch ids of every circuit between the two buses, in service or not; `in_service`, how many are; `transformer`, true when all are transformers;
+  - `p_mw` and `q_mvar`, the power that enters the pair's circuits at `from`, and `p_to_mw` and `q_to_mvar`, the power that enters at `to`. The case's values come from its own voltages (`calc_branch_flow_ac`), so they are a power flow only if the RAW holds a solved case.
+- `zones` and `areas`, as in `case_info`; `group_names`, `{"zone": {"<number>": name}, "area": {...}}` for every record.
+- `layouts`, one per kind of group the case has more than one of (`"zone"`, `"area"`), or `"none"` alone for a case without groups. Each has `x` and `y` for the buses in their order (line lengths), `circles` (`group`, `x`, `y`, `radius`, `buses`) and `circle_of_bus` (1 is the first circle). `network_layout.jl` makes them; the same case gives the same layout every time.
 
 ### Stages
 
@@ -355,6 +370,7 @@ A group's name is its record name, or its number when it has no record, as in `c
       - `worst_indicator`;
       - `shed`: `null`, or `sheds` (`bus`, `shed_mw`, `of_mw`) with `indicator_after` and `indicator_after_bus`.
   - `voltage.jl` keeps these in per unit (`slack_pg`, `pd`, `shed`, `of`). The worker converts them and adds the unit to the key.
+- `network`, for the Network page: `buses` (`bus`, `vm`, `pd_mw`, `qd_mvar`, `pg_mw`, `qg_mvar`, `pmax_mw`, `qmax_mvar`, `gens`) and `lines` (`from`, `to`, `p_mw`, `q_mvar`, `p_to_mw`, `q_to_mvar`), as in the `network` reply but with the run's solution: its voltages, its dispatch and its flows, on the run's network (after its modifications, before its shed). A value the solution does not have (a voltage or a reactive flow of a DC run) is `null`. The shed per bus is in `load_shed.buses`.
 - `files`, from the per-run settings file:
   - `output_path`, the absolute results folder;
   - the file names in that folder: `settings`, `excel`, `raw`, `report` (`null` when not written).
@@ -762,35 +778,31 @@ The page tabs are in the top bar. Run and Stop are in the toolbar of the setting
 
 ## Phase 11: Network page
 
-**Goal.** See the network, coloured by zone or area, and pick a group as the target from it.
-
-**Read first:**
-- **Decisions:** 8 and 9.
-- `runners/utils.jl`: `build_network_graph` may already help.
-- NiceGUI's `ui.echart`. It is ECharts, whose graph series has a force layout.
+**Goal (as the user set it on 2026-11-21, replacing the first text of this phase).** Get a good sense of the network of a case, and ideas for scenarios: a clean graph that fits the window, with zoom and pan that stay fast; zones or areas (whichever the case has), buses and lines (bus pairs) to select and see; and colours for buses, lines and circles.
 
 **Files:**
-- `runners/gui/pages/network.py` (new)
-- `runners/gui/worker.jl` (`network` handler)
-- `runners/gui/app.py` (registry)
+- `runners/gui/network_layout.jl` (new), `runners/gui/worker.jl` (`network` handler, `network` part of `@@result`)
+- `runners/gui/network_view.py` (new), `runners/gui/components/network_canvas.py` and `.js` (new), `runners/gui/pages/network.py` (new)
+- `runners/gui/app.py` (registry, `client_state`), `runners/gui/pages/run.py` (`RunForm.take`), `runners/gui/theme.css`
 
-**Steps:**
-1. **The `network` handler.** It returns:
-   - buses: id, zone, area, has generator, load MW;
-   - in-service branches: id, from bus, to bus;
-   - the zone and area names.
-2. **The page.**
-   - **Controls:** a case selector, and colour by zone or by area.
-   - **The graph:** a force layout. Click a bus to select its group, and highlight that group's boundary branches, the same set `find_branches_by_zone` or `find_branches_by_area` returns.
-   - **Actions:** "Use as target" and "Set penalty for this group" fill the Run form through `ctx.state`.
-3. **Optional.** If it is easy, shift-clicking branches builds a bus-pair boundary.
+**What it has:**
+1. **The layout,** made in Julia from the buses, the bus pairs and the zone or area of each bus (the steps are at the top of `network_layout.jl`): one circle per connected part of a group, strays laid out with the cluster they are wired to, the circles arranged so that the lines between them cross least, and the buses spread evenly inside.
+2. **The drawing,** a canvas of its own: wheel to zoom, drag to move, double click or Fit for the whole network, a tooltip on every bus, line and circle, bus numbers when zoomed in.
+3. **Colours,** each with its legend:
+   - buses by zone or area, voltage, load (P or Q), generation (P or Q), capacity (P or Q) or load shed;
+   - lines plain, or by flow (P or Q) with an arrow in the direction of the power and a width that follows it;
+   - circles by their group, or by the group's total load, generation, capacity or shed, with the number under the name.
+4. **Values of** the case as read, or of a run of the session on that case.
+5. **Selection** by clicking or typing: a zone or an area, single buses (also by a box, with shift), or lines. Its boundary is drawn dashed in red, and the side panel says what it holds, what leaves it, and which islands opening the boundary leaves.
+6. **To the Run form:** "Use as target" (the group, or the bus pairs of the boundary) and "Set penalty" (the group, or each selected bus with a load).
 
 **Done when:**
-- **Render time.** savnw and ACTIVSg500 render within a few seconds.
-- **Highlighting.** Selecting SPARTANB highlights exactly the lines `find_branches_by_zone` returns.
-- **Use as target** fills the Run form.
+- **Render time.** savnw and ACTIVSg500 show within a few seconds, and zooming ACTIVSg500 is smooth.
+- **Highlighting.** Selecting a zone or an area marks exactly the lines `find_branches_by_zone` or `find_branches_by_area` returns.
+- **Use as target** fills the Run form, and a run from it gives the result of the same settings typed by hand.
+- **A run's values** on the page agree with its own tables.
 
-**Out of scope:** geographic coordinates. Ask the user later.
+**Out of scope:** geographic coordinates; moving buses by hand; values of runs of earlier sessions (phase 10 would bring them). Ask the user.
 
 ## Phase 12: Presets (optional, ask the user before starting)
 
@@ -1449,3 +1461,69 @@ Test folders added: `savnw_flow_shed_gui_test_ref_top`, `savnw_flow_shed_gui_tes
 - **Pmin above Pmax is checked after each row,** so a later row cannot mend a generator that an earlier row left with its pmin above its pmax: the earlier row fails first.
 
 Test folders added: `savnw_flow_shed_gui_test_gen_top`, `savnw_flow_shed_gui_test_gen_ns`, `savnw_flow_shed_gui_test_gen_none`, `savnw_flow_shed_gui_test_gen_pmax`, `savnw_flow_shed_gui_test_gen_both`, `savnw_flow_shed_gui_test_gen_both_sim`, `savnw_flow_shed_gui_test_gen_none_sim`, `savnw_flow_shed_gui_test_gen_pmin`, `ACTIVSg500_flow_shed_gui_test_gen_scale`, `ACTIVSg500_flow_shed_gui_test_gen_pmin`; `savnw_flow_shed_gui_test_genform_none`, `savnw_flow_shed_gui_test_genform_pmax`, `savnw_flow_shed_gui_test_genform_pmax2`, `savnw_flow_shed_gui_test_genform_pmin0`, `savnw_flow_shed_gui_test_genform_both`, `savnw_flow_shed_gui_test_genform_ns`, `savnw_flow_shed_gui_test_genform_last`, `ACTIVSg500_flow_shed_gui_test_genform_scale` and `ACTIVSg500_flow_shed_gui_test_genform_zpmin`. The refused jobs (tag `gui_test_gen_bad`) left no folder.
+
+**Phase 11 (2026-11-21). The user asked for it before phase 10 and widened it; decision 8 and the phase text were rewritten to what was asked.**
+
+*What changed:*
+- **`network_layout.jl` (new).** `calc_network_layout` takes plain arrays and gives positions and circles, the same every time. Its steps:
+  - **clusters:** a group's connected parts; a part with less than a quarter of the buses of the group's largest part is a stray and joins the cluster most of its lines go to;
+  - **leaves** (buses with one line, half the buses of ACTIVSg500) are set aside and put beside their bus at the end;
+  - **first positions** by stress majorization over the rest, with lines between clusters long;
+  - **circles** with an area that follows the number of buses, arranged by stress majorization on the clusters from 81 starts, keeping the arrangement where the bundles of lines between clusters cross least;
+  - **each cluster** scaled into its circle and turned or mirrored towards its neighbours, its buses spread until the circle is filled evenly, and single buses moved where that uncrosses lines.
+- **`worker.jl`.** The `network` job (see "Network reply") and the `network` part of `@@result`.
+- **`network_view.py` (new)** works out everything the page shows as plain data: the values of the case or of a run, group totals, colours and sizes, tooltips, the boundary of a selection, the islands it leaves. **`components/network_canvas`** draws what it is given. **`pages/network.py`** holds the controls and the selection.
+- **`app.py`:** `ctx.client_state()`. **`pages/run.py`:** `RunForm.take(case, boundary=..., penalty_rows=...)`, which goes through `read` and `write`, so the form's own rules apply (a change of case drops what named the other case; penalty rows of the other kind of group go).
+
+*Is a clean graph possible without coordinates?* Yes, with limits that are worth knowing:
+- **savnw, IEEE39 and case9** are drawn without a single crossing.
+- **ACTIVSg500** has 128 crossings among its 584 lines, and ACTIVSg200 about 26 among 245. The six zones are six separate circles filled evenly, so the whole case reads at a glance; single lines are followed after zooming in. The untidiest place is where three zones meet (Clemson, Greenvil, Spartanb).
+- **What the first tries taught:** stress majorization alone piles the buses in the middle of each circle; pushes between all buses line them up along the circle's edge; short pushes between buses that are too near fill the circle evenly.
+
+*How it was verified.*
+- **The layout** on savnw (by zone and by area), ACTIVSg500, ACTIVSg200, AU14GenModel, IEEE39, Hawaii40 and case9, as pictures of the size of the page's canvas, with the crossings counted. In the checks: no two circles overlap and every bus is inside its circle.
+- **The worker:** `network` jobs for savnw (9 KiB), ACTIVSg500 (165 KiB, 0.23 s once Julia is warm, 12 s for the first job of a worker), case9 and `simple`, which cannot be read and answers `@@error`. A run of the four savnw bus pairs gave 30642.40499516773 as before.
+- **Boundaries:** for every zone and area of savnw and ACTIVSg500, the buses and the branch ids of the selection equal those of `find_buses_by_zone`, `find_branches_by_zone` and the area functions (Spartanb: 85 buses, 18 branches), and the four bus pairs give the branches of `find_branches_by_bus_pairs`.
+- **A run's values against its own tables:**
+  - **savnw:** generation and capacity per zone equal the Generation tab; the shed per bus adds up to the total shed; the flow of a bus pair equals the sum of its boundary lines; and for a run with zone FIFTH as the target the selection's "Leaving it" (1.7 MW, 8.9 Mvar) equals the net flow of the Boundary flows tab (1.72, 8.93).
+  - **ACTIVSg500,** zone Spartanb as the target at 2.5 λ with its loads at 0.7, from the form: 8519.135912744756 as in phase 9. On the page, with that run's values, Spartanb has 780.9 MW of load (the case has 1 115.5) and 152.7 MW of shed, "Leaving it" is -25.1 MW and 12.6 Mvar over its 18 lines against -25.10 and 12.62 in the Boundary flows tab, and the circles by generation show the Generation tab's numbers.
+  - **A DC run** (savnw, by the worker): its voltages are 1, its reactive values are missing, and the page's functions show "–" for them, also in the totals, without an error.
+- **In a headless Chrome,** on a test instance on another port:
+  - a redraw of ACTIVSg500 takes 2 to 3 ms, with flows and arrows on, and a click on a bus takes 52 ms from the mouse to the new picture (the look of all 500 buses goes through Python);
+  - the zoom is kept by a click, by a change of colouring or mode, and by going to the Run page and back;
+  - Julia is asked for nothing until the Network page is shown: with the page closed the worker stays ready and Run stays enabled. The first network of a worker then takes 9 to 15 s, because Julia compiles the layout, and the next ones well under a second;
+  - AU14GenModel (areas only, 138 branches on 74 bus pairs): five circles in a row, 44 lines of more than one circuit;
+  - by zone and by area on savnw; every colouring with its legend; the three kinds of selection by click, by box and by typing; a bus pair that is not there is refused with its reason;
+  - "Use as target" with four bus pairs filled the Run form, and the run gave 30642.40499516773; a zone as target and a zone penalty arrived too;
+  - a run with shedding (zone FIFTH, uniform penalty 0.01): its shed of 582.9 MW at bus 154 shows on the bus and on the circle of zone FIRST;
+  - case9 (no groups: no circles, selection by buses or lines only), `simple` (the reason it cannot be read), a 1100 x 700 window, and the Run tab and back.
+
+*What the page showed about ACTIVSg500,* which is the kind of thing it was asked for: opening the boundary of Spartanb (18 lines) leaves six islands of 405, 79, 7, 4, 3 and 2 buses, because the zone has small pockets inside its neighbours and pockets of York inside it. Every zone of that case has such strays.
+
+*Found by the review before the handover, and fixed:*
+- **The first click after opening the page threw the zoom away,** because the canvas did not remember which graph it had fitted.
+- **The network was asked for when the app started,** which kept Julia busy for up to 15 s although nobody had opened the page. The page is built with the others and only shown later, so the canvas now reports when it first has a size on the screen (`ready`), and the page reads then.
+- **"Leaving it" was measured at the far end of each line,** which is wrong for Q by the line charging (263 Mvar where the results tab had 8.9). The worker now sends both ends of every line.
+- **A total over buses of which one has no value is "–",** not the sum of the others.
+- **The Run page's refresh** now also drops the networks read from Julia.
+
+*Choices the user can reverse:*
+- **One drawn line per pair of buses.** Parallel circuits are one line with their branches in the tooltip, and a bus-pair boundary opens them all, as `find_branches_by_bus_pairs` does.
+- **A stray keeps its group's colour and stands in the neighbour's circle.** When its group is selected it gets a ring, and its lines are part of the red boundary, because they are.
+- **A group in two large parts has two circles** with the same name (PLANT in savnw), and each shows the group's whole total.
+- **An amount is coloured by its size,** so a negative reactive value looks like a positive one; the tooltip has the sign, and the legend says so when it happens.
+- **"Leaving it" is measured at each line's end inside the selection,** as the boundary flows of a run with a target zone are.
+- **A click on nothing clears a group selection;** buses and lines are only cleared by Clear.
+- **Bus numbers show** from a zoom where they have room, and for the ringed buses.
+- **`@@result` grew by the `network` part** (about 95 KiB for ACTIVSg500), which every run now carries in the session's memory.
+
+*Not done, and not asked:* moving a bus by hand, line loading in % (the reply has no ratings yet), the values of runs of earlier sessions, a picture to save. The layout knows nothing of geography or voltage levels.
+
+*For the next phase:*
+- A page of a browser tab reaches another through `ctx.client_state()`; History's "Load into Run" should use `client_state()["run_form"]` and `["show_page"]`.
+- `ui.tab_panels` keeps hidden pages alive (`keep_alive` is on by default), so the canvas keeps its zoom while another page shows.
+- The colours of data follow the rule under "Look"; a new chart should take its colours from `network_view.py`.
+
+Not looked at: the PSS®E simulator and any dynamic simulation (the page reads the solution of the optimization only), a case with a line out of service or a bus without a line (the code paths are there, the cases have none), a case with more than eight groups, and the page in the user's own browser (it was seen in a headless Chrome).
+
+Test folders added: `savnw_flow_shed_gui_test_net` and `savnw_flow_shed_gui_test_net_dc` (worker jobs), `savnw_flow_shed_gui_test_net_form`, `savnw_flow_shed_gui_test_net_shed` and `ACTIVSg500_flow_shed_gui_test_net_spartanb` (runs from the form).

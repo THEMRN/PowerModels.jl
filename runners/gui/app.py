@@ -21,7 +21,7 @@ from nicegui import app, ui
 import theme
 from components.log_dialog import LogDialog
 from julia_worker import JuliaWorker
-from pages import run
+from pages import network, run
 from session_runs import SessionRuns
 
 # ==================== Settings ====================
@@ -30,14 +30,15 @@ HOST = "127.0.0.1"              # this machine only (decision 1); NiceGUI would 
 NATIVE_WINDOW = False           # a desktop window would need pywebview (gui_plan.md, decision 1)
 TITLE = "Islanding GUI"
 REPO_ROOT = Path(__file__).resolve().parents[2]
-PAGES = [run]                   # one tab per page module
+PAGES = [run, network]          # one tab per page module
 
 
 class AppContext:
     """
-    What the pages share: the Julia worker, the runs of this session, a state dict (values passed
-    between pages, and what is cached from Julia: the case list and each case's information),
-    and the repo root.
+    What the pages share: the Julia worker, the runs of this session, a state dict (what is cached
+    from Julia: the case list, each case's information and network), and the repo root. What
+    belongs to one browser tab (its Run form, the function that shows one of its pages) is in
+    `client_state()`, through which the pages of a tab pass values to each other.
     """
 
     def __init__(self, worker, repo_root):
@@ -45,6 +46,15 @@ class AppContext:
         self.runs = SessionRuns(worker)
         self.state = {}
         self.repo_root = repo_root
+        self._client_states = {}        # browser tab (client id) -> its dict
+
+    def client_state(self):
+        """The dict of the browser tab being built or served; it goes when the tab closes."""
+        client = ui.context.client
+        if client.id not in self._client_states:
+            self._client_states[client.id] = {}
+            client.on_delete(lambda: self._client_states.pop(client.id, None))
+        return self._client_states[client.id]
 
 
 ctx = AppContext(JuliaWorker(REPO_ROOT), REPO_ROOT)
@@ -111,6 +121,7 @@ def main_page():
             ui.label(TITLE).classes("brand-title")
         with ui.tabs() as tabs:
             page_tabs = [ui.tab(page.TITLE) for page in PAGES]
+        ctx.client_state()["show_page"] = tabs.set_value       # show_page(TITLE) brings a page of this tab forward
         with ui.element("div").classes("header-end"):
             build_worker_state()
     with ui.tab_panels(tabs, value=page_tabs[0], animated=False).classes("w-full"):
