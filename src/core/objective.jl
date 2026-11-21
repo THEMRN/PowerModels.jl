@@ -5,10 +5,10 @@ function _get_target_branch_flow_terms(pm::AbstractPowerModel, i::Int; is_ac::Bo
     flow_bus_from = f_bus
     flow_bus_to = t_bus
 
+    # every boundary flow is read at its end inside the target group, so a line recorded from outside the group is read at its t_bus
     if haskey(pm.data, "target_zone_buses")
         target_zone_buses = Set(pm.data["target_zone_buses"])
         if !(f_bus in target_zone_buses) && (t_bus in target_zone_buses)
-            println("Adjusting branch $i direction from $(f_bus) to $(t_bus)")
             flow_bus_from = t_bus
             flow_bus_to = f_bus
         end

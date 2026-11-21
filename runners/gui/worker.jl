@@ -5,8 +5,8 @@
 # It reads one JSON job per line on stdin, for example
 #   {"id": 7, "type": "run", "settings": {...}}
 # prints its log as the runners always do, and marks job events with control lines
-# that start with "@@" (@@ready, @@start, @@stage, @@data, @@result, @@error, @@done). A run
-# ends with @@result, the report information in MW. The protocol, the settings schema and the
+# that start with "@@" (@@ready, @@start, @@stage, @@activity, @@data, @@result, @@error, @@done).
+# A run ends with @@result, the report information in MW. The protocol, the settings schema and the
 # result summary are in runners/gui/gui_plan.md ("Contracts").
 #
 # Packages load once; the runner files are re-included before every run, so edits to
@@ -81,6 +81,11 @@ function send_stage(job, stage::AbstractString)
         "stage" => stage,
         "label" => get(STAGE_LABELS, stage, stage),
     ))
+end
+
+"Send a note on what a job's run is doing inside its stage (`@@activity`), as `run_islanding` reports it."
+function send_activity(job, text::AbstractString)
+    send_control("activity", Dict("id" => get(job, "id", nothing), "text" => text))
 end
 
 
@@ -467,11 +472,12 @@ end
 
 """
 Run one islanding scenario from settings (schema v1), the way islanding.jl's hardcoded block does.
-`progress` is called with each stage name (gui_plan.md, "Stages"). Returns what the result summary
-needs: the solve `result`, the network data as the console reports read it (with the embedded
+`progress` is called with each stage name (gui_plan.md, "Stages") and `activity` with each note
+inside the solve stage (`run_islanding`). Returns what the result summary needs: the solve
+`result`, the network data as the console reports read it (with the embedded
 `frequency_islands`), the settings, the target, the results folder and the start time (Unix).
 """
-function run_from_settings(settings; progress=stage -> nothing)
+function run_from_settings(settings; progress=stage -> nothing, activity=nothing)
     problems = find_settings_problems(settings)
     isempty(problems) || error("invalid settings:\n  " * join(problems, "\n  "))
 
@@ -530,6 +536,7 @@ function run_from_settings(settings; progress=stage -> nothing)
         voltage_security=settings["voltage_security"] == true,
         simulator=settings["simulator"],
         progress=progress,
+        activity=activity,
         run_settings=settings,
     )
     if haskey(network_data, "frequency_islands")
@@ -1122,7 +1129,8 @@ see the re-included runner functions.
 function handle_run(job)
     include_runner_files()
     progress = stage -> send_stage(job, stage)
-    finished_run = Base.invokelatest(run_from_settings, job["settings"]; progress=progress)
+    activity = text -> send_activity(job, text)
+    finished_run = Base.invokelatest(run_from_settings, job["settings"]; progress=progress, activity=activity)
 
     send_stage(job, "summary")
     summary = Base.invokelatest(calc_result_summary, finished_run)

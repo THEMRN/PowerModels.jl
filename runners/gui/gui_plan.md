@@ -185,7 +185,7 @@ The GUI writes **one JSON object per line** to the worker's stdin:
 | `ping` | none | `@@data {"id", "pong": true, "julia": "<version>"}` |
 | `list_cases` | none | `@@data {"id", "cases": ["cases/psse/savnw", ...]}` (folders with a `.raw`) |
 | `case_info` | `"case"` | `@@data {"id", "zones": [...], "areas": [...], "loads": [...], "gens": [...], "has_dyr"}` |
-| `run` | `"settings"` | `@@stage` lines, then `@@result`, then `@@done` |
+| `run` | `"settings"` | `@@stage` and `@@activity` lines, then `@@result`, then `@@done` |
 | `network` | `"case"` | `@@data {"id", "case", "buses": [...], "lines": [...], "zones", "areas", "group_names", "layouts"}`, see "Network reply" |
 
 The worker writes ordinary log lines (its own prints, Ipopt and `dynamic.py`) plus **control lines** that start with `@@`. Each control line has a kind and one-line JSON:
@@ -195,6 +195,7 @@ The worker writes ordinary log lines (its own prints, Ipopt and `dynamic.py`) pl
 | `ready` | `{"julia": "<version>"}`, once after startup |
 | `start` | `{"id", "type"}` |
 | `stage` | `{"id", "stage", "label"}`, see the stage table |
+| `activity` | `{"id", "text"}`, a note on what the run is doing inside the solve stage, see "Stages" |
 | `data` | `{"id", ...}`, the reply of `ping`, `list_cases`, `case_info` and `network` |
 | `result` | `{"id", "summary": {...}}`, see the result summary |
 | `error` | `{"id", "message"}`; the stack trace goes to the log just before it |
@@ -209,6 +210,7 @@ Rules on the GUI side:
 - **Starting the worker.** Start it with `cwd` set to the repo root and with `PYTHONUNBUFFERED=1` and `PYTHONIOENCODING=utf-8` in its environment. `dynamic.py` inherits both, so its output streams and decodes correctly.
 - **Reading the output.** Merge stderr into stdout, decode as UTF-8 with replacement, and read continuously so the pipe never fills.
 - **Long lines.** asyncio's `readline` fails on lines longer than its 64 KiB default, and the `@@result`, `case_info` and `network` lines for ACTIVSg500 can be longer. Pass a large `limit` (for example 16 MiB) when creating the subprocess.
+- **The empty line before a control line.** The `"\n"` that starts a control line leaves an empty line whenever the output was already at the start of a line. `julia_worker.py` holds an empty line until the next line comes and drops it when that is a control line, so a run's log does not fill with empty lines (Ipopt's notes come twice a second).
 - **Stop.** Run `taskkill /T /F /PID <pid>` so the `dynamic.py` child dies too, then restart the worker.
 - **Own process group.** Start the worker with `CREATE_NEW_PROCESS_GROUP`. Ctrl+Break in the app's console then reaches only the app, whose shutdown stops the worker tree. A keyboard Ctrl+C still reaches Julia, which handles it itself even in its own group (phase 6 test); the app shuts down at the same time and stops whatever is left.
 
@@ -237,7 +239,20 @@ The case as the Network page draws it. Values are in MW, Mvar and pu, rounded as
 | `dynamic_sim` | `run_islanding` | before calling `dynamic.py` |
 | `summary` | worker | building `@@result` |
 
-The GUI keeps the same list, in this order, as `STAGES` in `components/status_strip.py`, because it shows the stages a run has not reached yet. A new stage goes in three places: this table, `STAGE_LABELS` in `worker.jl` and `STAGES`. A stage that only some runs reach also goes in `STAGE_SETTINGS` there, with the setting that turns it on.
+The GUI keeps the same list, in this order, as `STAGES` in `components/status_strip.py`, because it shows the stages a run has not reached yet. A new stage goes in three places: this table, `STAGE_LABELS` in `worker.jl` and `STAGES`. A stage that only some runs reach also goes in `STAGE_SETTINGS` there, with the setting that turns it on. What the strip's "now" says for a stage is in `STAGE_ACTIVITIES` there.
+
+**Notes inside the solve stage (`@@activity`).** The solve stage prints nothing while it builds the model and while Ipopt works, so `run_islanding` reports each of its steps through its `activity` callback, and the worker sends each note as `@@activity`. A note holds until the next note or the next stage; the GUI drops it at each `@@stage`.
+
+| note | sent by | when |
+|---|---|---|
+| `building the optimization model` | `run_islanding` | before the solve |
+| `solving with Ipopt, iteration 37, constraint violation 3.2e-5` | Ipopt's intermediate callback, set by `build_ipopt_reporter` through `solve_custom_opf(...; before_solve)` | iteration 0 of each solve at once, then at most every `IPOPT_REPORT_SECONDS` (0.5 s) |
+| `voltage round 2: building the optimization model` | `solve_voltage_secure_opf` | before each round's solve; Ipopt's notes then start with the round too |
+| `voltage round 2: checking the islands' voltage` | `solve_voltage_secure_opf` | after the solve |
+| `voltage round 2: power flow and voltage indicators of the island at bus 3001` | `solve_voltage_secure_opf` | for each island |
+| `voltage round 2: sizing a shed in the island at bus 3001` | `solve_voltage_secure_opf` | before sizing a shed |
+
+Runs without `activity` (`islanding.jl`, `batch_islanding.jl`) set no callback and solve as before.
 
 ### Settings schema v1
 
@@ -414,7 +429,7 @@ A group's name is its record name, or its number when it has no record, as in `c
 │ RUNS IN THIS SESSION   run, started, case, ...   Report  Folder  Log  Load settings │
 ├────────────────────────────────────────────────────────────────────────────────────┤
 │ Run 3 ● finished   ✓ Load case — ✓ Prepare — ✓ Solve — ... — ✓ Summary              │
-│ now: latest log line, or the error          total 1:42    2 warnings   [Full log]  │
+│ now: Julia's note or the stage's sentence, or the error   total 1:42  2 warnings  [Full log] │
 └────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1713,3 +1728,40 @@ Test folders added:
 Test folders added:
 - savnw: `savnw_flow_shed_gui_test_ref_left`, `_ref_bottom1`, `_ref_bottom2`, `savnw_flow_shed_gui_test_preset_savnw_island_on_top`, `_on_left`, `_on_bottom_one_load`, `_on_bottom_two_loads`, `_north_south_separation`, `savnw_flow_shed_gui_test_preset_saved` and `savnw_flow_shed_gui_test_preset_wait`;
 - ACTIVSg500: `ACTIVSg500_flow_shed_gui_test_preset_activsg500_spartanb`, `_loads_0_7` and `_generators_pmin_0`.
+
+**What the strip says during a run (2026-11-21), at the user's request, between phases.** The user saw "now" stay on "Adding Load Shedding Penalties" and then on "Adjusting branch 426 direction from 493 to 380" for many seconds each, and a user could think that adding penalties was what took long.
+
+*What was wrong:* "now" showed the latest log line, and the slow steps print nothing while they work. The penalties line is printed in Prepare, and stayed while the Solve stage built the optimization model (with Julia compiling it on a fresh worker). The "Adjusting branch" lines were printed at the end of the build, one per boundary line read from its other end, and the last one stayed while Ipopt ran, because Ipopt at `print_level` 4 prints no line per iteration.
+
+*What changed:*
+- **Notes inside the solve stage** (`@@activity`, see "Stages"). `run_islanding` takes an `activity` callback and reports "building the optimization model" before the solve. `solve_voltage_secure_opf` reports each part of a round (its build, "checking the islands' voltage", each island's power flow and indicators, each shed it sizes), with the round in front: "voltage round 2: ...". The worker sends each note as `@@activity`.
+- **Ipopt's iterations.** `build_ipopt_reporter` (`islanding_core.jl`) makes Ipopt's intermediate callback report "solving with Ipopt, iteration 37, constraint violation 3.2e-5", the first iteration of each solve at once and then at most every 0.5 s. It continues the latest step, so in a voltage round the round stays in front. The callback has to be set on the JuMP model once its optimizer is attached, because JuMP empties the optimizer before the solve and that clears a callback set earlier. That is why `solve_custom_opf` now takes an optional `before_solve(model)`. Without it, the function is still plain `solve_model`, so `islanding.jl` and `batch_islanding.jl` solve exactly as before and print as before.
+- **The "Adjusting branch" line is gone** (`src/core/objective.jl`). It was debugging output, and it was misleading: nothing about the branch changes, the flow is only read at its end inside the target group. A comment in the code says so now.
+- **The strip's second row** (`status_strip.py`):
+  - "now" shows Julia's latest note for the stage, or else a sentence on what the stage does (`STAGE_ACTIVITIES`). Prepare's sentence names its parts, the results folder too, without putting the penalties first.
+  - Once a note is 3 s old or more (`STALE_SECONDS`), its age follows it ("· 12 s").
+  - On the first run since Julia started (no "run" in `worker.answered_types`), a note or sentence that is 3 s old also says "(first run: Julia compiles as it goes)". This is left out in the dynamic simulation, which runs outside Julia. On a fresh Julia, Prepare took 14 s, the first build 20 s, Ipopt's iteration 0 about 6 s, the first island power flow 4 s and the Excel report 4 s, all of it compiling. On a warm Julia the same run's Prepare is instant and its whole solve takes about 18 s.
+  - The latest log line is no longer shown. It first came after "now" as "last output 12 s ago: ...", in grey, and the user had it removed: "now" says what the run does, and Full log has the lines. The record no longer keeps the latest line either (`last_line` is gone from `session_runs.py`), since nothing else read it.
+  - A failed run shows its error in red across the row, as before, and a finished one its end time.
+- **`session_runs.py`.** A record also keeps `activity` and `activity_at`, which are emptied at each `@@stage`. A note changes the record quietly, as a log line does, so the runs table and History are not refreshed twice a second.
+- **`julia_worker.py`.** An empty line waits for the next line and is dropped when that line is a control line (see "Rules on the GUI side"). Without that, each of Ipopt's notes would have put an empty line into Full log.
+
+*How it was verified:*
+- **The worker** (`dev/send_jobs.py`): three runs gave their references to the last digit. These were savnw with four bus pairs (30642.40499516773), ACTIVSg500 SPARTANB (12140.983057017995) and ACTIVSg500 SPARTANB with voltage security (21729.825010181525, verified in 5 rounds, as `gui_test_results_volt5`). The notes came in order, and each round's Ipopt notes restarted at iteration 0. No "Adjusting branch" line was left.
+- **The script path:** `run_islanding` called as `islanding.jl` calls it, without `activity`, gave 30642.40499516773 with Ipopt's console output as before and no notes.
+- **DC:** savnw with four bus pairs gave 20879.980806582655 through the worker (with its notes) and through the script path.
+- **The GUI** (a test instance on port 8090 in a headless Chrome, a temporary preset deleted afterwards, the voltage security run above, on a fresh Julia). The strip was read every second:
+  - Prepare showed its sentence (with "last output 9 s ago: === Adding Load Shedding Penalties ===" beside it, before the log line was removed).
+  - Solve showed "voltage round 1: building the optimization model · 12 s" while Julia compiled, then "voltage round 1: solving with Ipopt, iteration 0, constraint violation 2.7", iteration 22, the island checks and the sheds, and rounds 2 to 5 in the same way.
+  - After that came Reports, "writing the Excel report", Summary and "at 13:41:17".
+  - The run gave 21729.825010181525.
+  - Full log had 295 lines, and its 32 empty lines were all Ipopt's own.
+  - A failing run (savnw, bus pair 1-2) showed "no boundary line found for bus pairs 1-2" in red, across the row.
+  - The same run again at 1100 px on a fresh Julia showed the first-run hint in each slow step listed above and none in the fast ones, and gave 21729.825010181525. The row fits; a note that is too long ends in "…", with the whole text in its tooltip. After that run, the Prepare sentence and the hint were shortened, so "first run" shows at that width. That last text change was not run again.
+
+*Choices the user can reverse:*
+- **0.5 s between Ipopt's notes and 3 s before an age shows** are `IPOPT_REPORT_SECONDS` in `islanding_core.jl` and `STALE_SECONDS` in `status_strip.py`.
+- **Notes only in the solve stage.** On a warm Julia the other stages take a second or two, or print as they go (the dynamic simulation), and their sentences say what they do. On a fresh Julia each of them is slower once, which the first-run hint says.
+- **The age of a note is its own:** Ipopt's note is renewed at each report, so its age stays small while Ipopt works, and the stage's clock gives the whole solve.
+
+Test folders added: `savnw_flow_shed_gui_test_activity_savnw`, `_activity_script`, `_activity_dc`, `_activity_dc_script`, `ACTIVSg500_flow_shed_gui_test_activity_500`, `_activity_volt` and `_activity_gui` (the failing run stops before its folder is made).

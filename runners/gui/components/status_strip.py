@@ -4,7 +4,8 @@ is. It shows the run in progress, and otherwise the latest run of the session:
 
 - the stages (gui_plan.md, "Stages") as steps: done, current, not reached, not part of this run;
 - the time in the current stage and in the whole run;
-- "now", the latest line of the run's log, or the error of a run that failed;
+- "now", what the run is doing: Julia's latest note for the stage (@@activity, such as Ipopt's
+  iteration), or else what the stage does; the error of a run that failed;
 - the number of warnings in the log (click: the warnings) and Full log (the whole raw log).
 
 Everything it shows is on the run's record (session_runs.py), so every browser tab shows the
@@ -20,6 +21,7 @@ import theme
 
 # ==================== Settings ====================
 REFRESH_SECONDS = 0.5           # how often the clock, "now" and the warning count are read during a run
+STALE_SECONDS = 3               # s, from which "now" says how old Julia's note is
 STAGES = [                      # (stage, label) in the order a run reaches them; as STAGE_LABELS in worker.jl
     ("load_case", "Load case"),
     ("prepare", "Prepare"),
@@ -31,6 +33,19 @@ STAGES = [                      # (stage, label) in the order a run reaches them
     ("dynamic_sim", "Dynamic simulation"),
     ("summary", "Summary"),
 ]
+STAGE_ACTIVITIES = {            # stage -> what "now" says until Julia sends a note of its own
+    "load_case": "reading the case file",
+    "prepare": "preparing the run: network modifications, boundary lines, penalties, results folder",
+    "frequency_limits": "computing each island's frequency limits from the .dyr file",
+    "solve": "building the optimization model and solving it with Ipopt",
+    "reports": "computing the reports of the solution",
+    "excel": "writing the Excel report",
+    "export": "writing the .raw, .dyr and line outage files",
+    "dynamic_sim": "running the dynamic simulation",
+    "summary": "putting the results together",
+}
+STAGES_OUTSIDE_JULIA = {"dynamic_sim"}     # stages that Julia's compiling on its first run does not slow
+FIRST_RUN_HINT = "first run: Julia compiles as it goes"
 STAGE_SETTINGS = {              # stage -> the setting that has to be on for a run to reach it
     "frequency_limits": "frequency_security",
     "export": "run_dynamic_sim",
@@ -54,6 +69,15 @@ def format_clock(seconds):
     if hours:
         return f"{hours}:{minutes:02d}:{seconds:02d}"
     return f"{minutes}:{seconds:02d}"
+
+
+def format_age(seconds):
+    """How old something is: "12 s", or "3 min 5 s" from one minute."""
+    seconds = max(0, int(seconds))
+    if seconds < 60:
+        return f"{seconds} s"
+    minutes, seconds = divmod(seconds, 60)
+    return f"{minutes} min {seconds} s"
 
 
 def calc_run_seconds(record):
@@ -100,11 +124,30 @@ def find_steps(record):
     return steps
 
 
-def describe_now(record):
-    """(title, text, is_bad) of the strip's second row: what the run is doing, or how it ended."""
+def describe_now(record, first_run=False):
+    """
+    (title, text, is_bad) of the strip's second row: what the run is doing, or how it ended. During
+    a run that is Julia's latest note for the stage, or else what the stage does (STAGE_ACTIVITIES).
+    Once that is STALE_SECONDS old, a note says how old it is, and on the first run since Julia
+    started (`first_run`) both say that Julia compiles, which makes every step slower that once.
+    """
     status = record["status"]
     if status == "running":
-        return "now", record["last_line"] or "waiting for Julia to start the run...", False
+        if not record["stages"]:
+            return "now", "waiting for Julia to start the run...", False
+        stage = record["stages"][-1]
+        if record["activity"]:
+            text, since = record["activity"], record["activity_at"]
+        else:
+            text, since = STAGE_ACTIVITIES.get(stage["stage"], stage["label"]), stage["at"]
+        age = time.time() - since
+        if age < STALE_SECONDS:
+            return "now", text, False
+        if record["activity"]:
+            text = f"{text} · {format_age(age)}"
+        if first_run and stage["stage"] not in STAGES_OUTSIDE_JULIA:
+            text = f"{text} ({FIRST_RUN_HINT})"
+        return "now", text, False
     if status == "failed":
         return "error", (record["error"] or "the run failed").splitlines()[0], True
     ended = datetime.fromtimestamp(record["ended_at"]).strftime("%H:%M:%S")
@@ -191,7 +234,8 @@ class StatusStrip:
         record = self.find_record()
         if record is None:
             return
-        title, text, is_bad = describe_now(record)
+        first_run = "run" not in self.ctx.worker.answered_types     # this Julia has not finished a run yet
+        title, text, is_bad = describe_now(record, first_run)
         self.now_title.text = title
         self.now_text.text = text
         self.now_text.classes(replace="strip-now bad" if is_bad else "strip-now")

@@ -12,7 +12,6 @@ from julia_worker import call_listeners
 
 # ==================== Settings ====================
 STATUSES = ("running", "finished", "failed", "stopped")
-LAST_LINE_LENGTH = 300          # characters kept of a run's latest log line
 WARNING_WORD = "warning"        # a log line with this word, in any case, counts as a warning
 IGNORED_WARNINGS = (            # lines with the word that are not warnings
     "Suppressing information and warning messages",     # PowerModels.silence(), once per Julia worker
@@ -26,11 +25,6 @@ def is_warning(line):
     return not any(phrase in line for phrase in IGNORED_WARNINGS)
 
 
-def has_text(line):
-    """True for a log line with a letter or a digit in it, so not for a blank line or a rule of dashes."""
-    return any(character.isalnum() for character in line)
-
-
 class SessionRuns:
     """
     One record (a dict) per run job, oldest first:
@@ -41,7 +35,9 @@ class SessionRuns:
       None while running) and `seconds` (Julia's own time for the job, from @@done);
     - `stage` (the latest @@stage) and `stages` (every stage reached, in order: `stage`, `label`
       and `at`, the time it started);
-    - `last_line` (the latest log line with text in it) and `warnings` (the log lines that warn);
+    - `activity` and `activity_at` (the latest @@activity note of the current stage and when it
+      came; None at the start of each stage);
+    - `warnings` (the log lines that warn);
     - `summary` (the @@result summary, None without one) and `error` (the @@error message, or
       why Julia stopped).
 
@@ -61,8 +57,8 @@ class SessionRuns:
     def on_change(self, listener):
         """
         Call `listener()` whenever a record is added or its status, stage, result or error changes.
-        Not for each log line: `last_line` and `warnings` change quietly, and a view that shows
-        them reads them on a timer. Returns its remover.
+        Not for each log line or note: `warnings` and `activity` change quietly, and a view that
+        shows them reads them on a timer. Returns its remover.
         """
         self._listeners.append(listener)
 
@@ -87,7 +83,8 @@ class SessionRuns:
             "seconds": None,
             "stage": None,
             "stages": [],
-            "last_line": "",
+            "activity": None,
+            "activity_at": None,
             "warnings": [],
             "summary": None,
             "error": None,
@@ -114,10 +111,16 @@ class SessionRuns:
         record = self.find(payload.get("id"))
         if record is None:
             return
+        if kind == "activity":
+            record["activity"] = payload.get("text") or None
+            record["activity_at"] = time.time()
+            return                                          # quiet, as a log line: up to a few a second
         if kind == "stage":
             stage = payload.get("stage")
             record["stage"] = stage
             record["stages"].append({"stage": stage, "label": payload.get("label", stage), "at": time.time()})
+            record["activity"] = None                       # a note belongs to the stage it came in
+            record["activity_at"] = None
         elif kind == "result":
             record["summary"] = payload.get("summary")
         elif kind == "error":
@@ -132,14 +135,11 @@ class SessionRuns:
         call_listeners(self._listeners)
 
     def _handle_log(self, line, job_id):
-        """Keep a run's latest line and its warnings. Quiet: the listeners are not called for a log line."""
+        """Keep a run's warnings. Quiet: the listeners are not called for a log line."""
         record = self.find(job_id)
         if record is None:
             return
         text = line.rsplit(chr(13), 1)[-1].strip()         # a progress line rewritten in place: its last state
-        if not has_text(text):
-            return
-        record["last_line"] = text[:LAST_LINE_LENGTH]
         if is_warning(text):
             record["warnings"].append(text)
 

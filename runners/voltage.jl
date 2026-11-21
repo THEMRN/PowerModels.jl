@@ -499,19 +499,22 @@ end
 
 # ==================== The loop between the optimizer and the indicator ====================
 """
-    solve_voltage_secure_opf(network_data, model_type, optimizer, target_lines)
+    solve_voltage_secure_opf(network_data, model_type, optimizer, target_lines; activity, before_solve)
 
 Solve the pre-event optimization (`solve_custom_opf`) inside the voltage loop: after each
 solve, every island left by opening `target_lines` is checked with the voltage indicator, and
 where a bus is above the threshold a preemptive shed is sized and handed back to the next
 solve as `load["voltage_shed"]`. Objectives without load shedding are only checked.
 
+`activity(step, detail)` is told each part of a round as it starts ("voltage round 2",
+"building the optimization model"), and `before_solve` goes to every `solve_custom_opf`.
+
 Returns the result of the last solve, with `result["voltage_security"]`: `"verified"`,
 `"rounds"`, the `"worst_indicator"` of the last round, and `"details"`, one entry per round
 (round, optimization status, threshold, and each island: `calc_island_voltage` with its worst
 indicator and the `calc_island_shed` sized there, or only its status when it was not checked).
 """
-function solve_voltage_secure_opf(network_data, model_type, optimizer, target_lines)
+function solve_voltage_secure_opf(network_data, model_type, optimizer, target_lines; activity=(step, detail) -> nothing, before_solve=nothing)
     base_mva = network_data["baseMVA"]
     can_shed = contains(network_data["objective"], "shed")
     for (_, load) in network_data["load"]
@@ -528,10 +531,14 @@ function solve_voltage_secure_opf(network_data, model_type, optimizer, target_li
     result = Dict{String,Any}()
     details = Dict{String,Any}[]                     # one entry per round, kept across the solves
     for round in 1:MAX_VOLTAGE_ROUNDS
+        step = "voltage round $round"
+
         # 1. solve the pre-event optimization
-        result = solve_custom_opf(network_data, model_type, optimizer)
+        activity(step, "building the optimization model")
+        result = solve_custom_opf(network_data, model_type, optimizer; before_solve=before_solve)
 
         # 2. predict the island states: the solved network with the boundary lines removed
+        activity(step, "checking the islands' voltage")
         opened_network = deepcopy(network_data)
         update_data!(opened_network, result["solution"])
         for line in target_lines
@@ -546,6 +553,7 @@ function solve_voltage_secure_opf(network_data, model_type, optimizer, target_li
         worst_indicator = 0.0
         round_islands = Dict{String,Any}[]
         for island_buses in islands
+            activity(step, "power flow and voltage indicators of the island at bus $(minimum(island_buses))")
             island = calc_island_state(opened_network, admittance, island_buses)
             if island === nothing
                 println("Island at bus $(minimum(island_buses)) has no generator to hold its voltage, not checked")
@@ -571,6 +579,7 @@ function solve_voltage_secure_opf(network_data, model_type, optimizer, target_li
             can_shed || continue
 
             # 4. size a shed at the worst buses
+            activity(step, "sizing a shed in the island at bus $(island_voltage["bus"])")
             shed = size_island_shed!(island)
             island_shed = calc_island_shed(island, shed)
             print_island_shed(island_shed, base_mva)

@@ -83,6 +83,7 @@ class JuliaWorker:
         self._next_id = 1
         self._pending = {}                      # job id -> future of a request's reply, or None for send()
         self._current_job = None                # job between its @@start and @@done
+        self._blank_held = False                # an empty line not passed on yet: it may come from the next control line
         self._stopping = False
         self._watcher = None
         self._lifecycle_lock = asyncio.Lock()   # start, stop and restart one at a time
@@ -146,6 +147,7 @@ class JuliaWorker:
         environment["PYTHONIOENCODING"] = "utf-8"
         self.julia_version = ""
         self.answered_types = set()
+        self._blank_held = False
         self._stopping = False
         self._set_state("starting")
         try:
@@ -216,18 +218,32 @@ class JuliaWorker:
                 traceback.print_exc()           # keep reading: a full pipe would block Julia
 
     def _handle_line(self, line):
+        """
+        A control line goes to the protocol and the control listeners, any other line to the log.
+        Julia starts each control line on a fresh line, which leaves an empty line before it
+        whenever the output was already at the start of a line, so an empty line waits for the
+        next line and is dropped when that is a control line.
+        """
         control = parse_control(line)
         if control is None:
-            if self._current_job is None:
-                self.worker_log.append(line)
-            else:
-                self.job_logs.setdefault(self._current_job, []).append(line)
-            call_listeners(self._log_listeners, line, self._current_job)
+            if self._blank_held:
+                self._add_log_line("")
+            self._blank_held = line == ""
+            if not self._blank_held:
+                self._add_log_line(line)
             return
 
+        self._blank_held = False
         kind, payload = control
         self._handle_control(kind, payload)
         call_listeners(self._control_listeners, kind, payload)
+
+    def _add_log_line(self, line):
+        if self._current_job is None:
+            self.worker_log.append(line)
+        else:
+            self.job_logs.setdefault(self._current_job, []).append(line)
+        call_listeners(self._log_listeners, line, self._current_job)
 
     def _handle_control(self, kind, payload):
         """Follow the job protocol: state, current job, and the replies of requests."""

@@ -15,9 +15,17 @@ function solve_opf(file, model_type::Type, optimizer; kwargs...)
     return solve_model(file, model_type, optimizer, build_opf; kwargs...)
 end
 
-""
-function solve_custom_opf(file, model_type::Type, optimizer; kwargs...)
-    return solve_model(file, model_type, optimizer, build_custom_pf; kwargs...)
+"""
+Solve the islanding problem (`build_custom_pf`). `before_solve`, when given, is called with the
+JuMP model once its optimizer is attached, just before the solve (the GUI sets Ipopt's iteration
+callback there, which an optimizer only keeps from that point on); without it this is `solve_model`.
+"""
+function solve_custom_opf(file, model_type::Type, optimizer; before_solve=nothing, kwargs...)
+    before_solve === nothing && return solve_model(file, model_type, optimizer, build_custom_pf; kwargs...)
+    pm = instantiate_model(file, model_type, build_custom_pf; kwargs...)
+    JuMP.set_optimizer(pm.model, optimizer)
+    before_solve(pm.model)
+    return optimize_model!(pm)
 end
 
 ""

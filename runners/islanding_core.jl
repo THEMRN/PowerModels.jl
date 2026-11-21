@@ -20,6 +20,30 @@ if !@isdefined(PowerModelType)
         "AC" => ACPPowerModel,
     )
 end
+const IPOPT_REPORT_SECONDS = 0.5    # s, shortest time between two reports of Ipopt's iterations through `activity`
+
+# Ipopt's iterations ----------------------------------------------------------
+"""
+A `before_solve` for `solve_custom_opf` that makes Ipopt report its iterations through
+`report(detail)`: the first iteration of each solve at once, then at most every
+IPOPT_REPORT_SECONDS, as "solving with Ipopt, iteration 37, constraint violation 3.2e-5"
+(Ipopt's largest constraint violation, unscaled).
+"""
+function build_ipopt_reporter(report)
+    last_report = Ref(-Inf)
+    function report_iteration(alg_mod, iter_count, obj_value, inf_pr, inf_du, mu, d_norm, regularization_size, alpha_du, alpha_pr, ls_trials)
+        try
+            if iter_count == 0 || time() - last_report[] >= IPOPT_REPORT_SECONDS
+                last_report[] = time()
+                report("solving with Ipopt, iteration $iter_count, constraint violation $(round(inf_pr, sigdigits=2))")
+            end
+        catch err
+            println("Ipopt's iteration report failed: ", sprint(showerror, err))     # the solve goes on
+        end
+        return true     # false would stop Ipopt
+    end
+    return model -> MOI.set(model, Ipopt.CallbackFunction(), report_iteration)
+end
 
 # Jacobian voltage prediction -------------------------------------------------
 function predict_voltage_change_from_opened_lines(network_data, result, target_lines)
@@ -206,6 +230,9 @@ in it as `gui_settings`.
 
 `progress`, when given, is called with the name of each stage as it starts:
 "frequency_limits", "solve", "reports", "excel", "export", "dynamic_sim".
+`activity`, when given, is called with a note on what the solve stage is doing, as each of its
+steps starts: building the optimization model, Ipopt's iterations (`build_ipopt_reporter`), and
+the parts of each voltage round ("voltage round 2: checking the islands' voltage").
 
 Returns the solve `result`.
 """
@@ -229,12 +256,22 @@ function run_islanding(network_data;
     voltage_security::Bool=false,
     simulator::AbstractString="psse",
     progress=nothing,
+    activity=nothing,
     run_settings=nothing,
 )
     simulator in ("psse", "andes") || error("unknown simulator \"$simulator\", use \"psse\" or \"andes\"")
     voltage_security && opf_model != "AC" && error("voltage_security needs the AC model (bus voltages and reactive power)")
     target_zone !== nothing && target_area !== nothing && error("give target_zone or target_area, not both: a study is by zone or by area")
     report_stage(stage) = progress === nothing || progress(stage)
+
+    # notes inside a stage, "<step>: <detail>"; Ipopt's iterations continue the latest step
+    current_step = Ref("")
+    function report_activity(step, detail)
+        activity === nothing && return
+        current_step[] = step
+        activity(isempty(step) ? detail : "$step: $detail")
+    end
+    before_solve = activity === nothing ? nothing : build_ipopt_reporter(detail -> report_activity(current_step[], detail))
 
     # results folder and the per-run settings file
     run_started = time()
@@ -302,9 +339,10 @@ function run_islanding(network_data;
     optimizer = optimizer_with_attributes(Ipopt.Optimizer, "print_level" => 4)
     if voltage_security
         # re-solved until the voltage indicator of every island clears its threshold
-        result = PowerModels.solve_voltage_secure_opf(network_data, power_model, optimizer, target_lines)
+        result = PowerModels.solve_voltage_secure_opf(network_data, power_model, optimizer, target_lines; activity=report_activity, before_solve=before_solve)
     else
-        result = PowerModels.solve_custom_opf(network_data, power_model, optimizer)
+        report_activity("", "building the optimization model")
+        result = PowerModels.solve_custom_opf(network_data, power_model, optimizer; before_solve=before_solve)
     end
     solve_seconds = time() - solve_started
     report_stage("reports")
