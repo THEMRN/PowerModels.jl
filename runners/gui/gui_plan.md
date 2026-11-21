@@ -1833,7 +1833,9 @@ Test folders added: `ACTIVSg500_flow_shed_gui_test_ref_except` (the `islanding.j
   - The `opf_shed` run shed 73.51 MW in LIGHTCO by UFLS, 59.10 MW at bus 205 and 14.41 MW at bus 203, as the console printed.
   - The `flow` run had 8 relays and no stage acted.
   - With the simulation off, `ufls` was `null`.
+  - `flow_shed` with LIGHTCO at 2.5 λ shed 25.88 MW before the event at bus 203. Its UFLS side has 274.12 MW in service there and 3174.12 MW in total, the left side's load less its shed. No relay acted.
+  - `opf_shed` at 0.5 λ still shed nothing before the event, so a run with both sides non-zero was not seen.
 - **On a test instance (port 8090):** the same three runs, from History's Load into Run. Their tabs show the two sides, 5.00 % at both buses (2.34 % in total), and the sentences for the other cases.
-- **Pure functions:** the sentences were checked on hand-made summaries for every status.
+- **Pure functions:** the sentences were checked on hand-made summaries for every status. PSS®E, no record, no relays and the stopped-early line were not seen drawn in the GUI.
 
-Test folders added: `savnw_opf_shed_gui_test_ufls_area`, `savnw_flow_gui_test_ufls_flow`, `savnw_opf_shed_gui_test_ufls_nosim`, and `savnw_flow_gui_test_ufls_area` (the GUI's flow run).
+Test folders added: `savnw_opf_shed_gui_test_ufls_area`, `savnw_flow_gui_test_ufls_flow`, `savnw_opf_shed_gui_test_ufls_nosim`, `savnw_flow_gui_test_ufls_area` (the GUI's flow run), `savnw_flow_shed_gui_test_ufls_both` and `savnw_opf_shed_gui_test_ufls_low`.

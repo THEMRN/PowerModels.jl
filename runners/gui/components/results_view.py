@@ -97,7 +97,10 @@ def describe_run(record):
 
 
 def find_tabs(summary):
-    """The tabs a summary fills, in order: a part that is null (the feature was off) has no tab."""
+    """
+    The tabs a summary fills, in order: a frequency or voltage part that is null (the check was
+    off) has no tab. Load shedding is always there, its sides saying when they have nothing.
+    """
     optional = ("frequency", "voltage")
     return [tab for tab in TAB_LABELS if tab not in optional or summary.get(tab) is not None]
 
