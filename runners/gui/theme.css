@@ -309,6 +309,66 @@ body {
   display: none;
 }
 
+/* waiting: a turning ring before a text that says what is awaited (theme.show_hint with
+   `waiting`, theme.Cover). The ring, a cover and a greyed part show after 0.2 s
+   (theme.BUSY_DELAY), so a quick wait shows nothing. */
+.waiting::before {
+  content: "";
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 6px;
+  vertical-align: -1px;
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: turn 0.8s linear infinite, appear 0.15s 0.2s backwards;
+}
+/* a veil over a part that waits, with the ring and its text in the middle */
+.wait-cover {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(255, 255, 255, 0.8);
+  animation: appear 0.15s 0.2s backwards;
+}
+.wait-cover > .waiting {
+  max-width: 440px;
+  color: var(--ink-2);
+  line-height: 1.5;
+  text-align: center;
+}
+.wait-cover > .waiting::before {
+  width: 12px;
+  height: 12px;
+  margin-right: 8px;
+  vertical-align: -2px;
+}
+/* controls that wait for something: greyed, and they take no clicks */
+.greyed {
+  opacity: 0.45;
+  pointer-events: none;
+  transition: opacity 0.15s 0.2s;
+}
+/* the app was closed or is restarting: NiceGUI shows its "Connection lost" note, and the page
+   greys out, since nothing on it answers until the app is back */
+body:has(#popup[aria-hidden="false"]) .q-header,
+body:has(#popup[aria-hidden="false"]) .q-page-container {
+  opacity: 0.45;
+  pointer-events: none;
+  transition: opacity 0.15s;
+}
+@keyframes turn {
+  to { transform: rotate(360deg); }
+}
+@keyframes appear {
+  from { opacity: 0; }
+}
+
 /* a dot and a few words: `data-state` gives the colour */
 .state {
   display: inline-flex;
@@ -1113,6 +1173,18 @@ input[type="number"]::-webkit-outer-spin-button {
   min-height: 0;
   border-top: 1px solid var(--line);
 }
+/* the drawing and the cover that says what it waits for share the first cell */
+.network-body > .network-canvas,
+.network-body > .wait-cover {
+  grid-area: 1 / 1;
+}
+.network-body > .wait-cover {
+  position: relative;
+  inset: auto;
+}
+.network-body > .network-side {
+  grid-area: 1 / 2;
+}
 .network-canvas {
   position: relative;
   min-width: 0;
@@ -1145,6 +1217,11 @@ input[type="number"]::-webkit-outer-spin-button {
   padding: 12px;
   border-left: 1px solid var(--line);
   overflow-y: auto;
+}
+.network-selection {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 .network-side > .eyebrow:not(:first-child) {
   margin-top: 8px;

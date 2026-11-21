@@ -181,7 +181,10 @@ class HistoryPage:
         self.rows = []                      # every run, from results_index
         self.shown = []                     # the runs that pass the filters
         self.selected = None                # id of the selected run
+        self.shown_details = None           # the run whose details are on show, as it was then
+        self.read_at = ""                   # clock time the folders were last read
         self.running = set()                # (number, stages reached) of this session's runs that are running
+        self.load_request = 0               # counts Load into Run clicks: a newer one replaces one still waiting for Julia
 
     # -------------------- layout --------------------
     def build(self):
@@ -189,7 +192,9 @@ class HistoryPage:
             with theme.toolbar():
                 theme.eyebrow("Runs in results/psse")
                 self.count = theme.toolbar_text()
-                theme.button("Refresh", icon="refresh", kind="ghost", on_click=self.refresh).tooltip(
+                with self.count:
+                    self.count_tooltip = ui.tooltip()       # the settings files that could not be read, and why
+                theme.button("Refresh", icon="refresh", kind="ghost", on_click=self.refresh, busy=True).tooltip(
                     "Read the results folders again"
                 )
             with ui.element("div").classes("history-filters"):
@@ -214,6 +219,7 @@ class HistoryPage:
                     with theme.line():
                         self.report_button = theme.button("Open report", kind="ghost", on_click=self._open_report)
                         self.folder_button = theme.button("Open folder", kind="ghost", on_click=self._open_folder)
+                    # no ring: it shows the Run page at once, whose form says what it waits for
                     self.load_button = theme.button("Load into Run", kind="primary", on_click=self._load_into_run)
         self.refresh()
 
@@ -221,6 +227,7 @@ class HistoryPage:
     def refresh(self):
         """Read results/psse again, keeping the filters and the selection."""
         self.rows, unreadable = results_index.scan_results(self.ctx.repo_root)
+        self.read_at = datetime.now().strftime("%H:%M:%S")
         running = self.ctx.runs.find_running()
         if running is not None:
             folder = results_index.calc_folder_name(running["settings"])
@@ -266,8 +273,11 @@ class HistoryPage:
             self.selected = None
         text = f"{len(self.rows)} runs" if len(self.shown) == len(self.rows) else f"{len(self.shown)} of {len(self.rows)} runs"
         if self.unreadable:
-            text += f"; {len(self.unreadable)} settings files could not be read"
-        self.count.text = text
+            unreadable = len(self.unreadable)
+            text += f"; {unreadable} settings file{'s' if unreadable > 1 else ''} could not be read (a run stopped while writing it?)"
+        self.count.text = f"{text} · read at {self.read_at}"
+        self.count_tooltip.text = "; ".join(f"{name}: {reason}" for name, reason in self.unreadable)
+        self.count_tooltip.set_visibility(bool(self.unreadable))
         self.table.show([build_table_row(row) for row in self.shown], self.selected)
         self._show_details()
 
@@ -292,6 +302,9 @@ class HistoryPage:
 
     def _show_details(self):
         row = self._find_selected()
+        if row == self.shown_details and row is not None:
+            return                          # the folders were read again and this run did not change: no flicker
+        self.shown_details = row
         self.details.clear()
         with self.details:
             if row is None:
@@ -335,16 +348,21 @@ class HistoryPage:
             return
         record = row["record"]
         notes = []
+        self.load_request += 1
+        request = self.load_request
+        # the Run page first: its form says what it waits for while Julia reads the case
+        self.client_state["show_page"]("Run")
         if row["from_gui"]:
             run_settings = copy.deepcopy(record["gui_settings"])
         else:
             case_info, error = await form.find_case_info(case)
+            if request != self.load_request:        # another run was loaded meanwhile
+                return
             if error:
-                ui.notify(f"The case could not be read: {error}", position="top", type="warning")
+                ui.notify(f"The settings were not loaded, because the case could not be read: {error}", position="top", type="warning")
                 return
             load_buses = {load["bus"] for load in case_info.get("loads", []) if load["status"] != 0}
             run_settings, notes = results_index.build_settings_from_record(record, case, load_buses)
-        self.client_state["show_page"]("Run")
         message = f"The settings of the run of {row['time_text']} ({row['folder']}) are in the form."
         await self.client_state["load_settings"](run_settings, " ".join([message] + notes))
 

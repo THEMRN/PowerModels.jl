@@ -57,6 +57,29 @@ def describe_boundary(run_settings):
     return f"{boundary['kind']} {boundary['name']}" if boundary["name"] else f"no {boundary['kind']}"
 
 
+def find_run_block(ctx, form):
+    """Why Run cannot start now, as its tooltip says it, or "" when it can. A run sent while Julia is busy with a question waits for it."""
+    running = ctx.runs.find_running()
+    if ctx.worker.state in ("stopped", "crashed"):
+        return "Julia is not running: Restart Julia first"
+    if running is not None:
+        return f"Run {running['number']} is running: wait for it to end, or Stop it"
+    if not form.cases_loaded:
+        return "Waiting for Julia's case list"
+    if form.is_waiting():
+        return "Waiting for Julia to read the case"
+    return ""
+
+
+def find_runs_signature(ctx):
+    """What the runs table shows of each run; it is built again only when this changes, not at every stage of a run."""
+    signature = []
+    for record in ctx.runs.records:
+        files = (record["summary"] or {}).get("files") or {}
+        signature.append((record["number"], record["status"], record["error"], record["seconds"], files.get("report"), files.get("output_path")))
+    return signature
+
+
 def describe_settings(run_settings):
     """The settings on one line, for the toolbar while the sheet is folded: case, objective, model, boundary, λ."""
     parts = [Path(run_settings["case"]).name or "no case", run_settings["objective"], run_settings["opf_model"]]
@@ -74,15 +97,24 @@ class RunForm:
     The settings sheet and its four sections. `read()` gives the settings in the form with the problems that keep
     them from running, `write()` fills the form from settings, and `load_cases()` fills the case
     list and the first settings.
+
+    While it waits for Julia (the case list, a case's zones, areas and loads) the hint under the
+    case says for what, the settings below it are greyed out and `is_waiting()` is true; a read
+    that Julia did not answer (Stop, Restart Julia) is made again when Julia is ready (`retry`).
     """
 
     def __init__(self, ctx):
         self.ctx = ctx
         self.cases_loaded = False
         self.loading_cases = False
+        self.case_list_error = ""       # why there is no case list
         self.loaded_case = None         # case whose zones, areas and loads the form offers
         self.case_info = {}             # its case_info ({} while unknown or unreadable)
         self.case_error = ""            # why the case could not be read
+        self.reading = None             # case whose case_info is being asked from Julia
+        self.retry = None               # a read Julia did not answer, to make again once it is ready (an async function)
+        self.on_wait = None             # called when the form starts or stops waiting (the Run button follows it)
+        self.penalty_signature = None   # what the penalty rows were last built from
         self.penalty_rows = []          # [{"kind": "zone" | "area" | "bus", "name", "times_lambda"}]
         self.modifications = {}         # network modifications, as in the settings; the advanced dialog edits them
         self.on_modifications = None    # called when the modifications, or the study they are for, may have changed
@@ -97,7 +129,7 @@ class RunForm:
                 with theme.stack():
                     with theme.line():
                         self.case = ui.select({}, on_change=self._case_changed).classes("grow")
-                        theme.button(icon="refresh", kind="ghost", on_click=self.reload_cases).tooltip(
+                        theme.button(icon="refresh", kind="ghost", on_click=self.reload_cases, busy=True).tooltip(
                             "Read the case list and the case again"
                         )
                     self.case_message = theme.hint()
@@ -110,7 +142,7 @@ class RunForm:
                 theme.label("Flow weight λ")
                 self.lam = ui.number(value=500, min=0)
 
-            with theme.Section("Boundary"):
+            with theme.Section("Boundary") as boundary_section:
                 with theme.fields():
                     theme.label("Select by")
                     self.boundary_kind = ui.toggle({"bus_pairs": KIND_LABELS["bus_pairs"]}, value="bus_pairs", on_change=self._changed)
@@ -145,7 +177,7 @@ class RunForm:
                     with theme.line():
                         theme.button("Add row", icon="plus", kind="ghost", small=True, on_click=self._add_penalty_row)
 
-            with theme.Section("Security and simulation"):
+            with theme.Section("Security and simulation") as security_section:
                 with theme.stack():
                     self.frequency_security = ui.checkbox("Frequency security")
                     self.voltage_security = ui.checkbox("Voltage security").tooltip("Needs the AC model")
@@ -156,11 +188,15 @@ class RunForm:
                     theme.label("Output tag")
                     self.output_tag = ui.input(placeholder="none").tooltip("Added to the name of the results folder")
                 self.dyr_message = theme.hint()
+        # what greys out while the form waits for Julia: all but the case itself, which may still be changed
+        self.waiting_parts = [self.objective, self.opf_model, self.flow_model, self.lam, boundary_section, penalties, security_section]
         self.update_view()          # before any case is read: only what needs no case is shown
+        self._show_wait()
 
     def _build_penalty_rows(self):
         """One line per penalty row: kind, zone, area or bus, the penalty in multiples of λ, and a remove button."""
         kinds = self._find_penalty_kinds()
+        self.penalty_signature = self._find_penalty_signature()
         for row in self.penalty_rows:
             names = self._find_bus_options() if row["kind"] == "bus" else self._find_group_options(row["kind"])
             row["name"] = match_option(names, row["name"]) if row["name"] is not None else None
@@ -249,20 +285,22 @@ class RunForm:
         if self.cases_loaded or self.loading_cases:
             return
         self.loading_cases = True
+        self.case_list_error = ""
+        self._show_wait()
         try:
             if "cases" not in self.ctx.state:
-                self._show_case_message("waiting for Julia...")
                 reply = await self.ctx.worker.request({"type": "list_cases"})
                 self.ctx.state["cases"] = reply["cases"]
         except WorkerError as error:
-            self._show_case_message(f"no case list: {error}", error=True)
+            self.case_list_error = str(error)
             return
         finally:
             self.loading_cases = False
+            self._show_wait()
 
         cases = self.ctx.state["cases"]
         self.case.set_options({case: Path(case).name for case in cases})
-        self.cases_loaded = True
+        self.cases_loaded = True        # the form waits on, for its first case (write)
         first_settings = default_settings()
         if self.ctx.runs.records:
             first_settings = self.ctx.runs.records[-1]["settings"]
@@ -277,30 +315,52 @@ class RunForm:
         self.ctx.state.pop("case_infos", None)
         self.ctx.state.pop("networks", None)
         self.cases_loaded = False
+        self.retry = None
         await self.load_cases()
         if self.cases_loaded and run_settings["case"]:
             await self.write(run_settings)
 
+    def is_unanswered(self, case):
+        """
+        True when Julia stopped before it answered for the case (Stop, Restart Julia, a crash): the
+        read is to be made again once Julia is back. An answer is the case's information, or why
+        it cannot be read.
+        """
+        answered = case in self.ctx.state.get("case_infos", {})
+        return not answered and self.ctx.worker.state in ("stopped", "crashed", "starting")
+
     async def find_case_info(self, case):
-        """(case_info, error message) of a case, from the session's cache or from Julia."""
+        """
+        (case_info, error message) of a case, from the session's cache or from Julia. While Julia
+        reads it the form waits, and the hint under the case says so; the History and Network
+        pages ask through here too, so their wait shows on the Run page they go to.
+        """
         cache = self.ctx.state.setdefault("case_infos", {})
         if case in cache:
             return cache[case]
-        self._show_case_message("reading the case...")
+        self.reading = case
+        self._show_wait()
         try:
             cache[case] = (await self.ctx.worker.request({"type": "case_info", "case": case}), "")
         except JobError as error:           # Julia could not read the case: that stays true until the file changes
             cache[case] = ({}, str(error))
         except WorkerError as error:        # Julia is not running: ask again next time
             return {}, f"Julia did not answer: {error}"
+        finally:
+            if self.reading == case:        # a newer read shows its own wait
+                self.reading = None
+            self._show_wait()
         return cache[case]
 
     async def _switch_case(self, case):
         """The user chose another case: offer its zones, areas and buses, and drop what named the old case."""
         self.loaded_case = case
+        self.retry = None
         case_info, case_error = await self.find_case_info(case)
         if case != self.loaded_case:        # another case was chosen meanwhile
             return
+        if self.is_unanswered(case):        # read it again once Julia is back
+            self.retry = lambda: self._switch_case(case)
         self.case_info, self.case_error = case_info, case_error
         self.writing = True
         try:
@@ -315,8 +375,50 @@ class RunForm:
                 ui.notify("The network modifications were for the other case and were removed.", position="top")
         self.update_view()
 
-    def _show_case_message(self, message, error=False):
-        theme.show_hint(self.case_message, message, bad=error)
+    def _show_case_message(self, message, error=False, waiting=False):
+        theme.show_hint(self.case_message, message, bad=error, waiting=waiting)
+
+    # -------------------- waiting for Julia --------------------
+    def is_waiting(self):
+        """True while the form waits for Julia: for the case list, or for a case's zones, areas and loads."""
+        return not self.cases_loaded or self.reading is not None or self.retry is not None
+
+    def _describe_wait(self):
+        """
+        What the form waits for, as the hint under the case says it (one short line, so the fields
+        below do not move); "" when it waits for nothing that will come.
+        """
+        worker = self.ctx.worker
+        if worker.state in ("stopped", "crashed"):
+            return ""                       # nothing comes until Julia is restarted: the error says so
+        if not self.cases_loaded:
+            if self.case_list_error and worker.state != "starting":
+                return ""
+            what = "the case list"
+        elif self.reading is not None or self.retry is not None:
+            what = Path(self.reading or self.loaded_case or "").name or "the case"
+        else:
+            return ""
+        if worker.state == "starting":
+            return "waiting for Julia to start..."
+        running = self.ctx.runs.find_running()
+        if running is not None:
+            return f"waiting for run {running['number']} to end..."
+        return f"reading {what}..."
+
+    def _show_wait(self):
+        """Show whether the form waits: the hint under the case, the greyed settings, and (`on_wait`) the Run button."""
+        theme.grey_out(self.waiting_parts, self.is_waiting())
+        self._update_case_message()
+        if self.on_wait is not None:
+            self.on_wait()
+
+    def julia_changed(self):
+        """Julia's state or the runs changed: say what the form waits for now, and make a read Julia did not answer again."""
+        if self.ctx.worker.state == "ready" and self.retry is not None and self.reading is None:
+            retry, self.retry = self.retry, None
+            background_tasks.create(retry(), name="read the case again")
+        self._show_wait()
 
     # -------------------- settings <-> form --------------------
     def read(self):
@@ -351,14 +453,28 @@ class RunForm:
         return run_settings, problems
 
     async def write(self, run_settings):
-        """Fill the form from settings (schema v1), after reading the zones, areas and buses of their case."""
+        """
+        Fill the form from settings (schema v1), after reading the zones, areas and buses of their
+        case. Returns False when they are not in the form yet: Julia stopped before it read the case
+        (they go in once it is back), or another case was chosen meanwhile.
+        """
         values = form_values(run_settings)
         case = values["case"]
         self.loaded_case = case
+        self.retry = None
+        self.writing = True                 # the case shows at once, while Julia reads it
+        try:
+            self.case.set_value(case if case in self.case.options else None)
+        finally:
+            self.writing = False
         case_info, case_error = await self.find_case_info(case)
         if case != self.loaded_case:        # another case was chosen meanwhile
-            return
+            return False
         self.case_info, self.case_error = case_info, case_error
+        if self.is_unanswered(case):        # fill the form once Julia is back and has read the case
+            self.retry = lambda: self.write(run_settings)
+            self._show_wait()
+            return False
 
         self.writing = True
         try:
@@ -389,6 +505,7 @@ class RunForm:
         finally:
             self.writing = False
         self.update_view()
+        return True
 
     async def take(self, case, *, boundary=None, penalty_rows=()):
         """
@@ -456,7 +573,7 @@ class RunForm:
             return
         self.updating = True
         try:
-            self._update_case_message()
+            self._show_wait()
             self._update_boundary()
             self._update_penalties()
             self._update_security()
@@ -465,7 +582,15 @@ class RunForm:
             self.updating = False
 
     def _update_case_message(self):
-        if self.case_error:
+        """The hint under the case: what the form waits for, why there is no case, or what the case holds."""
+        wait = self._describe_wait()
+        if wait:
+            self._show_case_message(wait, waiting=True)
+        elif self.case_list_error:
+            self._show_case_message(f"no case list: {self.case_list_error}", error=True)
+        elif not self.cases_loaded:
+            self._show_case_message("")
+        elif self.case_error:
             self._show_case_message(self.case_error, error=True)
         elif self.case_info:
             groups = [f"{len(self._find_groups(kind))} {kind}s" for kind in GROUP_KINDS if self._find_groups(kind)]
@@ -497,8 +622,14 @@ class RunForm:
 
         # a study is by zone or by area: rows of the other kind go
         kinds = self._find_penalty_kinds()
-        self.penalty_rows = [row for row in self.penalty_rows if row["kind"] in kinds]
-        self.penalty_list.refresh()
+        if any(row["kind"] not in kinds for row in self.penalty_rows):
+            self.penalty_rows = [row for row in self.penalty_rows if row["kind"] in kinds]
+        if self._find_penalty_signature() != self.penalty_signature:
+            self.penalty_list.refresh()
+
+    def _find_penalty_signature(self):
+        """What the penalty rows are built from: the kinds on offer, the case, and the list of rows (replaced by write)."""
+        return (tuple(self._find_penalty_kinds()), id(self.case_info), id(self.penalty_rows), len(self.penalty_rows))
 
     def _update_security(self):
         # voltage security needs bus voltages: AC only
@@ -541,6 +672,8 @@ def build(ctx):
             )
             stop_button = theme.button("Stop", icon="stop", kind="danger")
             run_button = theme.button("Run", icon="play", kind="primary")
+            with run_button:
+                run_tooltip = ui.tooltip()
         problems_label = ui.label("").classes("problems")
         with ui.element("div").classes("modifications") as modifications_line:
             theme.eyebrow("Network modifications")
@@ -588,8 +721,11 @@ def build(ctx):
         runs_box = ui.element("div")
     strip = StatusStrip(ctx, LogDialog())       # last: it leaves room for itself at the end of the page
 
+    shown_runs = [None]                 # the runs table's signature when it was last built
+
     @ui.refreshable
     def runs_view():
+        shown_runs[0] = find_runs_signature(ctx)
         build_runs_view(ctx, form, settings_fold, strip)
 
     with runs_box:
@@ -597,10 +733,16 @@ def build(ctx):
 
     # -------------------- buttons --------------------
     def update_buttons():
-        run_button.set_enabled(ctx.worker.state == "ready" and form.cases_loaded)
+        block = find_run_block(ctx, form)
+        run_button.set_enabled(not block)
+        run_tooltip.text = block or "Start a run with these settings"
         stop_button.set_enabled(ctx.runs.find_running() is not None)
 
+    form.on_wait = update_buttons
+
     def run_clicked():
+        if find_run_block(ctx, form):       # a click that came before the button was turned off
+            return
         run_settings, problems = form.read()
         show_problems(problems)
         if problems:
@@ -612,17 +754,19 @@ def build(ctx):
             problems_label.text = f"• Julia is not running: {error}"
 
     async def stop_clicked():
-        stop_button.disable()
-        await ctx.worker.restart()          # kills Julia with its dynamic.py, then starts a fresh one
+        if ctx.runs.find_running() is not None:
+            await ctx.worker.restart()      # kills Julia with its dynamic.py, then starts a fresh one
 
     run_button.on_click(run_clicked)
-    stop_button.on_click(stop_clicked)
+    stop_button.on_click(theme.busy_handler(stop_button, stop_clicked))
 
     async def load_into_form(run_settings, note):
         """Settings from another page (History's Load into Run) into the form, the sheet unfolded, and a note saying so."""
-        await form.write(run_settings)
         settings_fold.open()
-        ui.notify(note, position="top")
+        if await form.write(run_settings):
+            ui.notify(note, position="top")
+        elif form.retry is not None:
+            ui.notify("Julia stopped before it read the case: the settings go into the form once Julia is back.", position="top")
 
     ctx.client_state()["load_settings"] = load_into_form
 
@@ -635,11 +779,15 @@ def build(ctx):
         update_buttons()
         if state == "ready" and not form.cases_loaded:      # Julia came back after the page was built
             background_tasks.create(load_cases(), name="load cases")
+        else:
+            form.julia_changed()
 
     def runs_changed():
         results.refresh()
-        runs_view.refresh()
+        if find_runs_signature(ctx) != shown_runs[0]:      # a click on the table is not lost to a rebuild at each stage
+            runs_view.refresh()
         strip.refresh()
+        form.julia_changed()                # a read that waited for the run says so
         update_buttons()
 
     removers = [
@@ -658,9 +806,11 @@ def build_runs_view(ctx, form, settings_fold, strip):
         return
 
     async def load_settings(record):
-        await form.write(record["settings"])
         settings_fold.open()
-        ui.notify(f"The settings of run {record['number']} are in the form.", position="top")
+        if await form.write(record["settings"]):
+            ui.notify(f"The settings of run {record['number']} are in the form.", position="top")
+        elif form.retry is not None:
+            ui.notify("Julia stopped before it read the case: the settings go into the form once Julia is back.", position="top")
 
     with ui.element("div").classes("runs-row runs-head"):
         for heading in ("Run", "Started", "Case", "Objective", "Boundary", "Tag", "Status", "", ""):
@@ -696,4 +846,4 @@ def build_runs_view(ctx, form, settings_fold, strip):
                 folder_button = theme.button("Folder", kind="ghost", small=True, on_click=lambda files=files: open_folder(files))
                 folder_button.set_enabled(bool(files.get("output_path")))
                 theme.button("Log", kind="ghost", small=True, on_click=lambda record=record: strip.open_log(record))
-                theme.button("Load settings", kind="ghost", small=True, on_click=lambda record=record: load_settings(record))
+                theme.button("Load settings", kind="ghost", small=True, on_click=lambda record=record: load_settings(record), busy=True)

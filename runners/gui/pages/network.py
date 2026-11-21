@@ -5,8 +5,8 @@ session found; and a zone or an area, a set of buses or a set of lines can be se
 its boundary and to send it to the Run form as the target or with a penalty.
 
 The network comes from Julia (the `network` job) with its layout, when the page is first shown, and is kept for the session in
-`ctx.state["networks"]`. What is shown is worked out in `network_view.py`, which draws nothing;
-`components/network_canvas` draws it.
+`ctx.state["networks"]`. While it comes, a cover over the drawing says what the page waits for. What is shown is worked out in
+`network_view.py`, which draws nothing; `components/network_canvas` draws it.
 """
 
 from pathlib import Path
@@ -41,6 +41,7 @@ class NetworkPage:
         self.client_state = client_state    # of this browser tab: the Run form, the function that shows a page
         self.network = None                 # network_view.Network of the case shown
         self.loading = None                 # case being read
+        self.unanswered = None              # case whose network Julia did not give (it stopped first): read again once it is back
         self.kind = None                    # kind of group shown: "zone", "area", or None for a case without groups
         self.mode = "group"                 # what a click selects: "group", "buses" or "lines"
         self.group = None                   # index of the selected zone or area
@@ -62,15 +63,17 @@ class NetworkPage:
                 self.color_lines = ui.select({}, on_change=self._look_changed).classes("field-color")
                 theme.label("Circles")
                 self.color_circles = ui.select({}, on_change=self._look_changed).classes("field-color")
-                theme.label("Values of")
+                self.source_label = theme.label("Values of")
                 self.source = ui.select({}, on_change=self._source_changed).classes("field-source")
                 self.message = theme.toolbar_text()
-                theme.button("Fit", kind="ghost", on_click=lambda: self.canvas.fit()).tooltip("Show the whole network")
-                theme.button(icon="refresh", kind="ghost", on_click=self.reload).tooltip("Read this case's network from Julia again")
+                self.fit_button = theme.button("Fit", kind="ghost", on_click=lambda: self.canvas.fit()).tooltip("Show the whole network")
+                theme.button(icon="refresh", kind="ghost", on_click=self.reload, busy=True).tooltip("Read this case's network from Julia again")
             with ui.element("div").classes("network-body"):
                 self.canvas = NetworkCanvas(on_pick=self._picked, on_box=self._boxed, on_ready=self._first_shown)
+                self.cover = theme.Cover()
                 with ui.element("div").classes("network-side"):
-                    self._build_selection()
+                    with ui.element("div").classes("network-selection") as self.selection_box:
+                        self._build_selection()
                     theme.eyebrow("Legend")
                     self.legend = ui.element("div").classes("network-legend")
                     theme.eyebrow("How to use")
@@ -79,6 +82,12 @@ class NetworkPage:
                             theme.hint(text)
         with theme.offstage():
             self.timer = ui.timer(0.5, self._load_cases, active=False)
+        # what greys out while the page waits: the choices of what to show, and the selection ("How to use" stays readable)
+        self.waiting_parts = [self.kind_toggle, self.color_buses, self.color_lines, self.color_circles, self.source, self.fit_button, self.selection_box]
+        self.kind_label.set_visibility(False)       # until a case says whether it has zones or areas
+        self.kind_toggle.set_visibility(False)
+        self._show_selection()
+        self._show_wait()
 
     def _build_selection(self):
         theme.eyebrow("Selection")
@@ -92,12 +101,12 @@ class NetworkPage:
         self.facts = theme.facts()
         self.target_hint = theme.hint()
         with theme.line():
-            self.target_button = theme.button("Use as target", kind="primary", on_click=self._use_as_target)
+            self.target_button = theme.button("Use as target", kind="primary", on_click=self._use_as_target, busy=True)
             self.zoom_button = theme.button("Zoom to it", kind="ghost", on_click=self._zoom_to_selection)
             self.clear_button = theme.button("Clear", kind="ghost", on_click=self._clear_selection)
         with theme.line():
             self.penalty_value = ui.number(placeholder="× λ", min=0).classes("field-penalty")
-            self.penalty_button = theme.button("Set penalty", on_click=self._set_penalty)
+            self.penalty_button = theme.button("Set penalty", on_click=self._set_penalty, busy=True)
         self.penalty_hint = theme.hint()
 
     # -------------------- reading from Julia --------------------
@@ -108,15 +117,15 @@ class NetworkPage:
         """
         if self.network is None and self.loading is None:
             self.timer.activate()
+            self._load_cases()              # at once when the case list is there; else the timer looks again
 
     def _load_cases(self):
         """Take the case list the Run page read; it is there once Julia answered."""
         cases = self.ctx.state.get("cases")
         if not cases:
-            self.message.text = "waiting for Julia..."
+            self._show_wait()
             return
         self.timer.deactivate()
-        self.message.text = ""
         form = self.client_state.get("run_form")
         first = form.loaded_case if form is not None and form.loaded_case in cases else cases[0]
         self.updating = True
@@ -129,8 +138,6 @@ class NetworkPage:
         cache = self.ctx.state.setdefault("networks", {})
         if case in cache:
             return cache[case]
-        busy = self.ctx.worker.state == "busy"
-        self.message.text = "Julia is busy: the network comes when it is free..." if busy else "reading the network..."
         try:
             cache[case] = (await self.ctx.worker.request({"type": "network", "case": case}), "")
         except JobError as error:           # Julia could not read the case: that stays true until the file changes
@@ -142,26 +149,31 @@ class NetworkPage:
     async def _show_case(self, case):
         """Read a case's network and show it, with nothing selected."""
         self.loading = case
+        self.unanswered = None
+        self._show_message("")
+        self._show_wait()
         reply, error = await self._find_network(case)
         if case != self.loading:            # another case was chosen meanwhile
             return
         self.loading = None
+        if case not in self.ctx.state.get("networks", {}) and self.ctx.worker.state in ("stopped", "crashed", "starting"):
+            self.unanswered = case          # Julia stopped first (Stop, Restart Julia): read it again once Julia is back
+        self._show_wait()
         self.group, self.buses, self.lines = None, [], []
         if reply is None:
             self.network = None
-            self.message.text = f"the case could not be read: {error}"
-            self.message.classes(add="bad")
+            if self.unanswered is None:
+                self._show_message(f"the case could not be read: {error}", bad=True)
             self.canvas.show({"key": f"{case}|empty", "nodes": [], "links": [], "circles": []}, {})
             self._show_controls()
             self._show_selection()
             return
-        self.message.classes(remove="bad")
         self.network = network_view.Network(reply)
         if self.kind not in self.network.kinds:
             self.kind = self.network.kinds[0] if self.network.kinds else None
         if self.kind is None and self.mode == "group":
             self.mode = "buses"
-        self.message.text = f"{len(self.network.buses)} buses, {len(self.network.lines)} lines"
+        self._show_message(f"{len(self.network.buses)} buses, {len(self.network.lines)} lines")
         self._show_controls()
         self._show(new_graph=True)
 
@@ -261,9 +273,53 @@ class NetworkPage:
             self._show()
 
     def runs_changed(self):
-        """A run started or ended: it may be one more to take values from."""
+        """A run started or ended: it may be one more to take values from, and a network that waits for it says so."""
         if self.network is not None:
             self._show_controls()
+        self._show_wait()
+
+    def julia_changed(self, state, _message=""):
+        """Julia's state changed: say what the page waits for now, and ask again for a network Julia did not give."""
+        if state == "ready" and self.unanswered is not None and self.loading is None and self.unanswered == self.case.value:
+            background_tasks.create(self._show_case(self.unanswered), name="network")
+        self._show_wait()
+
+    # -------------------- waiting for Julia --------------------
+    def _describe_wait(self):
+        """What the page waits for, as the cover says it; "" when it waits for nothing that will come."""
+        worker = self.ctx.worker
+        if worker.state in ("stopped", "crashed"):
+            return ""                       # nothing comes until Julia is restarted: the message says so
+        case = self.loading or self.unanswered
+        if case is None:
+            return "Waiting for Julia's case list..." if self.network is None and not self.ctx.state.get("cases") else ""
+        name = Path(case).name
+        if worker.state == "starting":
+            return f"Waiting for Julia to start, then reading the network of {name}..."
+        running = self.ctx.runs.find_running()
+        if running is not None:
+            return f"Julia is busy with run {running['number']}. The network of {name} is read when the run ends."
+        if "network" not in worker.answered_types:
+            return f"Reading the network of {name} and placing its buses. The first network after Julia starts takes about 20 s."
+        return f"Reading the network of {name} and placing its buses..."
+
+    def _show_wait(self):
+        """The cover over the drawing says what the page waits for, and the controls grey out meanwhile."""
+        text = self._describe_wait()
+        if text:
+            self.cover.show(text)
+        else:
+            self.cover.hide()
+        theme.grey_out(self.waiting_parts, bool(text))
+        if self.unanswered is not None and not text:        # Julia stopped and is not coming back by itself
+            self._show_message(f"Julia is not running: Restart Julia to read the network of {Path(self.unanswered).name}", bad=True)
+        elif self.unanswered is not None:
+            self._show_message("")
+
+    def _show_message(self, text, bad=False):
+        """The text at the end of the toolbar: the size of the network, or why there is none (in red)."""
+        self.message.text = text
+        self.message.classes(replace="toolbar-text bad" if bad else "toolbar-text")
 
     # -------------------- what is shown --------------------
     def _find_selected_buses(self):
@@ -511,6 +567,9 @@ class NetworkPage:
         if form is None or not form.cases_loaded:
             ui.notify("The Run form is not ready yet.", position="top")
             return
+        running = self.ctx.runs.find_running()
+        if running is not None and self.network.case not in self.ctx.state.get("case_infos", {}):
+            ui.notify(f"Julia is busy with run {running['number']}: the Run form gets this when it has read the case, after the run.", position="top")
         refused, notes = await form.take(self.network.case, boundary=boundary, penalty_rows=penalty_rows)
         if refused:
             ui.notify(refused, position="top", type="warning")
@@ -550,5 +609,5 @@ def build(ctx):
     """The Network page of one browser tab."""
     page = NetworkPage(ctx, ctx.client_state())
     page.build()
-    remove = ctx.runs.on_change(page.runs_changed)
-    ui.context.client.on_delete(remove)
+    removers = [ctx.runs.on_change(page.runs_changed), ctx.worker.on_state(page.julia_changed)]
+    ui.context.client.on_delete(lambda: [remove() for remove in removers])

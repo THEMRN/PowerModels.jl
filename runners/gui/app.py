@@ -31,6 +31,11 @@ NATIVE_WINDOW = False           # a desktop window would need pywebview (gui_pla
 TITLE = "Islanding GUI"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PAGES = [run, network, history] # one tab per page module, in this order
+JOB_WORDS = {                   # what the Julia state pill says Julia is doing for a question of a page
+    "list_cases": "reading the case list",
+    "case_info": "reading a case",
+    "network": "placing a network",
+}
 
 
 class AppContext:
@@ -61,11 +66,16 @@ ctx = AppContext(JuliaWorker(REPO_ROOT), REPO_ROOT)
 
 
 def describe_state(state):
-    """The Julia state pill's words: the worker's state, and the run in progress while it is busy with one."""
+    """The Julia state pill's words: the worker's state, and while it is busy, the run or the question it is on."""
+    if state != "busy":
+        return f"Julia {state}"
+    job_type = ctx.worker.current_type()
     running = ctx.runs.find_running()
-    if state == "busy" and running is not None:
+    if job_type in JOB_WORDS:
+        return f"Julia busy · {JOB_WORDS[job_type]}"
+    if running is not None:
         return f"Julia running · run {running['number']}"
-    return f"Julia {state}"
+    return "Julia busy"
 
 
 def describe_worker():
@@ -97,17 +107,14 @@ def build_worker_state():
         pill.show(ctx.worker.state, describe_state(ctx.worker.state))
         tooltip.text = describe_worker()
 
-    async def restart_julia():
-        restart_button.disable()
-        try:
-            await ctx.worker.restart()
-        finally:
-            restart_button.enable()
+    def job_changed(kind, _payload):
+        if kind in ("start", "done"):       # Julia went on to another job, or finished one
+            show_state()
 
-    restart_button = theme.button("Restart Julia", icon="refresh", kind="ghost", on_click=restart_julia)
+    restart_button = theme.button("Restart Julia", icon="refresh", kind="ghost", on_click=ctx.worker.restart, busy=True)
     restart_button.tooltip("Stop Julia with anything it runs, and start a fresh one")
     show_state()
-    removers = [ctx.worker.on_state(show_state), ctx.runs.on_change(show_state)]
+    removers = [ctx.worker.on_state(show_state), ctx.runs.on_change(show_state), ctx.worker.on_control(job_changed)]
     ui.context.client.on_delete(lambda: [remove() for remove in removers])
 
 

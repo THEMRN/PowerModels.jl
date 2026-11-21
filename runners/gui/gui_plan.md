@@ -145,7 +145,7 @@ Decision 14. The look lives in `theme.py` and `theme.css` and nowhere else, so e
 - **One bar on top:** the mark, the title, the page tabs, the Julia state pill and Restart Julia.
 
 **Rules for a page:**
-- **Build with the blocks of `theme.py`:** `panel`, `toolbar`, `sheet` and `Section`, `fields` with `label`, `stack`, `line`, `hint`, `eyebrow`, `button`, `State`, `FoldButton`, `dialog` (a dialog and its white box), `offstage` (a holder for timers, so they take no room), `data_table` (a table of numbers, as one element) and `facts` with `fact` (a name and its value). Plain `ui.select`, `ui.number`, `ui.input`, `ui.textarea`, `ui.checkbox` and `ui.toggle` get the look from the defaults set in `theme.setup()`. Give them no label argument; put a `theme.label` beside them.
+- **Build with the blocks of `theme.py`:** `panel`, `toolbar`, `sheet` and `Section`, `fields` with `label`, `stack`, `line`, `hint`, `eyebrow`, `button`, `State`, `FoldButton`, `dialog` (a dialog and its white box), `offstage` (a holder for timers, so they take no room), `data_table` (a table of numbers, as one element), `facts` with `fact` (a name and its value), and for waiting `Cover`, `grey_out` and `show_hint(..., waiting=True)`. Plain `ui.select`, `ui.number`, `ui.input`, `ui.textarea`, `ui.checkbox` and `ui.toggle` get the look from the defaults set in `theme.setup()`. Give them no label argument; put a `theme.label` beside them.
 - **Buttons** come from `theme.button`: `primary` for the one main action of a page, `default`, `ghost` for secondary actions, `danger`.
 - **No Quasar colours or spacing classes** (`color=...`, `text-grey`, `q-mt-md`, `bg-primary`): they are Material's palette and they carry `!important`. Use the variables and classes of `theme.css`, and add to that file when something is missing.
 - **Not used:** `ui.card`, `ui.expansion`, `ui.switch`, `ui.badge`, `ui.table` (Quasar's Material table; use `theme.data_table`), Material icon names. Use a panel, a `FoldButton`, a checkbox, a `State`, and the icons in `theme.ICONS` (add a path there for a new icon).
@@ -153,7 +153,15 @@ Decision 14. The look lives in `theme.py` and `theme.css` and nowhere else, so e
 - **Rows to edit** (a list the user adds to and removes from) are a `components/row_list.RowList`.
 - **A dialog that changes something** edits a copy and ends with a row of the class `dialog-foot`: what clears on the left, then Cancel and the dialog's own primary button. A click beside it does not close it (`no-backdrop-dismiss`). Its problems show above that row, in the class `problems`.
 - **Colours that show data** (the Network page) are in `network_view.py`, not in the stylesheet, and follow three rules. Groups get the eight colours of `GROUP_COLORS` in a fixed order, a ninth group and later ones share one grey, and a group is always named as well (on its circle, in the legend, in the tooltip). An amount is one hue from light to dark. A value around a middle (a voltage around 1 pu) is two hues with grey in the middle. What is selected is marked by shape (a ring, a dashed line with a white edge), because the colours are already taken.
-- **Class names:** before adding a class to `theme.css`, check that Quasar and Tailwind do not use the name (`inline` and `row` are taken).
+- **Class names:** before adding a class to `theme.css`, check that Quasar and Tailwind do not use the name (`inline`, `row` and `dimmed` are taken).
+- **Anything that waits shows it, and says for what.** Julia answers one job at a time, so a question can wait for a whole run.
+  - **A part of a page that waits** (a drawing, a table) gets a `theme.Cover` with a sentence saying what it waits for: Julia starting, run N to end, or the read itself.
+  - **A field that waits** gets its hint with `waiting=True` (a turning ring), in one short line, so the fields below it do not move.
+  - **Controls that would act on what is not there yet** are greyed with `theme.grey_out`; a button that cannot be used says why in its tooltip.
+  - **A button whose click waits, on a page that stays where it is**, is made with `busy=True`. It turns into a ring and ignores clicks until it is done; Quasar ignores clicks on a button with its ring anyway. A button that goes to another page which shows the wait gets no ring, and its newest click wins.
+  - **Quick waits show nothing:** the ring, the cover and the greying appear after 0.2 s (`BUSY_DELAY`), so a quick wait does not flash.
+  - **A question Julia did not answer** because it stopped (Stop, Restart Julia) is asked again once Julia is ready, rather than left as an error.
+  - **A view that is read again** (at every stage of a run) keeps what did not change instead of building it again, so it does not flicker or lose a click.
 - **A Quasar part used for the first time** (a dialog, a table, a chart) still has its Material look. Add its rules to `theme.css`, section "Quasar, without the Material look", and check a screenshot. Popups are where Material comes back most easily.
 
 **How the stylesheet wins.** NiceGUI loads Quasar's rules in CSS layers. `theme.css` is loaded outside any layer, so its rules win over Quasar's whatever the selector. Only Quasar's `!important` rules need the block `@layer overrides` at the end of the file. The stylesheet is read once, when the app starts, so a change to it needs a restart of the app.
@@ -1554,8 +1562,13 @@ Test folders added: `savnw_flow_shed_gui_test_net` and `savnw_flow_shed_gui_test
   - **GUI run 1:** Load into Run of the GUI run `gui_test_net_spartanb` (ACTIVSg500, zone Spartanb at 2.5 λ, loads × 0.7), then Run with a new tag. It gave 8519.135912744756, and its `gui_settings` equal the source's apart from the tag.
   - **GUI run 2:** Load into Run of the script run above gave 35 bus rows (50 buses without a load left out, said in the notification), the zone as the boundary, and after Run 12140.983057017995 with 407.43 MW of shed: the script's result. Its target lines are the script's, and its 35 penalties are the script's values for those buses.
   - **All three** appeared in History with the right settings, the two GUI runs without a Refresh.
+- **On savnw:**
+  - **A GUI run** (`gui_test_net_form`, four bus pairs) loaded and run again gave 30642.40499516773 with the same settings.
+  - **A script run by bus pairs** (`gui_test_ref_ns`, whose script scaled four loads by 1.6) opened the same five branches (5, 6, 7, 11 and 26) and gave 30642.40499516773, the plain four-pair result instead of its own 45070.19441721722. The scaling was never recorded, as the details panel and the notification say.
+- **Every script record** (13, by zone, area and bus pairs) converts and passes `validate`; no record has uniform shedding, so that conversion was checked on a made-up record (0.01 λ from 5 at λ 500).
 - **Open report and Open folder:** the test instance was started through a wrapper that wrote down what would be opened instead of opening it. A new run's report, an older run's report and a folder gave the right paths.
 - **States:** a run in progress showed as running in History one second after its row appeared and turned incomplete after Stop. A loaded record with `pmin_zero` was refused by Run with "Advanced, generators: the generators of area FLAPCO need a Pmin or a Pmax".
+- **Filters by objective and simulation:** 12 opf runs and 39 ANDES runs, as counted from the files.
 - **Table:** sorting both ways, values missing last, the sorting kept through Refresh, the arrow keys moving the selection with the details. At 1500 × 900 the table fits; at 1100 × 700 it scrolls sideways by 352 px.
 
 *Choices the user can reverse:*
@@ -1568,4 +1581,66 @@ Test folders added: `savnw_flow_shed_gui_test_net` and `savnw_flow_shed_gui_test
 
 *For the user:* most rows are test runs: 130 of 270 have "gui_test" in their folder. The text filter finds them, and the folders can be deleted by hand.
 
-Test folders added: `ACTIVSg500_flow_shed_gui_test_hist_ref` (the `islanding.jl` copy), `ACTIVSg500_flow_shed_gui_test_hist_gui`, `ACTIVSg500_flow_shed_gui_test_hist_script`, `ACTIVSg500_flow_shed_gui_test_hist_stop2` (stopped, so incomplete) and `savnw_flow_shed_gui_test_hist_stop` (it finished before Stop).
+Test folders added: `ACTIVSg500_flow_shed_gui_test_hist_ref` (the `islanding.jl` copy), `ACTIVSg500_flow_shed_gui_test_hist_gui`, `ACTIVSg500_flow_shed_gui_test_hist_script`, `ACTIVSg500_flow_shed_gui_test_hist_stop2` (stopped, so incomplete), `savnw_flow_shed_gui_test_hist_stop` (it finished before Stop) and `savnw_flow_shed_gui_test_hist_ns`.
+
+**Polish (2026-11-21), at the user's request, between phases:** "make the gui more pleasant to use, no glitches, nowhere without waiting indicator". Not a numbered phase.
+
+*What was wrong:* every question to Julia (the case list, a case's information, a network) waited without a sign, or with a small grey line, and a question asked during a run waited for the whole run. Timed on a fresh Julia: 6 s to start, about 9 s for the first case, 17 s for the first network. Meanwhile:
+- the Network page kept drawing the old case under the new case's name, with its selection still active;
+- the Run form offered the old case's zones under the new case, and what was typed during the first load was overwritten when the case came;
+- a read that a Stop cut off ended as a red "Julia did not answer" that blocked Run until the case was chosen again;
+- the "reading the case..." line could stay up for good after a refused Load into Run or Use as target;
+- Run was off whenever Julia answered any question (17 s for a network), with no reason given.
+
+*What changed:*
+- **`theme.py` / `theme.css`:**
+  - `button(..., busy=True)` (`busy_handler`): the button turns into a ring after 0.2 s and ignores clicks until its work is done;
+  - `Cover`: a veil with a ring and a sentence;
+  - `grey_out`: greyed controls that take no clicks;
+  - `show_hint(..., waiting=True)`: a ring before the text;
+  - the whole page greys out under NiceGUI's "Connection lost" note when the app is closed.
+- **`julia_worker.py`:** each job's type (`job_types`, `current_type()`) and the types answered since Julia started (`answered_types`). With them, the Julia pill says what Julia is doing ("Julia busy · placing a network", "· reading a case"), and the Network cover warns that the first network after a start takes about 20 s.
+- **Run page:**
+  - While the form waits, the hint under the case says for what, in one line: "waiting for Julia to start...", "reading the case list...", "reading savnw...", "waiting for run 2 to end...". The rest of the form is greyed, and Run is off with the reason in its tooltip.
+  - The case being read shows in the case field at once.
+  - Run is no longer off while Julia answers a question of another page: the run waits behind it, and the status strip says so.
+  - A read that a Stop or a Restart cut off is made again when Julia is ready (`RunForm.retry`), so the form fills itself.
+  - `write` returns whether the settings went in.
+  - The penalty rows are no longer rebuilt at every toggle (35 rows from a script record stayed in place through AC, DC and back).
+  - Stop, Load settings and the case list's refresh are busy buttons.
+  - The table of the session's runs is rebuilt only when what it shows of a run changes (status, error, time, files), not at each stage of a run, so a click on it is not lost.
+- **Network page:**
+  - A cover over the drawing while a network comes, saying what for. The choices of what to show and the selection are greyed; "How to use" stays readable.
+  - Before the first network, only the field of the selection mode shows.
+  - A network cut off by a Stop is asked again when Julia is back.
+  - Use as target and Set penalty are busy buttons, with a note when the Run form will get the boundary only after a run.
+- **History page:**
+  - Load into Run shows the Run page first, so the form says what it waits for. It has no ring: a newer Load into Run replaces one that still waits for Julia (`load_request`).
+  - Refresh is a busy button, and the count line says when the folders were read.
+  - The details of the selected run are not rebuilt when a reading of the folders did not change them, so they no longer flicker at each stage of a run.
+  - A settings file that cannot be read is counted in the singular or the plural, with its name and why in a tooltip. One was found: a run stopped by Stop while Julia was writing its first settings file left it empty (`ACTIVSg500_flow_shed_gui_test_polish_a`). That is how `run_islanding` writes the file, not new.
+
+*How it was verified* (a test instance on port 8090 with `PYTHONASYNCIODEBUG=1`, a headless Chrome that recorded the page's errors, savnw and ACTIVSg500):
+- **First load on a fresh Julia:** "waiting for Julia to start..." → "reading the case list..." → "reading ACTIVSg500..." with the rest greyed and Run off, then the form.
+- **First Network page:** the cover with the 20 s note, then the drawing.
+- **During a run** (the `gui_test_results_both` settings): the Run form on savnw said "waiting for run 1 to end...", the Network page on IEEE39 covered the old drawing with "Julia is busy with run 1...", and Run's tooltip gave the reason.
+- **Stop during the run:** both reads were made again by themselves once Julia was back. savnw was in the form 12 s after Stop, and IEEE39 was drawn 10 s later.
+- **Clicks during a run:** two Load into Run clicks during a run (a savnw script run, then a case9 GUI run, neither case read yet) gave the case9 settings in the end, with one note.
+- **Run while Julia answers another page's question:** Run queued behind the Network page's first network and finished with 30642.40499516773 on savnw. The same on ACTIVSg500 gave 21778.720894025806, as the earlier runs with those settings did.
+- **Run while Julia starts:** Run, pressed after a Stop while the pill said "Julia starting", queued and finished with 30642.40499516773.
+- **Network to Run on savnw:** a zone and a set of buses as the target, and penalties for buses and for a zone, each arrived in the Run form.
+- **The button ring:** during a run, Use as target on IEEE39 turned into a ring of the button's own width, with the note that the form gets it after the run.
+- **Stop during a read:** a case9 Load into Run cut off by a Stop filled the form by itself once Julia was back.
+- **Refresh:** History's Refresh kept the details element and changed the time read.
+- **Runs:** two runs loaded from History ran to the end with the results of their sources: savnw `gui_test_hist_stop` → 30642.40499516773, and ACTIVSg500 `gui_test_net_spartanb` → 8519.135912744756, with equal settings apart from the tag.
+- **Errors and stalls:** no Python traceback and no browser error in any scenario. Slow event-loop callbacks were at most 0.12 s (the worker's output reader when a run's result arrives, and the page build), so nothing was moved off the loop.
+
+*Not changed:*
+- **The first network takes about 17 s on a fresh Julia.** That is Julia compiling the layout and the cover now says so; precompiling it at the worker's start would be a change to `worker.jl`.
+- **Open report and Open folder have no ring:** they return at once and the browser or the explorer shows the result.
+- **Busy buttons stay locked for a run:** Use as target and Set penalty on a case not read yet wait for a run in progress to end. They show their ring and the note says why.
+
+Test folders added:
+- ACTIVSg500: `ACTIVSg500_flow_shed_gui_test_polish_long`, `_long2`, `_a` (stopped, with the empty settings file: History counts it as unreadable until the folder is deleted), `_500`, `_q1`, `_q7` and `_q8` (both stopped);
+- savnw: `savnw_flow_shed_gui_test_polish_savnw`, `_q1`, `_q2`, `_q4`, `_q5` and `_q6`;
+- IEEE39: `IEEE39_flow_shed_gui_test_polish_q3`.

@@ -6,6 +6,8 @@ app.py calls `setup()` once and `apply_colors()` in each page. A page builds wit
 elements (they get the look from the defaults) and with the blocks below.
 """
 
+import asyncio
+import inspect
 from html import escape
 from pathlib import Path
 
@@ -42,6 +44,7 @@ ICONS = {
 }
 BUTTON_KINDS = {"primary": "btn-primary", "default": "btn", "ghost": "btn-ghost", "danger": "btn btn-danger"}
 NO_VALUE = "–"                  # shown for a number that is not there
+BUSY_DELAY = 0.2                # s, a button's work shorter than this shows no turning ring (theme.css waits as long)
 
 
 # ==================== Setup ====================
@@ -66,19 +69,80 @@ def apply_colors():
 
 
 # ==================== Building blocks ====================
-def button(text="", *, icon=None, kind="default", small=False, on_click=None):
+def button(text="", *, icon=None, kind="default", small=False, on_click=None, busy=False):
     """
     A button. `kind`: "primary" (the main action of a page, one at most), "default" (outlined),
     "ghost" (text only, for secondary actions) or "danger". `icon` is a name in ICONS. Without
-    text it is a square icon button, which needs a tooltip.
+    text it is a square icon button, which needs a tooltip. `busy`: the click may take a while
+    (it waits for Julia), so the button turns into a ring while `on_click` runs (`busy_handler`).
     """
-    element = ui.button(text, icon=ICONS[icon] if icon else None, color=None, on_click=on_click)
+    if busy and on_click is not None:
+        element = ui.button(text, icon=ICONS[icon] if icon else None, color=None)
+        element.on_click(busy_handler(element, on_click))
+    else:
+        element = ui.button(text, icon=ICONS[icon] if icon else None, color=None, on_click=on_click)
     element.classes(BUTTON_KINDS[kind])
     if not text:
         element.classes("btn-icon")
     if small:
         element.classes("btn-small")
     return element
+
+
+def busy_handler(element, handler):
+    """
+    A click handler for `element` (a button) that runs `handler` (plain or async) and shows that it
+    is at work: the button turns into a ring after BUSY_DELAY, so a quick click shows nothing, and
+    clicks on it are ignored until `handler` is done, so a double click does not do it twice (Quasar
+    itself ignores clicks on a button with its ring). For a page that stays where it is while it waits.
+    """
+
+    async def clicked():
+        if getattr(element, "at_work", False):
+            return
+        element.at_work = True
+        show_ring = asyncio.get_running_loop().call_later(BUSY_DELAY, lambda: element.props("loading"))
+        try:
+            result = handler()
+            if inspect.isawaitable(result):
+                await result
+        finally:
+            show_ring.cancel()
+            element.at_work = False
+            element.props(remove="loading")
+
+    return clicked
+
+
+def grey_out(elements, waiting):
+    """Grey out elements that wait for something (they take no clicks), or bring them back."""
+    for element in elements:
+        if waiting:
+            element.classes(add="greyed")
+        else:
+            element.classes(remove="greyed")
+
+
+class Cover(ui.element):
+    """
+    A veil over a part of the page that waits, with a turning ring and a text that says for what.
+    It fades in after a moment, so a quick wait shows nothing. It covers its parent (which needs
+    `position: relative`), or a grid cell it is placed in. `show(text)` and `hide()`.
+    """
+
+    def __init__(self):
+        super().__init__("div")
+        self.classes("wait-cover")
+        with self:
+            self.label = ui.label().classes("waiting")
+        self.set_visibility(False)
+
+    def show(self, text):
+        self.label.text = text
+        self.set_visibility(True)
+
+    def hide(self):
+        self.set_visibility(False)
 
 
 def panel():
@@ -216,10 +280,10 @@ def hint(text=""):
     return ui.label(text).classes("hint")
 
 
-def show_hint(element, text, bad=False):
-    """Put `text` in a hint, in red when it reports a problem."""
+def show_hint(element, text, bad=False, waiting=False):
+    """Put `text` in a hint: in red when it reports a problem, after a turning ring when it says what is awaited."""
     element.text = text
-    element.classes(replace="hint bad" if bad else "hint")
+    element.classes(replace="hint" + (" bad" if bad else "") + (" waiting" if waiting else ""))
 
 
 class State(ui.element):

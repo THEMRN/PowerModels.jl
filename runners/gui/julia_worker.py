@@ -63,7 +63,10 @@ class JuliaWorker:
     `state` is one of STATES: "starting" until @@ready, "ready", "busy" while jobs are pending,
     "stopped" after stop(), "crashed" when the process exits by itself (or cannot start); `message`
     says why. Job ids keep counting across restarts. `job_logs` holds each job's log lines and
-    `worker_log` the lines printed outside any job (startup, precompilation).
+    `worker_log` the lines printed outside any job (startup, precompilation). `job_types` gives
+    each job's type, `current_type()` the type of the job Julia is on, and `answered_types` the
+    types of job this Julia has finished since it started (the first of a type compiles, so it is
+    slower).
     """
 
     def __init__(self, repo_root):
@@ -73,6 +76,8 @@ class JuliaWorker:
         self.julia_version = ""
         self.pid = None
         self.job_logs = {}                      # job id -> log lines
+        self.job_types = {}                     # job id -> its type ("run", "case_info", "network", ...)
+        self.answered_types = set()             # types of job this Julia process has finished
         self.worker_log = []
         self._process = None
         self._next_id = 1
@@ -140,6 +145,7 @@ class JuliaWorker:
         environment["PYTHONUNBUFFERED"] = "1"   # dynamic.py output streams instead of arriving in blocks
         environment["PYTHONIOENCODING"] = "utf-8"
         self.julia_version = ""
+        self.answered_types = set()
         self._stopping = False
         self._set_state("starting")
         try:
@@ -238,6 +244,7 @@ class JuliaWorker:
             self._reject(job_id, payload.get("message", "error in Julia"), JobError)
         elif kind == "done":
             self._current_job = None
+            self.answered_types.add(self.job_types.get(job_id))
             self._reject(job_id, "the job finished without a reply")    # only a request still waiting
             self._pending.pop(job_id, None)
             if not self._pending and self.state == "busy":
@@ -259,6 +266,10 @@ class JuliaWorker:
         self._pending.clear()
 
     # ==================== Jobs ====================
+    def current_type(self):
+        """The type of the job Julia is on (between its @@start and @@done), or None."""
+        return self.job_types.get(self._current_job) if self._current_job is not None else None
+
     def send(self, job):
         """
         Send a job (a dict with "type") and return the id it was given, before any of its output
@@ -281,6 +292,7 @@ class JuliaWorker:
         message["id"] = job_id
         self._pending[job_id] = future
         self.job_logs[job_id] = []
+        self.job_types[job_id] = job["type"]
         if self.state == "ready":
             self._set_state("busy")
         # a job is one short line, so the write is not awaited; a worker that died is caught by its exit watcher
