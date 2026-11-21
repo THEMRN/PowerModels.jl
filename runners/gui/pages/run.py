@@ -281,7 +281,7 @@ class RunForm:
         if self.cases_loaded and run_settings["case"]:
             await self.write(run_settings)
 
-    async def _find_case_info(self, case):
+    async def find_case_info(self, case):
         """(case_info, error message) of a case, from the session's cache or from Julia."""
         cache = self.ctx.state.setdefault("case_infos", {})
         if case in cache:
@@ -298,7 +298,7 @@ class RunForm:
     async def _switch_case(self, case):
         """The user chose another case: offer its zones, areas and buses, and drop what named the old case."""
         self.loaded_case = case
-        case_info, case_error = await self._find_case_info(case)
+        case_info, case_error = await self.find_case_info(case)
         if case != self.loaded_case:        # another case was chosen meanwhile
             return
         self.case_info, self.case_error = case_info, case_error
@@ -355,7 +355,7 @@ class RunForm:
         values = form_values(run_settings)
         case = values["case"]
         self.loaded_case = case
-        case_info, case_error = await self._find_case_info(case)
+        case_info, case_error = await self.find_case_info(case)
         if case != self.loaded_case:        # another case was chosen meanwhile
             return
         self.case_info, self.case_error = case_info, case_error
@@ -413,7 +413,7 @@ class RunForm:
             run_settings["boundary"] = boundary
 
         # a study is by zone or by area (decision 11): a penalty for a group of the other kind does not fit
-        case_info, case_error = await self._find_case_info(case)
+        case_info, case_error = await self.find_case_info(case)
         if case_error:
             return f"the case could not be read: {case_error}", []
         study_kind = run_settings["boundary"]["kind"]
@@ -617,6 +617,14 @@ def build(ctx):
 
     run_button.on_click(run_clicked)
     stop_button.on_click(stop_clicked)
+
+    async def load_into_form(run_settings, note):
+        """Settings from another page (History's Load into Run) into the form, the sheet unfolded, and a note saying so."""
+        await form.write(run_settings)
+        settings_fold.open()
+        ui.notify(note, position="top")
+
+    ctx.client_state()["load_settings"] = load_into_form
 
     # -------------------- following the worker --------------------
     async def load_cases():

@@ -21,7 +21,7 @@ from nicegui import app, ui
 import theme
 from components.log_dialog import LogDialog
 from julia_worker import JuliaWorker
-from pages import network, run
+from pages import history, network, run
 from session_runs import SessionRuns
 
 # ==================== Settings ====================
@@ -30,7 +30,7 @@ HOST = "127.0.0.1"              # this machine only (decision 1); NiceGUI would 
 NATIVE_WINDOW = False           # a desktop window would need pywebview (gui_plan.md, decision 1)
 TITLE = "Islanding GUI"
 REPO_ROOT = Path(__file__).resolve().parents[2]
-PAGES = [run, network]          # one tab per page module
+PAGES = [run, network, history] # one tab per page module, in this order
 
 
 class AppContext:

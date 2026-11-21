@@ -33,7 +33,7 @@ A local GUI for running islanding scenarios without editing code. It sets the ru
 | 7 | Run page: status strip | 3, 6 | done (2026-11-20) |
 | 8 | Run page: results panel | 4b, 7 | done (2026-11-20) |
 | 9 | Advanced settings dialog | 6 | done (2026-11-21) |
-| 10 | History page | 3, 6 | not started |
+| 10 | History page | 3, 6 | done (2026-11-21) |
 | 11 | Network page | 2, 6 | done (2026-11-21) |
 | 12 | Presets (optional, ask the user first) | 6 | not started |
 
@@ -100,12 +100,13 @@ runners/gui/
   network_view.py        what the Network page shows, as plain data: values, colours, selection, boundary
   theme.py               the look: element defaults, icons, building blocks (panel, sheet, Section, fields, button, State, FoldButton)
   theme.css              the look: colours and sizes as variables, the building blocks, Quasar without the Material look
-  results_index.py       scans results/psse for the History page
+  results_index.py       scans results/psse for the History page: rows, filters, settings from a script's record
   components/            reusable UI pieces: status_strip.py (where a run is), log_dialog.py (log lines as text),
                          results_view.py (a run's report numbers as tables), voltage_details.py (the voltage rounds),
                          row_list.py (rows to edit, with Add row and remove),
-                         network_canvas.py with network_canvas.js (the network drawing: a canvas with zoom and pan)
-  pages/                 one file per page: run.py, history.py, network.py
+                         network_canvas.py with network_canvas.js (the network drawing: a canvas with zoom and pan),
+                         sortable_table.py with sortable_table.js (a table of rows to choose from, sorted in the browser)
+  pages/                 one file per page, in the order of the tabs: run.py, network.py, history.py
   advanced/              the advanced settings: __init__.py (the tab list, the dialog, what the modifications say),
                          one file per tab (load_scaling.py, loads.py, generators.py) and where.py (a row's zone,
                          area or bus list, shared by load scaling and the generators)
@@ -126,7 +127,7 @@ runners/gui/
   - `build(study, rows, on_change)`, the tab's content. A tab of rows builds them with `components/row_list.RowList` and a grid class of its own in `theme.css`.
 
   `study` (`advanced.Study`) holds the case, its `case_info` and the study's kind of group. A tab whose rows name a zone, an area or a list of buses takes that part from `advanced/where.py`, and its Julia function takes the buses from `find_entry_buses`.
-- **Pages pass values to each other** through `ctx.client_state()`, the dict of the browser tab. The Run page puts its form there (`"run_form"`), `app.py` the function that shows a page (`"show_page"`), and the Network page's "Use as target" calls `RunForm.take` and shows the Run page. History's "Load into Run" goes the same way. `ctx.state` is shared by every open browser tab, so it only holds what was read from Julia.
+- **Pages pass values to each other** through `ctx.client_state()`, the dict of the browser tab. The Run page puts its form there (`"run_form"`), `app.py` the function that shows a page (`"show_page"`), and the Network page's "Use as target" calls `RunForm.take` and shows the Run page. The Run page also puts there `"load_settings"`, which writes settings into its form, unfolds the sheet and says so; History's "Load into Run" calls it and shows the Run page. `ctx.state` is shared by every open browser tab, so it only holds what was read from Julia.
 - **What `ctx` holds** (since phase 6):
   - `ctx.worker`, the `JuliaWorker`;
   - `ctx.runs`, the `SessionRuns`: one record per run of this session, with its settings, status, the stages it reached with their times, its latest log line, its warnings and its `@@result` summary (the fields are listed in the class's docstring);
@@ -378,7 +379,7 @@ A group's name is its record name, or its number when it has no record, as in `c
 ### Run page layout (since phase 9)
 
 ```
-┌ ◉ Islanding GUI   Run | History | Network          [● Julia ready]  ↻ Restart Julia ┐
+┌ ◉ Islanding GUI   Run | Network | History          [● Julia ready]  ↻ Restart Julia ┐
 ├────────────────────────────────────────────────────────────────────────────────────┤
 │ ▾ Settings   (folded: the settings on one line)      Advanced (2)  [■ Stop] [▶ Run] │
 │ NETWORK MODIFICATIONS   loads of zone SPARTANB × 0.7 · load 6 at bus 3005: P 400 MW   Reset │
@@ -1527,3 +1528,44 @@ Test folders added: `savnw_flow_shed_gui_test_gen_top`, `savnw_flow_shed_gui_tes
 Not looked at: the PSS®E simulator and any dynamic simulation (the page reads the solution of the optimization only), a case with a line out of service or a bus without a line (the code paths are there, the cases have none), a case with more than eight groups, and the page in the user's own browser (it was seen in a headless Chrome).
 
 Test folders added: `savnw_flow_shed_gui_test_net` and `savnw_flow_shed_gui_test_net_dc` (worker jobs), `savnw_flow_shed_gui_test_net_form`, `savnw_flow_shed_gui_test_net_shed` and `ACTIVSg500_flow_shed_gui_test_net_spartanb` (runs from the form).
+
+**Phase 10 (2026-11-21), after phase 11 at the user's request; the History tab comes after Network, as the user asked.**
+
+*What changed:*
+- **`results_index.py` (new),** which draws nothing:
+  - **Rows.** One per settings file, and one per report that no settings file of its folder names (an older run). Older rows take their case, objective and tag from the folder's name (the longest case folder under `cases/psse` that starts it), and their simulator from the files written beside the report with the same stamp (`output_andes_*`, `output_psse_*`); every one of the 159 reports has such a file. Their time is when the report was written.
+  - **`run_info.json`** is rewritten by every run of a folder, before its simulation, so it is shown only with the newest older row, and only when it was written no more than 30 minutes before that report and no settings file of the folder is newer. Three older rows get it, and the details say where those values come from.
+  - **`filter_rows`, `find_choices`, `find_group_choices`;** zone and area names are matched whatever their case ("spartanb" and "Spartanb" are one choice).
+  - **`build_settings_from_record`** for a record without `gui_settings` (a script's run). The boundary is the target zone or area, or the bus pairs of the target lines (parallel circuits once). Penalties become bus rows in multiples of λ for the buses with a load only: a penalty on a bus without a load changes nothing, and the form offers only buses with a load, so such a row would have stayed empty and blocked Run. The note that comes with it says how many were left out, and that network changes made by a script are not recorded.
+- **`components/sortable_table.py` and `.js` (new):** one element for the whole table, sorted in the browser by a click on a column title (again for the other way, rows without a value last), a row chosen by a click or the arrow keys. It has the look of `theme.data_table`, with the column titles staying in view. 270 rows as separate NiceGUI elements would have been some 3000 elements.
+- **`pages/history.py` (new).**
+  - **Filters:** folder or tag, case, objective, zone or area, simulation, status, a date range (the browser's own date fields, not Quasar's Material date picker) and "Only with a report", with Clear.
+  - **The table:** time, case, objective, tag, boundary, λ, penalties, shed, simulation, security, status and report. The folder is in the details.
+  - **The details** of the selected run: times, folder, case, objective, boundary with its branches, λ, penalties, modifications, security, simulation, solver, objective value, shed, voltage security, and the run's files. Buttons: Open report, Open folder, Load into Run (not for older rows).
+  - **Statuses:** finished, incomplete (a settings file still "started": failed, stopped, or running outside this GUI), running (this session's run in progress, matched by its folder and start time), and no settings (older rows).
+  - **When it reads the folder:** when the page is built (0.06 s for 270 runs, and Julia is not asked), on Refresh, and when a run of this session starts, reaches a stage or ends. So a run of the GUI appears by itself; a script's run needs Refresh.
+- **`pages/run.py`:** `client_state()["load_settings"]`; `RunForm._find_case_info` is now `find_case_info`, because History reads the case's loads through it. **`app.py`:** `PAGES = [run, network, history]`.
+
+*How it was verified.*
+- **The records first:** all 112 GUI settings on disk go through `form_values` and `validate` without an error. Four hold the generators entry of the first version (`pmin_zero`).
+- **Counts:** every filter against counts worked out from the files without `results_index` (270 runs: 124 finished, 5 incomplete, 141 older, 159 with a report, 87 on savnw, 130 with "gui_test", 46 on 2026-11-21). The zone filter "spartanb" shows 56 where that count gives 54: the two more are the older rows whose `run_info.json` names spartanb, which the separate count does not read.
+- **The three runs of "Done when":**
+  - **The script run:** a temporary copy of `islanding.jl` (tag `gui_test_hist_ref`, no simulation) gave 12140.983057017995 and appeared with zone spartanb, 85 buses at 2.5 λ and 407.43 MW of shed. The copy was deleted and `runners/` holds its own files only.
+  - **GUI run 1:** Load into Run of the GUI run `gui_test_net_spartanb` (ACTIVSg500, zone Spartanb at 2.5 λ, loads × 0.7), then Run with a new tag. It gave 8519.135912744756, and its `gui_settings` equal the source's apart from the tag.
+  - **GUI run 2:** Load into Run of the script run above gave 35 bus rows (50 buses without a load left out, said in the notification), the zone as the boundary, and after Run 12140.983057017995 with 407.43 MW of shed: the script's result. Its target lines are the script's, and its 35 penalties are the script's values for those buses.
+  - **All three** appeared in History with the right settings, the two GUI runs without a Refresh.
+- **Open report and Open folder:** the test instance was started through a wrapper that wrote down what would be opened instead of opening it. A new run's report, an older run's report and a folder gave the right paths.
+- **States:** a run in progress showed as running in History one second after its row appeared and turned incomplete after Stop. A loaded record with `pmin_zero` was refused by Run with "Advanced, generators: the generators of area FLAPCO need a Pmin or a Pmax".
+- **Table:** sorting both ways, values missing last, the sorting kept through Refresh, the arrow keys moving the selection with the details. At 1500 × 900 the table fits; at 1100 × 700 it scrolls sideways by 352 px.
+
+*Choices the user can reverse:*
+- **A script's penalties come back as one bus row each** (35 for Spartanb). One zone row would need the zone of each bus, which `case_info` does not give; with that added, the rows could be folded into a zone row when they are exactly the zone's load buses at one value.
+- **Older runs are the reports only.** Runs from before the settings files that wrote no report (only an Excel file) do not show: the folders without settings files hold 334 PowerModels Excel files against 141 reports, so roughly 190 such runs.
+- **The table shows the tag, not the folder,** since the folder is the case, the objective and the tag. The text filter searches both.
+- **History reads the folder by itself** when a run of this session starts, reaches a stage or ends (the plan asked for a Refresh button only).
+
+*Not done:* comparing runs side by side (out of scope), deleting runs (the user deletes folders by hand), the values of earlier sessions' runs on the Network page (it would need a run's `network` part, which only runs of the session have).
+
+*For the user:* most rows are test runs: 130 of 270 have "gui_test" in their folder. The text filter finds them, and the folders can be deleted by hand.
+
+Test folders added: `ACTIVSg500_flow_shed_gui_test_hist_ref` (the `islanding.jl` copy), `ACTIVSg500_flow_shed_gui_test_hist_gui`, `ACTIVSg500_flow_shed_gui_test_hist_script`, `ACTIVSg500_flow_shed_gui_test_hist_stop2` (stopped, so incomplete) and `savnw_flow_shed_gui_test_hist_stop` (it finished before Stop).

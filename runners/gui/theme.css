@@ -1205,6 +1205,116 @@ input[type="number"]::-webkit-outer-spin-button {
   font-variant-numeric: tabular-nums;
 }
 
+/* ==================== History page ==================== */
+/* the panel fills the window under the top bar; the table scrolls, its column titles staying in view */
+.history-panel {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 88px);
+  min-height: 420px;
+}
+.history-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--line);
+}
+.history-filters .field-label {
+  align-self: center;
+  margin-left: 4px;
+}
+.history-filters .field-text { width: 150px; }
+.history-filters .field-choice { width: 134px; }
+.history-filters .field-group { width: 156px; }
+.history-filters .field-date { width: 128px; }
+.history-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 330px;
+  flex: 1;
+  min-height: 0;
+  border-top: 1px solid var(--line);
+}
+.sortable-table {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  outline: none;
+}
+.sortable-table .data-table {
+  width: 100%;
+}
+.sortable-table .data-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding-top: 8px;
+  background: var(--surface);
+  cursor: pointer;
+  user-select: none;
+}
+.sortable-table .data-table th:first-child,
+.sortable-table .data-table td:first-child {
+  padding-left: 12px;
+}
+.sortable-table .data-table th.col-lambda {
+  text-transform: none;         /* λ, not Λ */
+}
+.sortable-table .data-table th.sorted {
+  color: var(--ink);
+}
+.sortable-table .data-table th,
+.sortable-table .data-table td {
+  padding-right: 10px;
+}
+.sortable-table .data-table th.num,
+.sortable-table .data-table td.num {
+  padding-left: 6px;
+}
+.sortable-table .data-table td.wide {
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sortable-table .data-table tbody tr {
+  cursor: pointer;
+}
+.sortable-table .data-table tbody tr.selected td {
+  background: var(--accent-ring);
+}
+.sortable-table tr.muted td {
+  color: var(--ink-3);
+}
+.sortable-table tr.warn td.col-status {
+  color: var(--warn);
+  font-weight: 600;
+}
+.sortable-empty {
+  padding: 24px 12px;
+  color: var(--ink-3);
+}
+.history-side {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border-left: 1px solid var(--line);
+  overflow-y: auto;
+}
+.history-details {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.history-details .facts {
+  grid-template-columns: max-content minmax(0, 1fr);
+}
+.history-details .fact-value {
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
 @layer overrides {
   .q-btn.disabled,
   .q-checkbox.disabled {
