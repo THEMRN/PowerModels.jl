@@ -1,5 +1,5 @@
 """
-Run page: a toolbar (fold, Advanced, Run and Stop), the network modifications that are active,
+Run page: a toolbar (fold, presets, Advanced, Run and Stop), the network modifications that are active,
 the settings sheet with its four sections, the results of a run as tables, the runs of this
 session and, fixed to the bottom of the window, the status strip of the run in progress.
 
@@ -15,6 +15,7 @@ from nicegui import background_tasks, ui
 import advanced
 import theme
 from components.log_dialog import LogDialog
+from components.preset_bar import PresetBar
 from components.results_view import ResultsView, open_folder, open_report
 from components.status_strip import StatusStrip
 from julia_worker import JobError, WorkerError
@@ -659,14 +660,20 @@ def build(ctx):
     form = RunForm(ctx)
     ctx.client_state()["run_form"] = form          # the Network page of this browser tab fills it (RunForm.take)
 
-    def show_summary(opened):
-        """While the sheet is folded, the toolbar says what the settings are."""
-        summary.text = "" if opened else describe_settings(form.read()[0])
+    def show_summary(opened=None):
+        """The toolbar's text: the chosen preset's note while the sheet is open, what the settings are while it is folded."""
+        opened = settings_fold.opened if opened is None else opened
+        summary.text = preset_bar.find_note() if opened else describe_settings(form.read()[0])
+        summary_tooltip.text = summary.text
+        summary_tooltip.set_visibility(bool(summary.text))
 
     with theme.panel():
         with theme.toolbar():
             settings_fold = theme.FoldButton("Settings", on_change=show_summary)
+            preset_bar = PresetBar(ctx, form, on_loaded=lambda: settings_fold.open(), on_choice=lambda: show_summary())
             summary = theme.toolbar_text()
+            with summary:
+                summary_tooltip = ui.tooltip()          # all of it, when the line is cut
             advanced_button = theme.button("Advanced", icon="sliders", kind="ghost").tooltip(
                 "Changes to the network before a run: " + ", ".join(tab.TITLE.lower() for tab in advanced.ADVANCED_TABS)
             )
@@ -737,6 +744,7 @@ def build(ctx):
         run_button.set_enabled(not block)
         run_tooltip.text = block or "Start a run with these settings"
         stop_button.set_enabled(ctx.runs.find_running() is not None)
+        preset_bar.update_buttons()         # Save as waits with the form
 
     form.on_wait = update_buttons
 

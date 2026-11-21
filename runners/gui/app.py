@@ -22,6 +22,7 @@ import theme
 from components.log_dialog import LogDialog
 from julia_worker import JuliaWorker
 from pages import history, network, run
+from presets import PresetStore
 from session_runs import SessionRuns
 
 # ==================== Settings ====================
@@ -40,8 +41,8 @@ JOB_WORDS = {                   # what the Julia state pill says Julia is doing 
 
 class AppContext:
     """
-    What the pages share: the Julia worker, the runs of this session, a state dict (what is cached
-    from Julia: the case list, each case's information and network), and the repo root. What
+    What the pages share: the Julia worker, the runs of this session, the presets, a state dict
+    (what is cached from Julia: the case list, each case's information and network), and the repo root. What
     belongs to one browser tab (its Run form, the function that shows one of its pages) is in
     `client_state()`, through which the pages of a tab pass values to each other.
     """
@@ -49,6 +50,7 @@ class AppContext:
     def __init__(self, worker, repo_root):
         self.worker = worker
         self.runs = SessionRuns(worker)
+        self.presets = PresetStore()
         self.state = {}
         self.repo_root = repo_root
         self._client_states = {}        # browser tab (client id) -> its dict

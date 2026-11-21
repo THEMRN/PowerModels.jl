@@ -35,7 +35,7 @@ A local GUI for running islanding scenarios without editing code. It sets the ru
 | 9 | Advanced settings dialog | 6 | done (2026-11-21) |
 | 10 | History page | 3, 6 | done (2026-11-21) |
 | 11 | Network page | 2, 6 | done (2026-11-21) |
-| 12 | Presets (optional, ask the user first) | 6 | not started |
+| 12 | Presets (optional, ask the user first) | 6 | done (2026-11-21) |
 
 Phases 2, 3 and 5 can run in any order once phase 1 is done. The GUI is usable for real runs after phase 6.
 
@@ -101,11 +101,14 @@ runners/gui/
   theme.py               the look: element defaults, icons, building blocks (panel, sheet, Section, fields, button, State, FoldButton)
   theme.css              the look: colours and sizes as variables, the building blocks, Quasar without the Material look
   results_index.py       scans results/psse for the History page: rows, filters, settings from a script's record
+  presets.py             the presets: files in presets/, their names, saving and deleting (PresetStore, ctx.presets)
+  presets/               one JSON file per preset (git-ignored by the user: the presets stay on this machine)
   components/            reusable UI pieces: status_strip.py (where a run is), log_dialog.py (log lines as text),
                          results_view.py (a run's report numbers as tables), voltage_details.py (the voltage rounds),
                          row_list.py (rows to edit, with Add row and remove),
                          network_canvas.py with network_canvas.js (the network drawing: a canvas with zoom and pan),
-                         sortable_table.py with sortable_table.js (a table of rows to choose from, sorted in the browser)
+                         sortable_table.py with sortable_table.js (a table of rows to choose from, sorted in the browser),
+                         preset_bar.py (the presets in the Run page's settings toolbar, with Save as and Delete)
   pages/                 one file per page, in the order of the tabs: run.py, network.py, history.py
   advanced/              the advanced settings: __init__.py (the tab list, the dialog, what the modifications say),
                          one file per tab (load_scaling.py, loads.py, generators.py) and where.py (a row's zone,
@@ -130,6 +133,7 @@ runners/gui/
 - **Pages pass values to each other** through `ctx.client_state()`, the dict of the browser tab. The Run page puts its form there (`"run_form"`), `app.py` the function that shows a page (`"show_page"`), and the Network page's "Use as target" calls `RunForm.take` and shows the Run page. The Run page also puts there `"load_settings"`, which writes settings into its form, unfolds the sheet and says so; History's "Load into Run" calls it and shows the Run page. `ctx.state` is shared by every open browser tab, so it only holds what was read from Julia.
 - **What `ctx` holds** (since phase 6):
   - `ctx.worker`, the `JuliaWorker`;
+  - `ctx.presets`, the `PresetStore`: the presets of the app, read from `presets/`, whose listeners keep every open tab's list the same;
   - `ctx.runs`, the `SessionRuns`: one record per run of this session, with its settings, status, the stages it reached with their times, its latest log line, its warnings and its `@@result` summary (the fields are listed in the class's docstring);
   - `ctx.state`, which caches what was read from Julia: `"cases"` (the case list), `"case_infos"` (case path to its `case_info`, or to the error that reading it gave) and `"networks"` (the same for the `network` reply). The worker answers one job at a time, so a question asked during a run would wait for the run to end.
 
@@ -329,6 +333,16 @@ A run that throws leaves `"started"`, and History shows that as incomplete.
 
 The report name is `dynamic.py`'s own `dynamic_channels_<ts>.html`. `run_islanding` finds it after the simulation as the newest such file modified after the run started. `run_info.json` keeps its keys, because the Python report reads them. It gained `target_area` in phase 2 and `group_kind` in phase 4b; the ANDES report uses both.
 
+### Preset file
+
+A preset is one file in `runners/gui/presets/`, settings schema v1 at its top level with two more keys, written by `presets.write_preset`:
+
+```json
+{"preset": "savnw – island on top", "note": "a line about the scenario, or empty", "schema": 1, "case": "cases/psse/savnw", ...}
+```
+
+The name is what the Run page lists; the file name is made from it (`savnw_island_on_top.json`), with `_2`, `_3`, ... when another preset has that file. Names are compared ignoring case, so two presets cannot differ by case only, and they cannot hold `\/:*?"<>|`. A file that cannot be read, or holds no schema 1, is listed as "(cannot be read)" and cannot be chosen. The form reads only the settings' own keys, so `preset` and `note` never reach the worker.
+
 ### Result summary (`@@result`)
 
 The worker sends it at the end of a run, after the stage `summary`. A run that fails sends `@@error` and no `@@result`.
@@ -389,7 +403,7 @@ A group's name is its record name, or its number when it has no record, as in `c
 ```
 ┌ ◉ Islanding GUI   Run | Network | History          [● Julia ready]  ↻ Restart Julia ┐
 ├────────────────────────────────────────────────────────────────────────────────────┤
-│ ▾ Settings   (folded: the settings on one line)      Advanced (2)  [■ Stop] [▶ Run] │
+│ ▾ Settings  Preset [savnw – island on top ▾] Save as Delete  (note) Advanced (2) [■ Stop] [▶ Run] │
 │ NETWORK MODIFICATIONS   loads of zone SPARTANB × 0.7 · load 6 at bus 3005: P 400 MW   Reset │
 │ CASE AND MODEL    │ BOUNDARY    │ LOAD SHEDDING PENALTIES   │ SECURITY AND SIMULATION │ ▴ fold
 ├────────────────────────────────────────────────────────────────────────────────────┤
@@ -404,7 +418,7 @@ A group's name is its record name, or its number when it has no record, as in `c
 └────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-The page tabs are in the top bar. Run and Stop are in the toolbar of the settings panel, above the sheet, so they stay in the same place when the sheet is folded or a penalty row is added. The problems that keep the settings from running show between the toolbar and the sheet. Under them, the line of the network modifications shows while there are any, also while the sheet is folded. The results panel is hidden until a run has results, and the last two rows are the status strip, fixed to the bottom of the window.
+The page tabs are in the top bar. The presets come right of the Settings fold (since phase 12), with "changed" and Reload while the form differs from the chosen preset; the toolbar's text is the preset's note while the sheet is open and the settings on one line while it is folded. Run and Stop are in the toolbar of the settings panel, above the sheet, so they stay in the same place when the sheet is folded or a penalty row is added. The problems that keep the settings from running show between the toolbar and the sheet. Under them, the line of the network modifications shows while there are any, also while the sheet is folded. The results panel is hidden until a run has results, and the last two rows are the status strip, fixed to the bottom of the window.
 
 ---
 
@@ -1644,3 +1658,58 @@ Test folders added:
 - ACTIVSg500: `ACTIVSg500_flow_shed_gui_test_polish_long`, `_long2`, `_a` (stopped, with the empty settings file: History counts it as unreadable until the folder is deleted), `_500`, `_q1`, `_q7` and `_q8` (both stopped);
 - savnw: `savnw_flow_shed_gui_test_polish_savnw`, `_q1`, `_q2`, `_q4`, `_q5` and `_q6`;
 - IEEE39: `IEEE39_flow_shed_gui_test_polish_q3`.
+
+**Phase 12 (2026-11-21), at the user's request ("go for the last phase and give me some presets").**
+
+*What changed:*
+- **`presets.py` (new),** which draws nothing: reading a preset file, the name rules, the file name of a name, writing, and `PresetStore` (`ctx.presets`), which reads the folder when the app starts and when a browser tab opens, and tells every tab after a save or a delete.
+- **`components/preset_bar.py` (new),** in the settings toolbar, right of the fold:
+  - **Preset:** a list of the presets. Choosing one puts its settings into the form, through `RunForm.write`, so the case is read as for any other load, and unfolds the sheet. A note says so, with the preset's note.
+  - **Note:** while the sheet is open, the preset's note stands in the toolbar's text, which was empty there.
+  - **"changed" with Reload:** shows while the form differs from what it held right after the preset went in. That is checked once a second while a preset is chosen, not while the form waits for Julia. Reload puts the preset back.
+  - **Save as:** a dialog with the name and a note, starting from the chosen preset's. It becomes Replace for a name that exists. A name that cannot be used says why, and settings that cannot run say so and are not saved. It is off while the form waits for Julia.
+  - **Delete:** a dialog that names the file to delete. It deletes only a listed preset's own file.
+  - **Refused choices:** a preset that cannot be read, a preset whose case is not in `cases/psse`, and any choice before the case list is there are refused with a note.
+- **`pages/run.py`:** the bar in the toolbar, its Save as following the form's wait (`update_buttons`), and the toolbar text showing the preset's note while the sheet is open. **`app.py`:** `ctx.presets`. **`theme.css`:** the bar, and `.dialog.narrow` and `.dialog-form` for small dialogs.
+- **Notifications let clicks through** (`.q-notification`, `pointer-events: none`). Two notes stacked at the top covered the settings toolbar, and a click on Save as under them did nothing. That was there since phase 6, and more notes made it seen. They had no buttons of their own.
+- **Eight starter presets in `presets/`,** transcribed from the notes in `islanding.jl` as phase 9 did (`make_refs.py`): the scenario's own lines (its bus pairs or zone, its load changes), without the commented penalty dictionary of the savnw notes, which no scenario names as its own.
+  - savnw: island on top (load 6 at 400 MW), island on left (load 8 at 100 MW), island on bottom with one load (load 5 at 500 MW), island on bottom with two loads (load 5 at 800 MW, load 4 at 250 MW), north-south separation (loads at 3005, 3007, 3008 and 153 × 1.6);
+  - ACTIVSg500: SPARTANB at 2.5 λ (`islanding.jl` as it is), SPARTANB with the zone's loads × 0.7, and SPARTANB with the zone's generators' Pmin at 0 MW.
+  - Each has the dynamic simulation with ANDES, as `islanding.jl` does, and an output tag of its own (`top_island`, `left_island`, `bottom_island_one_load`, `bottom_island_two_loads`, `north_south`, `spartanb`, `spartanb_loads_0.7`, `spartanb_pmin_0`), so their results do not overwrite each other or the untagged folders.
+
+*How it was verified* (a test instance on port 8090 in a headless Chrome):
+- **Files:** all eight pass `validate`, and `build_settings(form_values(settings))` gives them back unchanged.
+- **References:** three were made for this phase from temporary copies of `islanding.jl` (deleted after), with tags `gui_test_ref_left`, `gui_test_ref_bottom1` and `gui_test_ref_bottom2`. Phases 9 and 10 had made the other five.
+- **Each preset run as shipped,** only its tag changed to `gui_test_preset_<file>` and read back before Run. Each gave its reference's objective to the last digit and the same opened lines, the run's `gui_settings` were the file's apart from the tag, and the ANDES simulation wrote its report:
+  - savnw: top 9431.510209057029, left 642.2939110795945, bottom with one load 13419.06232523263, bottom with two loads 7486.733982225898, north-south 45070.19441721722;
+  - ACTIVSg500: SPARTANB 12140.983057017995, loads × 0.7 8519.135912744756, Pmin 0 12140.983056999981.
+- **A saved preset reloads exactly:**
+  - A hand-made preset with every kind of setting (an area boundary, an area and a bus penalty, "All other loads", load scaling, a load and a generators row, a `gui_test` tag) went into the form and was saved with Save as under a new name. Its file held the same settings.
+  - After another preset and back, it ran (3787.2016747635994), with `gui_settings` equal to the file, tag included.
+  - Save as on the same name became Replace and wrote the same file. Delete removed both test presets through its dialog.
+- **The rest:**
+  - a bad name ("a/b") turned Save off with the reason;
+  - an unreadable file was listed as such and refused;
+  - "changed" showed after a change of the tag and went with Reload;
+  - Save as was off while the form waited for a run to end;
+  - at 1100 px the toolbar fits without scrolling, with a long name cut by "...", and folded it shows the settings' line;
+  - under two stacked notes, Save as, Delete, Run and Stop each took the click (`elementFromPoint`), and Save as opened at the first click.
+
+*Choices the user can reverse:*
+- **Output tags in the starter presets;** an empty tag writes to the untagged folders, as `islanding.jl` does.
+- **No penalties in the savnw presets;** the notes' dictionary (3005 at 1e4, 3007 at 0.2 λ, 3008 at 2 λ, 153 at 0.5 λ, 205 at 5.8 λ, 203 at 0.9 λ, 154 at 4.9 λ) can be added to any of them in the form and saved with Replace.
+- **Left out of the notes:**
+  - the single-bus islands at 202 and 3004;
+  - the other ACTIVSg500 penalty values (MIDLANDS 0.95, CLEMSON 1.6, YORK 2.5);
+  - GREENVIL × 0.1.
+
+  Each is a preset away: set it in the form and Save as.
+
+*Not done:*
+- **Renaming a preset.** Save as under the new name, then Delete the old one.
+- **An unreadable preset** cannot be chosen, so not deleted in the GUI; its file goes by hand.
+- **Not seen:** a second browser tab hearing of a save. The same listener updates the list of the tab that saves, which was seen.
+
+Test folders added:
+- savnw: `savnw_flow_shed_gui_test_ref_left`, `_ref_bottom1`, `_ref_bottom2`, `savnw_flow_shed_gui_test_preset_savnw_island_on_top`, `_on_left`, `_on_bottom_one_load`, `_on_bottom_two_loads`, `_north_south_separation`, `savnw_flow_shed_gui_test_preset_saved` and `savnw_flow_shed_gui_test_preset_wait`;
+- ACTIVSg500: `ACTIVSg500_flow_shed_gui_test_preset_activsg500_spartanb`, `_loads_0_7` and `_generators_pmin_0`.

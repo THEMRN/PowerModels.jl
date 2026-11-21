@@ -447,6 +447,18 @@ body:has(#popup[aria-hidden="false"]) .q-page-container {
   display: none;
 }
 
+/* presets, in the settings toolbar (components/preset_bar.py) */
+.toolbar .preset-label {
+  align-self: center;
+  margin-left: 6px;
+}
+.toolbar .field-preset {
+  width: 250px;
+}
+.toolbar .preset-changed {
+  white-space: nowrap;
+}
+
 /* load shedding penalties: where, value, remove */
 .penalty-row {
   display: grid;
@@ -1097,6 +1109,7 @@ input[type="number"]::-webkit-outer-spin-button {
   background: #1f2430;
   box-shadow: 0 10px 30px rgba(16, 24, 40, 0.2);
   font-size: 13px;
+  pointer-events: none;         /* a note over the toolbar never takes the click meant for the button under it */
 }
 
 /* -------------------- dialog -------------------- */
@@ -1125,6 +1138,16 @@ input[type="number"]::-webkit-outer-spin-button {
 }
 .dialog.medium {
   width: min(760px, 94vw);
+}
+.dialog.narrow {
+  width: min(520px, 94vw);
+}
+/* a dialog's few fields, or its question, between its title and its foot */
+.dialog-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
 }
 /* a dialog's last row: what clears on the left, then Cancel and the main button on the right */
 .dialog-foot {

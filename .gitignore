@@ -18,6 +18,7 @@ config.json
 samples.txt
 proposal/
 __pycache__/
+runners/gui/presets/
 CLAUDE.md
 pistory.md
 mydocs/
