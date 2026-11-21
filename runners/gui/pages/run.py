@@ -35,6 +35,7 @@ from settings import (
 TITLE = "Run"
 ERROR_PREVIEW = 140             # characters of an error message shown in a row (the tooltip has all of it)
 KIND_LABELS = {"zone": "Zone", "area": "Area", "bus_pairs": "Bus pairs", "bus": "Bus"}
+EXCEPT_MARK = "!"               # a penalty row's kind in the form's list: "zone", "!zone" (all but the zone) or "bus"
 SIMULATOR_LABELS = {"andes": "ANDES", "psse": "PSS®E"}
 
 
@@ -47,6 +48,16 @@ def match_option(options, value):
         if str(option).strip().lower() == wanted:
             return option
     return None
+
+
+def find_row_key(row):
+    """A penalty row's choice in the kind list: "zone", "!zone" for all but the zone, or "bus"."""
+    return (EXCEPT_MARK if row.get("except") else "") + row["kind"]
+
+
+def is_same_target(row, other):
+    """True when two penalty rows are for the same place (same kind, name and "all but"), names in any case."""
+    return find_row_key(row) == find_row_key(other) and str(row["name"]).lower() == str(other["name"]).lower()
 
 
 def describe_boundary(run_settings):
@@ -116,7 +127,7 @@ class RunForm:
         self.retry = None               # a read Julia did not answer, to make again once it is ready (an async function)
         self.on_wait = None             # called when the form starts or stops waiting (the Run button follows it)
         self.penalty_signature = None   # what the penalty rows were last built from
-        self.penalty_rows = []          # [{"kind": "zone" | "area" | "bus", "name", "times_lambda"}]
+        self.penalty_rows = []          # [{"kind": "zone" | "area" | "bus", "name", "except", "times_lambda"}], in the order they apply
         self.modifications = {}         # network modifications, as in the settings; the advanced dialog edits them
         self.on_modifications = None    # called when the modifications, or the study they are for, may have changed
         self.writing = False            # write() is filling the form: change handlers stay quiet
@@ -177,6 +188,8 @@ class RunForm:
                         )
                     with theme.line():
                         theme.button("Add row", icon="plus", kind="ghost", small=True, on_click=self._add_penalty_row)
+                    theme.hint("Rows count from the top down: where rows reach the same load, the lower row counts. "
+                               "All other loads are those no row reaches.")
 
             with theme.Section("Security and simulation") as security_section:
                 with theme.stack():
@@ -202,7 +215,7 @@ class RunForm:
             names = self._find_bus_options() if row["kind"] == "bus" else self._find_group_options(row["kind"])
             row["name"] = match_option(names, row["name"]) if row["name"] is not None else None
             with ui.element("div").classes("penalty-row"):
-                ui.select(kinds, value=row["kind"], on_change=lambda event, row=row: self._penalty_kind_changed(row, event.value))
+                ui.select(kinds, value=find_row_key(row), on_change=lambda event, row=row: self._penalty_kind_changed(row, event.value))
                 ui.select(names, value=row["name"], with_input=True, on_change=lambda event, row=row: row.update(name=event.value))
                 ui.number(value=row["times_lambda"], min=0, on_change=lambda event, row=row: row.update(times_lambda=event.value))
                 theme.button(icon="close", kind="ghost", small=True, on_click=lambda row=row: self._remove_penalty_row(row)).tooltip(
@@ -240,8 +253,12 @@ class RunForm:
         return None
 
     def _find_penalty_kinds(self):
+        """What a penalty row may be: the study's kind of group, all but one of them, or a bus (keys as find_row_key)."""
         group_kind = self._find_penalty_group_kind()
-        kinds = {} if group_kind is None else {group_kind: KIND_LABELS[group_kind]}
+        kinds = {}
+        if group_kind is not None:
+            kinds[group_kind] = KIND_LABELS[group_kind]
+            kinds[EXCEPT_MARK + group_kind] = f"All but {group_kind}"
         kinds["bus"] = KIND_LABELS["bus"]
         return kinds
 
@@ -267,13 +284,18 @@ class RunForm:
             return
         background_tasks.create(self._switch_case(event.value), name="switch case")
 
-    def _penalty_kind_changed(self, row, kind):
+    def _penalty_kind_changed(self, row, key):
+        """A row's kind chosen: between a zone and all but a zone the name stays, to a bus or back it goes."""
+        kind = key.removeprefix(EXCEPT_MARK)
+        if kind != row["kind"]:
+            row["name"] = None
         row["kind"] = kind
-        row["name"] = None
+        row["except"] = key.startswith(EXCEPT_MARK)
         self.penalty_list.refresh()
 
     def _add_penalty_row(self):
-        self.penalty_rows.append({"kind": next(iter(self._find_penalty_kinds())), "name": None, "times_lambda": None})
+        """A new row at the bottom, where it counts over the rows above it."""
+        self.penalty_rows.append({"kind": next(iter(self._find_penalty_kinds())), "name": None, "except": False, "times_lambda": None})
         self.penalty_list.refresh()
 
     def _remove_penalty_row(self, row):
@@ -455,7 +477,7 @@ class RunForm:
 
     async def write(self, run_settings):
         """
-        Fill the form from settings (schema v1), after reading the zones, areas and buses of their
+        Fill the form from settings (of any schema), after reading the zones, areas and buses of their
         case. Returns False when they are not in the form yet: Julia stopped before it read the case
         (they go in once it is back), or another case was chosen meanwhile.
         """
@@ -511,8 +533,10 @@ class RunForm:
     async def take(self, case, *, boundary=None, penalty_rows=()):
         """
         Fill in what another page chose for `case` (the Network page): a boundary (as in the
-        settings), or penalty rows ({kind, name, times_lambda}). The rest of the form stays, except
-        that a change of case drops what named the other case, as choosing the case by hand does.
+        settings), or penalty rows ({kind, name, times_lambda}), which go to the bottom of
+        the list, where they count over the rows above (a row for the same place goes, not to count
+        twice). The rest of the form stays, except that a change of case drops what named the
+        other case, as choosing the case by hand does.
 
         Returns (refused, notes): why nothing was taken ("" when it was), and what else changed
         in the form, as sentences.
@@ -524,7 +548,7 @@ class RunForm:
                 notes.append("The network modifications were for the other case and were removed.")
             run_settings["case"] = case
             run_settings["boundary"] = {"kind": "bus_pairs", "name": "", "bus_pairs": []}
-            run_settings["penalties"] = dict(run_settings["penalties"], groups=[], buses={})
+            run_settings["penalties"] = dict(run_settings["penalties"], rows=[])
             run_settings["modifications"] = {}
             notes.append("The form is now on this case.")
         if boundary is not None:
@@ -539,19 +563,18 @@ class RunForm:
             study_kind = next((kind for kind in GROUP_KINDS if case_info.get(f"{kind}s")), None)
         penalties = run_settings["penalties"]
         for row in penalty_rows:
-            if row["kind"] == "bus":
-                penalties["buses"][str(row["name"])] = row["times_lambda"]
-                continue
-            if row["kind"] != study_kind:
+            if row["kind"] != "bus" and row["kind"] != study_kind:
                 return f"The study in the Run form is by {study_kind}, so a penalty for {row['kind']} {row['name']} does not fit it. Use it as the target first, or select its buses.", []
-            penalties["groups"] = [group for group in penalties["groups"] if (group["kind"], group["name"].lower()) != (row["kind"], str(row["name"]).lower())]
-            penalties["groups"].append({"kind": row["kind"], "name": str(row["name"]), "times_lambda": row["times_lambda"]})
+            is_bus = row["kind"] == "bus"
+            new_row = {"kind": row["kind"], "name": int(row["name"]) if is_bus else str(row["name"]), "except": False, "times_lambda": row["times_lambda"]}
+            penalties["rows"] = [old for old in penalties["rows"] if not is_same_target(old, new_row)]
+            penalties["rows"].append(new_row)
         if penalty_rows and penalties["uniform"] is not None:
             penalties["uniform"] = None
             notes.append("Uniform shedding was switched off, because it ignores penalty rows.")
-        dropped = [group for group in penalties["groups"] if group["kind"] != study_kind]
+        dropped = [row for row in penalties["rows"] if row["kind"] in GROUP_KINDS and row["kind"] != study_kind]
         if dropped:
-            penalties["groups"] = [group for group in penalties["groups"] if group["kind"] == study_kind]
+            penalties["rows"] = [row for row in penalties["rows"] if row not in dropped]
             notes.append(f"{len(dropped)} penalty row{'s' if len(dropped) > 1 else ''} of the other kind of group went, because the study is now by {study_kind}.")
 
         await self.write(run_settings)
@@ -623,8 +646,8 @@ class RunForm:
 
         # a study is by zone or by area: rows of the other kind go
         kinds = self._find_penalty_kinds()
-        if any(row["kind"] not in kinds for row in self.penalty_rows):
-            self.penalty_rows = [row for row in self.penalty_rows if row["kind"] in kinds]
+        if any(find_row_key(row) not in kinds for row in self.penalty_rows):
+            self.penalty_rows = [row for row in self.penalty_rows if find_row_key(row) in kinds]
         if self._find_penalty_signature() != self.penalty_signature:
             self.penalty_list.refresh()
 

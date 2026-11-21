@@ -211,7 +211,7 @@ end
 
 
 # ==================== Settings → run ====================
-"Readable problems with a run's settings (schema v1); empty when the settings are usable."
+"Readable problems with a run's settings (schema 2, or 1); empty when the settings are usable."
 function find_settings_problems(settings)
     problems = String[]
     required = ["case", "objective", "opf_model", "flow_model", "lambda", "boundary", "penalties",
@@ -221,7 +221,7 @@ function find_settings_problems(settings)
     end
     isempty(problems) || return problems
 
-    get(settings, "schema", 1) == 1 || push!(problems, "settings schema $(settings["schema"]) is not supported, expected 1")
+    get(settings, "schema", 1) in (1, 2) || push!(problems, "settings schema $(settings["schema"]) is not supported, expected 2 (or 1)")
     isdir(settings["case"]) || push!(problems, "case folder not found: $(settings["case"])")
     settings["objective"] in OBJECTIVES || push!(problems, "objective must be one of $(join(OBJECTIVES, ", "))")
     settings["opf_model"] in OPF_MODELS || push!(problems, "opf_model must be AC or DC")
@@ -243,13 +243,12 @@ function find_settings_problems(settings)
         push!(problems, "boundary $boundary_kind needs a name")
     end
 
-    penalties = settings["penalties"]
-    for group in get(penalties, "groups", [])
-        get(group, "kind", "") in GROUP_KINDS || push!(problems, "penalty group kind must be one of $(join(GROUP_KINDS, ", "))")
-        get(group, "times_lambda", nothing) isa Real || push!(problems, "penalty group $(get(group, "name", "?")) needs a number times lambda")
-    end
-    for (bus, times_lambda) in get(penalties, "buses", Dict())
-        times_lambda isa Real || push!(problems, "penalty of bus $bus must be a number times lambda")
+    for row in find_penalty_rows(settings)
+        kind = get(row, "kind", "")
+        where = "$(get(row, "except", false) == true ? "all but " : "")$kind $(get(row, "name", "?"))"
+        kind == "bus" || kind in GROUP_KINDS || push!(problems, "a penalty row is for a zone, an area or a bus, not \"$kind\"")
+        is_number(get(row, "times_lambda", nothing)) || push!(problems, "the penalty row of $where needs a number times lambda")
+        kind == "bus" && get(row, "except", false) == true && push!(problems, "bus $(get(row, "name", "?")): a penalty row for all but one bus is not possible")
     end
 
     known_modifications = [first(modification) for modification in MODIFICATIONS]
@@ -437,26 +436,54 @@ function find_target(network_data, boundary)
 end
 
 """
-Absolute load shedding penalty per bus (bus string => penalty), as add_load_shedding_penalty!
-expects, from penalties given in multiples of lambda. Buses override groups, groups override
-`others`. Loads left out keep that function's default (1e4, absolute).
+The load shedding penalty rows of settings, in the order they apply: `{kind, name, except,
+times_lambda}`, `kind` "zone", "area" or "bus". Schema 1 kept groups and buses apart, a bus over
+its group; its groups come first and its buses after, which gives every load the same penalty.
 """
-function calc_shed_penalties(network_data, penalties, lambda::Real)
-    bus_penalty = Dict{String,Float64}()
+function find_penalty_rows(settings)
+    penalties = settings["penalties"]
+    get(settings, "schema", 1) == 1 || return get(penalties, "rows", [])
+    rows = Dict{String,Any}[]
+    for group in get(penalties, "groups", [])
+        push!(rows, Dict("kind" => get(group, "kind", ""), "name" => get(group, "name", ""), "except" => false, "times_lambda" => get(group, "times_lambda", nothing)))
+    end
+    for (bus, times_lambda) in get(penalties, "buses", Dict())
+        push!(rows, Dict("kind" => "bus", "name" => bus, "except" => false, "times_lambda" => times_lambda))
+    end
+    return rows
+end
 
-    others = get(penalties, "others", nothing)
+"""
+Buses a penalty row reaches, as strings: its bus, the buses of its zone or area, or with
+`except` every bus outside that zone or area (as islanding.jl's loop over the buses outside the
+target group). A name the case does not have fails the run (find_group_buses), so that an "all
+but" row never reaches every load by mistake.
+"""
+function find_penalty_row_buses(network_data, row)
+    row["kind"] == "bus" && return [string(row["name"])]
+    group_buses = find_group_buses(network_data, row["kind"], string(row["name"]))
+    get(row, "except", false) == true || return [string(bus) for bus in group_buses]
+    inside = Set(group_buses)
+    return [string(bus["bus_i"]) for (_, bus) in network_data["bus"] if !(Int(bus["bus_i"]) in inside)]
+end
+
+"""
+Absolute load shedding penalty per bus (bus string => penalty), as add_load_shedding_penalty!
+expects, from penalty rows given in multiples of lambda. `others` goes to every load first, then
+the rows in order, so a later row counts over an earlier one where they reach the same bus, and
+`others` stays only where no row reaches. Loads left out keep that function's default (1e4, absolute).
+"""
+function calc_shed_penalties(network_data, rows, others, lambda::Real)
+    bus_penalty = Dict{String,Float64}()
     if others !== nothing
         for (_, load) in network_data["load"]
             bus_penalty[string(load["load_bus"])] = others * lambda
         end
     end
-    for group in get(penalties, "groups", [])
-        for bus in find_group_buses(network_data, group["kind"], string(group["name"]))
-            bus_penalty[string(bus)] = group["times_lambda"] * lambda
+    for row in rows
+        for bus in find_penalty_row_buses(network_data, row)
+            bus_penalty[bus] = row["times_lambda"] * lambda
         end
-    end
-    for (bus, times_lambda) in get(penalties, "buses", Dict())
-        bus_penalty[string(bus)] = times_lambda * lambda
     end
     return bus_penalty
 end
@@ -471,7 +498,7 @@ function calc_output_path(case_name::AbstractString, objective::AbstractString, 
 end
 
 """
-Run one islanding scenario from settings (schema v1), the way islanding.jl's hardcoded block does.
+Run one islanding scenario from settings (schema 2, or 1), the way islanding.jl's hardcoded block does.
 `progress` is called with each stage name (gui_plan.md, "Stages") and `activity` with each note
 inside the solve stage (`run_islanding`). Returns what the result summary needs: the solve
 `result`, the network data as the console reports read it (with the embedded
@@ -499,7 +526,7 @@ function run_from_settings(settings; progress=stage -> nothing, activity=nothing
     uniform_value = get(penalties, "uniform", nothing)
     uniform_shedding = uniform_value !== nothing
     uniform_penalty = uniform_shedding ? uniform_value * lambda : 0.0
-    load_shedding_penalties = calc_shed_penalties(network_data, penalties, lambda)
+    load_shedding_penalties = calc_shed_penalties(network_data, find_penalty_rows(settings), get(penalties, "others", nothing), lambda)
     add_load_shedding_penalty!(
         network_data;
         uniform=uniform_shedding,

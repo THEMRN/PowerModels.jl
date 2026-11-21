@@ -256,11 +256,11 @@ Runs without `activity` (`islanding.jl`, `batch_islanding.jl`) set no callback a
 
 ### Settings schema v1
 
-The GUI sends this to the worker, and `run_islanding` stores it verbatim as `gui_settings` in the per-run settings file:
+Version 2 since 2026-11-21 (the heading keeps its name, as the phases refer to it). The GUI sends this to the worker, and `run_islanding` stores it verbatim as `gui_settings` in the per-run settings file:
 
 ```json
 {
-  "schema": 1,
+  "schema": 2,
   "case": "cases/psse/ACTIVSg500",
   "objective": "flow_shed",
   "opf_model": "AC",
@@ -269,8 +269,11 @@ The GUI sends this to the worker, and `run_islanding` stores it verbatim as `gui
   "boundary": {"kind": "zone", "name": "SPARTANB", "bus_pairs": []},
   "penalties": {
     "uniform": null,
-    "groups": [{"kind": "zone", "name": "SPARTANB", "times_lambda": 2.5}],
-    "buses": {"205": 5.8},
+    "rows": [
+      {"kind": "zone", "name": "SPARTANB", "except": false, "times_lambda": 2.5},
+      {"kind": "zone", "name": "SPARTANB", "except": true, "times_lambda": 1.6},
+      {"kind": "bus", "name": 205, "except": false, "times_lambda": 5.8}
+    ],
     "others": null
   },
   "frequency_security": false,
@@ -288,7 +291,7 @@ The GUI sends this to the worker, and `run_islanding` stores it verbatim as `gui
 | `opf_model` | `AC`, `DC`; voltage security needs `AC` |
 | `flow_model` | `squared`, `abs_sum`, `combined` |
 | `boundary.kind` | `zone` or `area`: the lines are that group's boundary lines and its buses orient the flows. `bus_pairs`: the lines come from `find_branches_by_bus_pairs` and nothing is oriented |
-| `penalties` | All values are multiples of λ. `uniform` (if not null) applies to every load and ignores the rest. Otherwise the precedence is `buses` over `groups` over `others`. `others: null` keeps today's default of 1e4 absolute for loads that are not listed (`add_load_shedding_penalty!`) |
+| `penalties` | All values are multiples of λ. `uniform` (if not null) applies to every load and ignores the rest. Otherwise the `rows` apply in their order, a later row over an earlier one where they reach the same bus, and `others` goes to the loads no row reaches; `others: null` keeps today's default of 1e4 absolute for them (`add_load_shedding_penalty!`). A row is a `zone` or an `area` (of the study's kind only) or a `bus` (`name` its number); `except: true` on a zone or area row means every bus outside it. Two rows for the same place are allowed: the lower one counts |
 | `output_tag` | suffix of the results folder; empty means none |
 | `modifications` | changes to the network made before the boundary and the penalties, filled by the advanced dialog; `{}` means none. See below |
 
@@ -316,7 +319,9 @@ The GUI sends this to the worker, and `run_islanding` stores it verbatim as `gui
 
 The loads come after the scaling, so a load's own pd and qd are final. A kind the worker does not know, a missing factor and a load that is not in the case fail the run in the stage `prepare`, with a message. A scaling that meets no load and a group without generators only print a note.
 
-The worker turns penalties into the absolute per-bus dictionary that `add_load_shedding_penalty!` expects (bus string to `times_lambda * lambda`), exactly as `runners/islanding.jl` does by hand today.
+The worker turns penalties into the absolute per-bus dictionary that `add_load_shedding_penalty!` expects (bus string to `times_lambda * lambda`), exactly as `runners/islanding.jl` does by hand today: `others` on every load first, then each row on its buses in order (`calc_shed_penalties`). An "all but" row reaches every bus outside its zone or area, as the loop of `islanding.jl` over the buses outside the target does, and a name the case does not have fails the run, so such a row never reaches every load by mistake.
+
+**Schema 1** (until 2026-11-21) had `"groups": [{kind, name, times_lambda}]` and `"buses": {"205": 5.8}` instead of `rows`, with buses over groups whatever their order. It is still read everywhere: by the worker (`find_penalty_rows`), and on the Python side by `settings.upgrade_settings`, which `form_values`, `load_settings`, the presets and History use. Its groups become rows first and its buses after, which gives every load the same penalty as before. Settings written now are schema 2.
 
 ### Per-run settings file
 
@@ -350,10 +355,10 @@ The report name is `dynamic.py`'s own `dynamic_channels_<ts>.html`. `run_islandi
 
 ### Preset file
 
-A preset is one file in `runners/gui/presets/`, settings schema v1 at its top level with two more keys, written by `presets.write_preset`:
+A preset is one file in `runners/gui/presets/`, the settings at their top level (schema 2; a schema 1 file is read and upgraded) with two more keys, written by `presets.write_preset`:
 
 ```json
-{"preset": "savnw – island on top", "note": "a line about the scenario, or empty", "schema": 1, "case": "cases/psse/savnw", ...}
+{"preset": "savnw – island on top", "note": "a line about the scenario, or empty", "schema": 2, "case": "cases/psse/savnw", ...}
 ```
 
 The name is what the Run page lists; the file name is made from it (`savnw_island_on_top.json`), with `_2`, `_3`, ... when another preset has that file. Names are compared ignoring case, so two presets cannot differ by case only, and they cannot hold `\/:*?"<>|`. A file that cannot be read, or holds no schema 1, is listed as "(cannot be read)" and cannot be chosen. The form reads only the settings' own keys, so `preset` and `note` never reach the worker.
@@ -1765,3 +1770,42 @@ Test folders added:
 - **The age of a note is its own:** Ipopt's note is renewed at each report, so its age stays small while Ipopt works, and the stage's clock gives the whole solve.
 
 Test folders added: `savnw_flow_shed_gui_test_activity_savnw`, `_activity_script`, `_activity_dc`, `_activity_dc_script`, `ACTIVSg500_flow_shed_gui_test_activity_500`, `_activity_volt` and `_activity_gui` (the failing run stops before its folder is made).
+
+**Penalty rows in order, and "all but" rows (2026-11-21), at the user's request, after phase 12:** "add shedding penalties to all loads except the selected zone in a row; the last row's rule should take effect if several rows reach a bus, zone or area".
+
+*What it was:* bus rows always counted over zone and area rows whatever their order, two rows for the same zone or area were refused, and of two rows for the same bus the lower one counted. So "the last row counts" held only for one bus twice.
+
+*What changed:*
+- **Settings schema 2 (`settings.py`):** the penalties are one ordered list of `rows` (`{kind, name, except, times_lambda}`) instead of `groups` and `buses`.
+  - `upgrade_settings` reads schema 1, its groups first and its buses after, which gives every load the same penalty as before.
+  - `describe_penalty_row` describes a row; `validate` checks rows, now allowing two rows for the same place.
+- **`worker.jl`:**
+  - It takes schema 2 and still schema 1 (`find_penalty_rows`).
+  - `calc_shed_penalties` applies `others`, then the rows in order (`find_penalty_row_buses`; an "all but" row reaches every bus outside its group).
+- **Run form (`pages/run.py`):**
+  - A row's kind is Zone, "All but zone" and Bus, or the same with area. Changing between a zone and all but it keeps the name.
+  - A line under the rows says that the lower row counts. The kind column is wider for "All but zone".
+- **`RunForm.take`** (the Network page's Set penalty) puts a row at the bottom, where it counts, and takes out an earlier row for the same place.
+- **History (`results_index.py`):**
+  - It describes rows ("zone Spartanb 2.5 λ, all but zone Spartanb 1.6 λ"), and its zone or area filter finds "all but" rows too.
+  - A script run's record becomes bus rows. Schema 1 records are upgraded first, and the 307 runs show the same text as before.
+- **Presets (`presets.py`):** schema 1 files are read and upgraded, and schema 2 is written. The eight starter files were rewritten in schema 2, each equal to its old file upgraded. A copy of the old ones is in the session's scratch folder (`p13/presets_before`).
+
+*How it was verified* (test instance on port 8090, headless Chrome, ACTIVSg500 and savnw):
+- **Pure:** the 148 GUI records on disk and the eight presets upgrade, pass `validate`, and come back unchanged through the form's values.
+- **Order:** a zone row for SPARTANB at 2.5 λ and bus 109 (in the zone) at 5 λ, run in both orders.
+  - Bus row last: bus 109 got 2500 (5 λ), objective 12151.983787625044.
+  - Bus row first: it got 1250 (2.5 λ), objective 12140.983057017995, the plain SPARTANB result.
+  - Before the change the bus row counted both times.
+- **"All but":** SPARTANB at 2.5 λ and all but SPARTANB at 1.6 λ gave 9366.082934790202. The reference, a temporary copy of `islanding.jl` with its line for the buses outside the target switched on (deleted after), gave the same, with the same 500 recorded penalties.
+- **Old settings:**
+  - The schema 1 dev job `dev/job_activsg500_spartanb.json`, sent straight to the worker, gave 12140.983057017995 with the same penalties as the `islanding.jl` reference.
+  - The schema 1 record `gui_test_preset_saved` (an area row, a bus row and "others"), loaded from History and run again, gave 3787.2016747635994, the same penalties as before.
+- **The GUI:**
+  - an "All but zone" row made by hand, saved as a preset (written as `except: true`) and loaded back without "changed";
+  - Set penalty for the same zone twice from the Network page left one row, at the bottom;
+  - the rows looked at in screenshots at 1500 and 1100 px.
+
+*For the user:* the line of `islanding.jl` for the buses outside the target (`# load_shedding_penalties[bus] = 1.6 * lambda`) is now a row in the form: "All but zone" SPARTANB at 1.6.
+
+Test folders added: `ACTIVSg500_flow_shed_gui_test_ref_except` (the `islanding.jl` copy), `ACTIVSg500_flow_shed_gui_test_rows_bus_last`, `_rows_bus_first`, `_rows_except`, `savnw_flow_shed_gui_test_rows_old`, and a new run in `ACTIVSg500_flow_shed_gui_test` (the dev job).

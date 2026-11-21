@@ -462,7 +462,7 @@ body:has(#popup[aria-hidden="false"]) .q-page-container {
 /* load shedding penalties: where, value, remove */
 .penalty-row {
   display: grid;
-  grid-template-columns: 72px minmax(0, 1fr) 76px 24px;
+  grid-template-columns: 108px minmax(0, 1fr) 64px 24px;     /* the kind takes "All but zone" whole */
   column-gap: 6px;
   align-items: center;
 }

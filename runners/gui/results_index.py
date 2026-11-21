@@ -20,7 +20,7 @@ import re
 from datetime import datetime
 from pathlib import Path, PureWindowsPath
 
-from settings import GROUP_KINDS, OBJECTIVES, default_settings
+from settings import GROUP_KINDS, OBJECTIVES, default_settings, describe_penalty_row, upgrade_settings
 
 # ==================== Settings ====================
 RESULTS_DIR = Path("results") / "psse"           # relative to the repo root
@@ -146,20 +146,21 @@ def find_bus_pairs(target_lines):
 def describe_penalties(record):
     """
     The load shedding penalties of a record, short, in multiples of λ: "uniform 0.01 λ",
-    "zone Spartanb 2.5 λ", "85 buses at 2.5 λ". "none set" when loads keep the default penalty.
+    "zone Spartanb 2.5 λ, all but zone Spartanb 1.6 λ", "85 buses at 2.5 λ". "none set" when loads
+    keep the default penalty. The rows of zones and areas come in their order, then the buses.
     """
     gui_settings = record.get("gui_settings")
     if gui_settings:
-        penalties = gui_settings["penalties"]
+        penalties = upgrade_settings(gui_settings)["penalties"]
         if penalties.get("uniform") is not None:
             return f"uniform {format_number(penalties['uniform'])} λ"
-        parts = [f"{group['kind']} {group['name']} {format_number(group['times_lambda'])} λ" for group in penalties.get("groups", [])]
-        buses = penalties.get("buses", {})
-        if len(buses) == 1:
-            bus, times_lambda = next(iter(buses.items()))
-            parts.append(f"bus {bus} {format_number(times_lambda)} λ")
-        elif buses:
-            parts.append(describe_spread(len(buses), list(buses.values())))
+        rows = penalties.get("rows", [])
+        parts = [f"{describe_penalty_row(row)} {format_number(row['times_lambda'])} λ" for row in rows if row["kind"] != "bus"]
+        bus_rows = [row for row in rows if row["kind"] == "bus"]
+        if len(bus_rows) == 1:
+            parts.append(f"bus {bus_rows[0]['name']} {format_number(bus_rows[0]['times_lambda'])} λ")
+        elif bus_rows:
+            parts.append(describe_spread(len(bus_rows), [row["times_lambda"] for row in bus_rows]))
         if penalties.get("others") is not None:
             parts.append(f"others {format_number(penalties['others'])} λ")
         return ", ".join(parts) or "none set"
@@ -180,9 +181,11 @@ def describe_spread(count, values):
 
 
 def find_penalty_groups(record):
-    """Names of the zones or areas a record's penalties name (GUI records only)."""
-    gui_settings = record.get("gui_settings") or {}
-    return [str(group["name"]) for group in (gui_settings.get("penalties") or {}).get("groups", [])]
+    """Names of the zones or areas a record's penalty rows name, "all but" ones too (GUI records only)."""
+    gui_settings = record.get("gui_settings")
+    if not gui_settings:
+        return []
+    return [str(row["name"]) for row in upgrade_settings(gui_settings)["penalties"].get("rows", []) if row["kind"] != "bus"]
 
 
 def describe_security(frequency, voltage):
@@ -460,14 +463,14 @@ def build_settings_from_record(record, case, load_buses):
             boundary = {"kind": kind, "name": str(record[f"target_{kind}"]), "bus_pairs": []}
     run_settings["boundary"] = boundary
 
-    penalties = {"uniform": None, "groups": [], "buses": {}, "others": None}
+    penalties = {"uniform": None, "rows": [], "others": None}
     if record.get("uniform_shedding"):
         penalties["uniform"] = round(record.get("uniform_penalty", 0) / lam, 10)
     else:
         left_out = 0
         for bus, value in (record.get("load_shedding_penalties") or {}).items():
             if int(bus) in load_buses:
-                penalties["buses"][str(bus)] = round(value / lam, 10)
+                penalties["rows"].append({"kind": "bus", "name": int(bus), "except": False, "times_lambda": round(value / lam, 10)})
             else:
                 left_out += 1
         if left_out:

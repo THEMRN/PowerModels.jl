@@ -1,8 +1,9 @@
 """
-Run settings of the GUI, schema v1 (runners/gui/gui_plan.md, "Settings schema v1"): the defaults,
-the conversion between the form's values and the settings in both directions, validation, and
-JSON files. Pure functions, no GUI. The entries of the network modifications are described and
-checked by the tabs of the advanced dialog (advanced/).
+Run settings of the GUI, schema 2 (runners/gui/gui_plan.md, "Settings schema"): the defaults,
+the conversion of older settings (`upgrade_settings`), the conversion between the form's values
+and the settings in both directions, validation, and JSON files. Pure functions, no GUI. The
+entries of the network modifications are described and checked by the tabs of the advanced
+dialog (advanced/).
 """
 
 import copy
@@ -11,7 +12,7 @@ import re
 from pathlib import Path
 
 # ==================== Settings ====================
-SCHEMA = 1
+SCHEMA = 2                                      # schema 1 kept penalty groups and bus penalties apart (upgrade_settings)
 OBJECTIVES = ["opf", "flow", "flow_shed", "opf_shed"]
 OPF_MODELS = ["AC", "DC"]
 FLOW_MODELS = ["squared", "abs_sum", "combined"]
@@ -28,7 +29,7 @@ DEFAULT_SETTINGS = {
     "flow_model": "squared",
     "lambda": 500,                              # weight of the boundary flow penalty
     "boundary": {"kind": "zone", "name": "", "bus_pairs": []},
-    "penalties": {"uniform": None, "groups": [], "buses": {}, "others": None},      # multiples of lambda
+    "penalties": {"uniform": None, "rows": [], "others": None},     # multiples of lambda; rows apply in order
     "frequency_security": False,
     "voltage_security": False,
     "run_dynamic_sim": True,
@@ -41,6 +42,33 @@ DEFAULT_SETTINGS = {
 def default_settings():
     """A fresh copy of the default settings."""
     return copy.deepcopy(DEFAULT_SETTINGS)
+
+
+def upgrade_settings(settings):
+    """
+    A copy of settings in the current schema. Schema 1 kept the penalties of zones or areas
+    (`groups`) and of buses (`buses`) apart, a bus over its group; schema 2 keeps one list of
+    rows where a later row counts over an earlier one. The groups first and then the buses give
+    the same penalty to every load.
+    """
+    settings = copy.deepcopy(settings)
+    if settings.get("schema", 1) != 1:
+        return settings
+    penalties = settings.get("penalties") or {}
+    rows = []
+    for group in penalties.get("groups", []):
+        rows.append({"kind": group.get("kind"), "name": group.get("name"), "except": False, "times_lambda": group.get("times_lambda")})
+    for bus, times_lambda in penalties.get("buses", {}).items():
+        rows.append({"kind": "bus", "name": int(bus) if str(bus).isdigit() else bus, "except": False, "times_lambda": times_lambda})
+    settings["penalties"] = {"uniform": penalties.get("uniform"), "rows": rows, "others": penalties.get("others")}
+    settings["schema"] = SCHEMA
+    return settings
+
+
+def describe_penalty_row(row):
+    """Where a penalty row applies, in words: "zone SPARTANB", "all but zone SPARTANB", "bus 205"."""
+    where = f"{row.get('kind')} {row.get('name')}"
+    return f"all but {where}" if row.get("except") else where
 
 
 # ==================== Bus pairs ====================
@@ -93,7 +121,8 @@ def build_settings(form):
     The settings (schema v1) for the form's values, with the problems found while reading them
     (malformed bus pairs, penalty rows left half filled). `form` holds: case, objective,
     opf_model, flow_model, lambda, boundary_kind, boundary_name, bus_pairs_text, uniform (bool),
-    uniform_value, penalty_rows ([{kind: "zone" | "area" | "bus", name, times_lambda}]), others,
+    uniform_value, penalty_rows ([{kind: "zone" | "area" | "bus", name, except, times_lambda}], in
+    the form's order, which is the order they apply in), others,
     frequency_security, voltage_security, run_dynamic_sim, simulator, output_tag, and
     modifications (as in the settings: the advanced dialog keeps them in that shape).
 
@@ -113,7 +142,7 @@ def build_settings(form):
         boundary["name"] = str(form["boundary_name"] or "").strip()
 
     # load shedding penalties
-    penalties = {"uniform": None, "groups": [], "buses": {}, "others": None}
+    penalties = {"uniform": None, "rows": [], "others": None}
     if form["uniform"]:
         penalties["uniform"] = clean_number(form["uniform_value"])
         if penalties["uniform"] is None:
@@ -125,10 +154,13 @@ def build_settings(form):
             if name in (None, "") or times_lambda is None:
                 problems.append(f"penalty row {number} needs a {row['kind']} and a value")
                 continue
-            if row["kind"] == "bus":
-                penalties["buses"][str(name)] = times_lambda
-            else:
-                penalties["groups"].append({"kind": row["kind"], "name": str(name), "times_lambda": times_lambda})
+            is_bus = row["kind"] == "bus"
+            penalties["rows"].append({
+                "kind": row["kind"],
+                "name": int(name) if is_bus else str(name),
+                "except": bool(row.get("except")) and not is_bus,
+                "times_lambda": times_lambda,
+            })
         penalties["others"] = clean_number(form["others"])
 
     settings = {
@@ -151,14 +183,19 @@ def build_settings(form):
 
 
 def form_values(settings):
-    """The form's values for settings (schema v1): the inverse of build_settings."""
+    """The form's values for settings (of any schema, upgraded first): the inverse of build_settings."""
+    settings = upgrade_settings(settings)
     boundary = settings["boundary"]
     penalties = settings["penalties"]
     penalty_rows = []
-    for group in penalties.get("groups", []):
-        penalty_rows.append({"kind": group["kind"], "name": group["name"], "times_lambda": group["times_lambda"]})
-    for bus, times_lambda in penalties.get("buses", {}).items():
-        penalty_rows.append({"kind": "bus", "name": int(bus), "times_lambda": times_lambda})
+    for row in penalties.get("rows", []):
+        is_bus = row["kind"] == "bus"
+        penalty_rows.append({
+            "kind": row["kind"],
+            "name": int(row["name"]) if is_bus else row["name"],
+            "except": bool(row.get("except")) and not is_bus,
+            "times_lambda": row["times_lambda"],
+        })
 
     return {
         "case": settings["case"],
@@ -189,11 +226,13 @@ def is_number(value):
 
 def validate(settings):
     """
-    Readable problems with settings (schema v1); empty when they can be sent to the worker.
+    Readable problems with settings (schema 2); empty when they can be sent to the worker.
     Of the network modifications only the shape is checked here: their entries belong to the tabs
     of the advanced dialog, which check them against the case (`find_problems` in advanced/).
     """
     problems = []
+    if settings.get("schema") != SCHEMA:
+        problems.append(f"the settings are of schema {settings.get('schema')}, not {SCHEMA}: read them with upgrade_settings")
     if not settings.get("case"):
         problems.append("choose a case")
     if settings.get("objective") not in OBJECTIVES:
@@ -220,7 +259,8 @@ def validate(settings):
     elif not str(boundary.get("name", "")).strip():
         problems.append(f"choose the {boundary_kind} the boundary encloses")
 
-    # load shedding penalties (multiples of lambda)
+    # load shedding penalties (multiples of lambda): rows in order, a later row over an earlier one
+    # where they reach the same load; two rows for the same zone, area or bus are allowed
     penalties = settings.get("penalties", {})
     uniform = penalties.get("uniform")
     if uniform is not None and (not is_number(uniform) or uniform < 0):
@@ -228,28 +268,29 @@ def validate(settings):
     others = penalties.get("others")
     if others is not None and (not is_number(others) or others < 0):
         problems.append("the penalty of all other loads must be zero or more")
-    seen_groups = set()
-    for group in penalties.get("groups", []):
-        group_kind = group.get("kind")
-        group_name = str(group.get("name", "")).strip()
-        if group_kind not in GROUP_KINDS or not group_name:
-            problems.append("a penalty group needs a zone or an area")
+    group_kinds = set()
+    for row in penalties.get("rows", []):
+        kind = row.get("kind")
+        name = str(row.get("name", "")).strip()
+        if kind == "bus":
+            if not name.isdigit():
+                problems.append(f'"{name}" is not a bus number')
+            if row.get("except"):
+                problems.append(f"bus {name}: a penalty row for all but one bus is not possible, only for all but a zone or an area")
+        elif kind in GROUP_KINDS:
+            if not name:
+                problems.append(f"a penalty row needs {'an' if kind == 'area' else 'a'} {kind}")
+                continue
+            group_kinds.add(kind)
+            if boundary_kind in GROUP_KINDS and kind != boundary_kind:
+                problems.append(f"penalty on {describe_penalty_row(row)}: this study is by {boundary_kind}, so use {boundary_kind}s or buses")
+        else:
+            problems.append("a penalty row is for a zone, an area or a bus")
             continue
-        if boundary_kind in GROUP_KINDS and group_kind != boundary_kind:
-            problems.append(f"penalty on {group_kind} {group_name}: this study is by {boundary_kind}, so use {boundary_kind}s or buses")
-        if not is_number(group.get("times_lambda")) or group["times_lambda"] < 0:
-            problems.append(f"the penalty of {group_kind} {group_name} must be zero or more")
-        key = (group_kind, group_name.lower())
-        if key in seen_groups:
-            problems.append(f"{group_kind} {group_name} has two penalty rows")
-        seen_groups.add(key)
-    if len({group.get("kind") for group in penalties.get("groups", [])}) > 1:
-        problems.append("penalty groups must be all zones or all areas")
-    for bus, times_lambda in penalties.get("buses", {}).items():
-        if not str(bus).isdigit():
-            problems.append(f'"{bus}" is not a bus number')
-        if not is_number(times_lambda) or times_lambda < 0:
-            problems.append(f"the penalty of bus {bus} must be zero or more")
+        if not is_number(row.get("times_lambda")) or row["times_lambda"] < 0:
+            problems.append(f"the penalty of {describe_penalty_row(row)} must be zero or more")
+    if len(group_kinds) > 1:
+        problems.append("penalty rows must name zones only or areas only")
 
     # network modifications: a list of entries per kind
     modifications = settings.get("modifications", {})
@@ -272,5 +313,5 @@ def save_settings(path, settings):
 
 
 def load_settings(path):
-    """Settings read from a JSON file."""
-    return json.loads(Path(path).read_text(encoding="utf-8"))
+    """Settings read from a JSON file, in the current schema."""
+    return upgrade_settings(json.loads(Path(path).read_text(encoding="utf-8")))

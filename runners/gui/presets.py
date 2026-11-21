@@ -2,7 +2,7 @@
 Presets: named run settings kept as files, like the commented scenario blocks in islanding.jl
 (gui_plan.md, phase 12). The Run page chooses, saves and deletes them (components/preset_bar.py).
 
-A preset is one JSON file in runners/gui/presets/: settings schema v1 at its top level, with two
+A preset is one JSON file in runners/gui/presets/: the settings (schema 2) at its top level, with two
 more keys, `preset` (its name, as the Run page lists it) and `note` (a line about the scenario, or
 ""). The form reads only the settings' own keys, so a preset file passes `validate` as it is. The
 file name comes from the name; the name is what the user sees and types.
@@ -16,7 +16,7 @@ import re
 from pathlib import Path
 
 from julia_worker import call_listeners
-from settings import SCHEMA
+from settings import SCHEMA, upgrade_settings
 
 # ==================== Settings ====================
 PRESETS_DIR = Path(__file__).with_name("presets")
@@ -35,7 +35,7 @@ def find_file_stem(name):
 def read_preset(path):
     """
     A preset file as a dict: `key` (its file stem, which tells presets apart), `name`, `note`,
-    `settings` (schema v1, without the preset's own keys), `path`, and `error` ("" when it could
+    `settings` (in the current schema, a file of schema 1 upgraded; without the preset's own keys), `path`, and `error` ("" when it could
     be read; then `settings` is None).
     """
     path = Path(path)
@@ -45,12 +45,12 @@ def read_preset(path):
     except (OSError, ValueError) as error:
         preset["error"] = f"it is not a JSON file that can be read: {error}"
         return preset
-    if not isinstance(data, dict) or data.get("schema") != SCHEMA:
-        preset["error"] = f"it does not hold settings of schema {SCHEMA}"
+    if not isinstance(data, dict) or data.get("schema") not in (1, SCHEMA):
+        preset["error"] = f"it does not hold settings of schema 1 or {SCHEMA}"
         return preset
     preset["name"] = str(data.get("preset") or path.stem)
     preset["note"] = str(data.get("note") or "")
-    preset["settings"] = {key: value for key, value in data.items() if key not in PRESET_KEYS}
+    preset["settings"] = upgrade_settings({key: value for key, value in data.items() if key not in PRESET_KEYS})
     return preset
 
 
@@ -96,7 +96,7 @@ def find_free_path(folder, name, presets):
 
 
 def write_preset(path, name, note, settings):
-    """Write a preset file: its name and note first, then the settings (schema v1)."""
+    """Write a preset file: its name and note first, then the settings (the current schema)."""
     data = {"preset": name, "note": note}
     data.update({key: value for key, value in settings.items() if key not in PRESET_KEYS})
     Path(path).parent.mkdir(parents=True, exist_ok=True)
