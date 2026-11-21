@@ -7,8 +7,9 @@ psse_scripts/dynamic.py with the same command line and outputs:
 Loads the case exported by PowerModels, solves the power flow, trips the lines listed in
 line_outage.json at EVENT_TIME, runs to SIM_END_TIME and writes into the case folder the power
 flow report (andes_res_*.xlsx), the channels (output_andes_*.csv.gz), voltage_stats.json, the
-Plotly HTML report and the ANDES log. An area study (run_info.json "group_kind") reports the UFLS
-shed by area, any other study by zone.
+UFLS shed record (ufls_shed.json, read by the GUI worker), the Plotly HTML report and the ANDES
+log. An area study (run_info.json "group_kind") reports the UFLS shed by area, any other study by
+zone.
 
 Not modelled by ANDES (approximated when reading the dyr): GENSAL is approximated by GENROU and
 SCRX by SEXS with default parameters. Generator frequency relays (FRQTPAT) and UFLS relays (LDSHBL)
@@ -120,6 +121,40 @@ def calc_ufls_by_group(shed_events, group_by_bus, group_names):
         row.update(totals[group])
         rows.append(row)
     return rows
+
+
+def write_ufls_shed_json(output_dir, shed_events, load_mw_by_pq, n_relays, end_time, stopped_early):
+    """
+    Write ufls_shed.json for the GUI worker: the number of UFLS relays (LDSHBL), the time the
+    simulation reached (s), whether it stopped early, and one entry per relay stage that acted
+    (time in s, bus, load id, stage, % of the initial load, the load's P at the power flow in MW
+    from `load_mw_by_pq` (ANDES PQ idx -> MW), MW and Mvar at 1 pu voltage, the bus voltage in pu
+    and frequency in Hz when it acted).
+    """
+    events = []
+    for event in shed_events:
+        events.append(
+            {
+                "time": float(event["time"]),
+                "bus": int(event["bus"]),
+                "load_id": str(event["load_id"]),
+                "stage": int(event["stage"]),
+                "percent": float(event["percent"]),
+                "load_mw": float(load_mw_by_pq[event["load"]]),
+                "MW": float(event["MW"]),
+                "Mvar": float(event["Mvar"]),
+                "voltage": float(event["voltage"]),
+                "frequency": float(event["frequency"]),
+            }
+        )
+    record = {
+        "relays": int(n_relays),
+        "end_time": float(end_time),
+        "stopped_early": bool(stopped_early),
+        "events": events,
+    }
+    with open(output_dir / "ufls_shed.json", "w") as file:
+        json.dump(record, file, indent=2)
 
 
 def find_dead_island_buses(ss, tripped_lines):
@@ -463,6 +498,8 @@ if ufls_by_group:
         )
 if ss.LDSHBL.n == 0:
     ufls_total_p_mw = None  # no UFLS relays in the dyr, nothing to report
+load_mw_by_pq = dict(zip(ss.PQ.idx.v, ss.PQ.p0.v * base_mva))  # MW, each load's P at the power flow
+write_ufls_shed_json(output_dir, shed_events, load_mw_by_pq, ss.LDSHBL.n, ss.dae.t, ss.TDS.busted)
 
 # build the channel DataFrame with PSS®E channel names and units:
 # FREQ in pu deviation from 60 Hz, VOLT in pu, POWR/VARS/PLOD/QLOD in pu on the system base

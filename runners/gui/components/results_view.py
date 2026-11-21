@@ -4,9 +4,10 @@ from the run's @@result summary (gui_plan.md, "Result summary").
 
 The summary is in MW and Mvar, already rounded as the console prints, so the panel shows its
 numbers as they are. Tabs: Summary, Generation, Load shedding, Boundary flows, Frequency,
-Voltage and Files; a tab whose part the run does not have (no shedding in the objective, a
-security check that was off) is left out. "Results of" switches between the runs that have
-results.
+Voltage and Files; a tab whose part the run does not have (a security check that was off) is
+left out. Load shedding is always there, in two sides: the shed of the optimization before the
+event and the UFLS relays' shed in the dynamic simulation after it, each with a sentence in its
+place when the run has none. "Results of" switches between the runs that have results.
 
 The `find_*` functions build what each table shows from a summary, without drawing anything,
 so a script can check them against the printed reports.
@@ -97,7 +98,7 @@ def describe_run(record):
 
 def find_tabs(summary):
     """The tabs a summary fills, in order: a part that is null (the feature was off) has no tab."""
-    optional = ("load_shed", "frequency", "voltage")
+    optional = ("frequency", "voltage")
     return [tab for tab in TAB_LABELS if tab not in optional or summary.get(tab) is not None]
 
 
@@ -137,6 +138,91 @@ def find_shed_bus_table(summary, only_shed=True):
     if only_shed:
         rows = [row for row in rows if row["shed_mw"] > 0]
     return columns, rows, []
+
+
+def find_ufls_group_table(summary):
+    """(columns, rows, footers) of the UFLS shed by zone or area, against the load in service when the lines opened."""
+    ufls = summary["ufls"]
+    columns = [
+        (GROUP_LABELS[ufls["group_kind"]], "name", None),
+        ("Load (MW)", "load_mw", 2),
+        ("Shed (MW)", "shed_mw", 2),
+        ("Shed (%)", "shed_pct", 2),
+        ("Stages", "stages", 0),
+    ]
+    total = {
+        "name": "Total",
+        "load_mw": ufls["total_load_mw"],
+        "shed_mw": ufls["total_shed_mw"],
+        "shed_pct": ufls["total_shed_pct"],
+        "stages": ufls["stages"],
+    }
+    return columns, ufls["groups"], [total]
+
+
+def find_ufls_bus_table(summary, only_shed=True):
+    """(columns, rows, footers) of the UFLS shed by bus; `only_shed` keeps the buses where a relay acted."""
+    columns = [
+        ("Bus", "bus", None),
+        ("Load (MW)", "pd_mw", 2),
+        ("Shed (MW)", "shed_mw", 2),
+        ("Shed (%)", "shed_pct", 2),
+        ("Stages", "stages", 0),
+    ]
+    rows = summary["ufls"]["buses"]
+    if only_shed:
+        rows = [row for row in rows if row["stages"] > 0]
+    return columns, rows, []
+
+
+def describe_missing_ufls(summary):
+    """
+    Why a run shows no UFLS tables, in a sentence, or None when it has the relays' sheds. A run
+    whose summary has no `ufls` key came from a worker older than the UFLS record.
+    """
+    if "ufls" not in summary:
+        return "This run has no UFLS record: Julia was started before the GUI reported the UFLS shed."
+    ufls = summary["ufls"]
+    if ufls is None:
+        return "The dynamic simulation was off for this run, so no UFLS relay could act."
+    status = ufls["status"]
+    if status == "not_reported":
+        return "This run used PSS®E, whose script does not pass the UFLS shed to the GUI. The simulation report has it."
+    if status == "no_record":
+        return "The simulation left no UFLS record (ufls_shed.json) in the results folder. The simulation report may have it."
+    if status == "no_relays":
+        return "The case's .dyr file has no UFLS relays (LDSHBL), so the simulation could not shed load."
+    if ufls["stages"] == 0:
+        return f"No UFLS relay acted in the simulation, which ran to t = {theme.format_number(ufls['end_time_s'], 2)} s."
+    return None
+
+
+def describe_ufls_stages(ufls):
+    """How many relay stages acted, at how many buses, and how far the simulation ran."""
+    stages = ufls["stages"]
+    buses = sum(1 for row in ufls["buses"] if row["stages"] > 0)
+    return (
+        f"{stages} relay stage" + ("" if stages == 1 else "s") + f" acted at {buses} bus" + ("" if buses == 1 else "es")
+        + f"; the simulation ran to t = {theme.format_number(ufls['end_time_s'], 2)} s."
+    )
+
+
+def describe_ufls_fact(summary):
+    """The UFLS shed on one line, for the Summary tab."""
+    ufls = summary.get("ufls")
+    if ufls is None:
+        return "not simulated" if "ufls" in summary else "no record"
+    texts = {
+        "not_reported": "PSS®E: in the simulation report",
+        "no_record": "no record",
+        "no_relays": "no UFLS relays in the .dyr",
+    }
+    if ufls["status"] in texts:
+        return texts[ufls["status"]]
+    text = f"{theme.format_number(ufls['total_shed_mw'], 2)} MW"
+    if ufls["stopped_early"]:
+        text += f" (simulation stopped at t = {theme.format_number(ufls['end_time_s'], 2)} s)"
+    return text
 
 
 def find_flow_table(summary):
@@ -225,6 +311,7 @@ class ResultsView:
         self.newest = None          # job id of the newest run with results that was seen
         self.tab = "summary"        # the tab on show, kept from run to run
         self.only_shed = True       # the bus table lists only the buses that shed load
+        self.only_ufls_shed = True  # the UFLS bus table lists only the buses where a relay acted
         self.setting = False        # the selector is being set from code
         self.options = {}           # the runs the selector lists
         self.run_time = None        # label of the whole-run time, which comes after the results
@@ -325,6 +412,9 @@ class ResultsView:
                     else:
                         theme.fact("Total load", f"{theme.format_number(load_shed['total_load_mw'], 2)} MW")
                         theme.fact("Load shed", f"{theme.format_number(load_shed['total_shed_mw'], 2)} MW")
+                    ufls = summary.get("ufls")
+                    simulated = ufls is not None and ufls["status"] == "simulated"
+                    theme.fact("UFLS shed", describe_ufls_fact(summary)).classes("" if simulated else "muted")
                     flows = summary["boundary_flows"]
                     theme.fact("Net flow P", f"{theme.format_number(flows['net']['p_mw'], 2)} MW")
                     theme.fact("Net flow Q", f"{theme.format_number(flows['net']['q_mvar'], 2)} Mvar")
@@ -386,9 +476,23 @@ class ResultsView:
                 theme.hint(f"The case has no {summary['generation']['group_kind']} records, so there is only the total.")
 
     def _build_load_shed(self, record):
+        """Two sides: the optimization's shed before the event, then the UFLS relays' shed in the dynamic simulation."""
         summary = record["summary"]
+        with ui.element("div").classes("tab-body"), ui.element("div").classes("shed-sides"):
+            with ui.element("div").classes("shed-side"):
+                ui.label("Before the event: optimization").classes("shed-side-title")
+                self._build_pre_event_shed(summary)
+            with ui.element("div").classes("shed-side"):
+                ui.label("After the event: UFLS relays").classes("shed-side-title")
+                self._build_ufls_shed(summary)
+
+    def _build_pre_event_shed(self, summary):
+        if summary["load_shed"] is None:
+            theme.hint("The objective sheds no load, so all of it is in service when the lines open.")
+            return
         kind = summary["load_shed"]["group_kind"]
-        with ui.element("div").classes("tab-body"), ui.element("div").classes("tables"):
+        theme.hint("The preemptive shed of the solution, in % of the case's load.")
+        with ui.element("div").classes("tables"):
             with ui.element("div").classes("table-block"):
                 theme.eyebrow(f"By {kind}")
                 theme.data_table(*find_shed_group_table(summary))
@@ -412,6 +516,50 @@ class ResultsView:
 
                 only_shed.on_value_change(filter_changed)
                 bus_table()
+
+    def _build_ufls_shed(self, summary):
+        ufls = summary.get("ufls")
+        files = summary["files"]
+        if ufls is not None and ufls["status"] == "simulated" and ufls["stopped_early"]:
+            stopped_at = theme.format_number(ufls["end_time_s"], 2)
+            theme.show_hint(theme.hint(), f"The simulation stopped early at t = {stopped_at} s, so this is only the shed up to then.", bad=True)
+
+        missing = describe_missing_ufls(summary)
+        if missing is not None:
+            theme.hint(missing)
+            if ufls is not None and ufls["status"] in ("not_reported", "no_record") and files["report"]:
+                with theme.line():
+                    theme.button("Open report", on_click=lambda: open_report(files))
+            return
+
+        kind = ufls["group_kind"]
+        theme.hint(describe_ufls_stages(ufls))
+        with ui.element("div").classes("tables"):
+            with ui.element("div").classes("table-block"):
+                theme.eyebrow(f"By {kind}")
+                theme.data_table(*find_ufls_group_table(summary))
+            with ui.element("div").classes("table-block"):
+                with theme.line():
+                    theme.eyebrow("By bus")
+                    only_shed = ui.checkbox("only buses with shed", value=self.only_ufls_shed)
+
+                @ui.refreshable
+                def bus_table():
+                    columns, rows, footers = find_ufls_bus_table(summary, self.only_ufls_shed)
+                    with ui.element("div").classes("table-scroll"):
+                        theme.data_table(columns, rows, footers)
+
+                def filter_changed(event):
+                    self.only_ufls_shed = bool(event.value)
+                    bus_table.refresh()
+
+                only_shed.on_value_change(filter_changed)
+                bus_table()
+        theme.hint(
+            "Load is what was in service when the lines opened, after the preemptive shed. Shed (MW) is at 1 pu "
+            "voltage, as the relays and the simulation report give it, and Shed (%) is the share of the load the "
+            "relays tripped. Stages counts the relay stages that acted."
+        )
 
     def _build_boundary_flows(self, record):
         summary = record["summary"]

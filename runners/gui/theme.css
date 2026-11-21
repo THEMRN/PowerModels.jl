@@ -583,6 +583,34 @@ body:has(#popup[aria-hidden="false"]) .q-page-container {
   font-family: var(--mono);
   font-size: 12px;
 }
+/* load shedding: the shed before the event and the UFLS shed after it, side by side with a line between */
+.shed-sides {
+  display: flex;
+  align-items: stretch;
+  gap: 24px;
+}
+.shed-side {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  gap: 12px;
+  min-width: min-content;       /* never narrower than its widest table; the tab scrolls instead */
+}
+.shed-side + .shed-side {
+  padding-left: 24px;
+  border-left: 1px solid var(--line);
+}
+.shed-side-title {
+  font-weight: 600;
+}
+@media (max-width: 900px) {
+  .shed-sides { flex-direction: column; }
+  .shed-side + .shed-side {
+    padding: 14px 0 0;
+    border-left: 0;
+    border-top: 1px solid var(--line);
+  }
+}
 /* voltage details: one block per round */
 .dialog-body {
   display: flex;

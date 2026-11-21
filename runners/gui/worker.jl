@@ -40,6 +40,7 @@ const MAX_ERROR_MESSAGE = 2000                    # characters of an error messa
 const MW_DIGITS = 2                               # MW, Mvar and % in @@result, as the console prints them
 const LAYOUT_DIGITS = 3                           # positions and radii of the network layout (line lengths)
 const PU_DIGITS = 3                               # H, K, D, voltages (pu) and voltage indicators in @@result, as the console prints them
+const UFLS_FILE = "ufls_shed.json"                # the UFLS relays' sheds, written by andes_scripts/dynamic.py into the results folder
 const STAGE_LABELS = Dict(                        # stage => label shown by the GUI (gui_plan.md, "Stages")
     "load_case" => "Load case",
     "prepare" => "Prepare",
@@ -701,6 +702,124 @@ function calc_load_shed_summary(network_data, result, group_kind::AbstractString
     )
 end
 
+"""
+The UFLS shed record (`UFLS_FILE`) the ANDES script wrote into `output_path` at or after `since`
+(Unix time), or `nothing` when there is none. The folder is reused by later runs of the same case,
+objective and tag, so an older record is not this run's.
+"""
+function find_ufls_record(output_path::AbstractString, since::Real)
+    file = joinpath(output_path, UFLS_FILE)
+    isfile(file) || return nothing
+    mtime(file) >= since || return nothing
+    return JSON3.read(read(file, String), Dict{String,Any}; allow_inf=true)
+end
+
+"""
+The UFLS shed of the run's dynamic simulation (MW, Mvar), grouped like the load shed: by zone or
+area (every group with load) and at every load bus, each against the load in service when the
+lines open, which is the load after the pre-event shed. The MW are at 1 pu voltage as the relays
+report them, and the % is the share of the load the relay stages tripped, so a 5 % stage shows
+5 % whatever the bus voltage. `nothing` when the simulation was off.
+Otherwise `status` says what there is: "simulated" (the sheds, possibly none), "no_relays" (the
+.dyr has no LDSHBL records), "not_reported" (PSS®E, whose script writes no record) or "no_record".
+"""
+function calc_ufls_summary(finished_run, group_kind::AbstractString)
+    settings = finished_run.settings
+    settings["run_dynamic_sim"] == true || return nothing
+    settings["simulator"] == "andes" || return Dict{String,Any}("status" => "not_reported")
+    record = find_ufls_record(finished_run.output_path, finished_run.started)
+    record === nothing && return Dict{String,Any}("status" => "no_record")
+    record["relays"] > 0 || return Dict{String,Any}("status" => "no_relays")
+
+    network_data = finished_run.network_data
+    base_mva = network_data["baseMVA"]
+
+    # the load in service when the lines open (MW): each bus's load less its pre-event shed
+    load_by_bus = Dict{Int,Float64}()
+    for (_, load) in network_data["load"]
+        bus = Int(load["load_bus"])
+        load_by_bus[bus] = get(load_by_bus, bus, 0.0) + load["pd"] * base_mva
+    end
+    shed_status = calc_load_shedding_status(finished_run.result, network_data; group_kind=group_kind)
+    for load in shed_status["loads"]
+        load_by_bus[load["bus"]] -= load["shed"] * base_mva
+    end
+
+    # the relay stages that acted at each bus: the MW at 1 pu voltage, as the relays and the
+    # simulation report give it (P0/V0 of a constant current load), and the share of the load
+    # they tripped, from each stage's percent of its load's power flow P
+    shed_by_bus = Dict{Int,Float64}()
+    tripped_by_bus = Dict{Int,Float64}()        # MW, stage percent times the load's power flow P
+    stages_by_bus = Dict{Int,Int}()
+    total_shed_mvar = 0.0
+    for event in record["events"]
+        bus = Int(event["bus"])
+        shed_by_bus[bus] = get(shed_by_bus, bus, 0.0) + event["MW"]
+        tripped_by_bus[bus] = get(tripped_by_bus, bus, 0.0) + event["percent"] / 100 * event["load_mw"]
+        stages_by_bus[bus] = get(stages_by_bus, bus, 0) + 1
+        total_shed_mvar += event["Mvar"]
+    end
+
+    # by zone or area, the buses outside every group (group 0) left out as in the load shed
+    group_by_bus = Dict{Int,Int}()
+    for (_, bus) in network_data["bus"]
+        group_by_bus[Int(bus["bus_i"])] = Int(get(bus, group_kind, 0))
+    end
+    group_names = find_group_names(network_data, group_kind)
+    group_load = Dict{Int,Float64}()
+    group_shed = Dict{Int,Float64}()
+    group_tripped = Dict{Int,Float64}()
+    group_stages = Dict{Int,Int}()
+    for (bus, bus_load) in load_by_bus
+        group = get(group_by_bus, bus, 0)
+        group == 0 && continue
+        group_load[group] = get(group_load, group, 0.0) + bus_load
+        group_shed[group] = get(group_shed, group, 0.0) + get(shed_by_bus, bus, 0.0)
+        group_tripped[group] = get(group_tripped, group, 0.0) + get(tripped_by_bus, bus, 0.0)
+        group_stages[group] = get(group_stages, group, 0) + get(stages_by_bus, bus, 0)
+    end
+    groups = Dict{String,Any}[]
+    for group in sort(collect(keys(group_load)))
+        push!(groups, Dict{String,Any}(
+            "index" => group,
+            "name" => get(group_names, group, string(group)),
+            "load_mw" => round_value(group_load[group], MW_DIGITS),
+            "shed_mw" => round_value(group_shed[group], MW_DIGITS),
+            "shed_pct" => calc_share(group_tripped[group], group_load[group]),
+            "stages" => group_stages[group],
+        ))
+    end
+
+    buses = Dict{String,Any}[]
+    for bus in sort(collect(keys(load_by_bus)))
+        push!(buses, Dict{String,Any}(
+            "bus" => bus,
+            "pd_mw" => round_value(load_by_bus[bus], MW_DIGITS),
+            "shed_mw" => round_value(get(shed_by_bus, bus, 0.0), MW_DIGITS),
+            "shed_pct" => calc_share(get(tripped_by_bus, bus, 0.0), load_by_bus[bus]),
+            "stages" => get(stages_by_bus, bus, 0),
+        ))
+    end
+
+    total_load = sum(values(load_by_bus); init=0.0)
+    total_shed = sum(values(shed_by_bus); init=0.0)
+    total_tripped = sum(values(tripped_by_bus); init=0.0)
+    return Dict{String,Any}(
+        "status" => "simulated",
+        "relays" => record["relays"],
+        "end_time_s" => round_value(record["end_time"], MW_DIGITS),
+        "stopped_early" => record["stopped_early"],
+        "group_kind" => group_kind,
+        "total_load_mw" => round_value(total_load, MW_DIGITS),
+        "total_shed_mw" => round_value(total_shed, MW_DIGITS),
+        "total_shed_mvar" => round_value(total_shed_mvar, MW_DIGITS),
+        "total_shed_pct" => calc_share(total_tripped, total_load),
+        "stages" => length(record["events"]),
+        "groups" => groups,
+        "buses" => buses,
+    )
+end
+
 "P and Q (MW, Mvar) of a flow sum from calc_branch_flows; `total` is P + Q, as the console prints it."
 function calc_flow_sums(sums, base_mva::Real)
     return Dict{String,Any}(
@@ -905,6 +1024,7 @@ function calc_result_summary(finished_run)
         "seconds" => seconds,
         "generation" => calc_generation_summary(network_data, result, group_kind),
         "load_shed" => load_shed,
+        "ufls" => calc_ufls_summary(finished_run, group_kind),
         "boundary_flows" => calc_flow_summary(network_data, result, target),
         "frequency" => frequency,
         "voltage" => voltage,

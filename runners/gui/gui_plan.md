@@ -392,6 +392,12 @@ A group's name is its record name, or its number when it has no record, as in `c
   - `group_kind`, `total_load_mw`, `total_shed_mw`
   - `groups`, one per group with load: `index`, `name`, `load_mw`, `shed_mw`, `shed_pct`
   - `buses`, every load bus, with the loads at that bus added up: `bus`, `pd_mw`, `shed_mw`, `shed_pct`. Solver noise rounds to 0, so "only buses with shed" means `shed_mw > 0`.
+- `ufls`, the UFLS relays' shed in the dynamic simulation; `null` when the simulation was off. `status` is one of:
+  - `not_reported`: the simulator was PSS®E, whose script writes no record (its report has the shed);
+  - `no_record`: ANDES left no `ufls_shed.json` in the results folder at or after the run's start;
+  - `no_relays`: the `.dyr` has no LDSHBL records;
+  - `simulated`, which adds `relays`, `end_time_s` (how far the simulation ran), `stopped_early`, `group_kind`, `total_load_mw`, `total_shed_mw`, `total_shed_mvar`, `total_shed_pct`, `stages` (relay stages that acted, 0 when none did), `groups` (`index`, `name`, `load_mw`, `shed_mw`, `shed_pct`, `stages`, one per group with load) and `buses` (`bus`, `pd_mw`, `shed_mw`, `shed_pct`, `stages`, every load bus). Groups and names are those of `load_shed`. The load is what is in service when the lines open (the case's load less the preemptive shed). The shed is in MW at 1 pu voltage, as the relays and the simulation report give it (P0/V0 of a constant current load, so a 5 % stage at a bus above 1 pu is under 5 % of its MW load). The `shed_pct` is therefore the share of the load the stages tripped (each stage's `percent` times its load's power flow P), not the MW over the load.
+  - The worker reads it from `ufls_shed.json`, which `andes_scripts/dynamic.py` writes into the results folder: `relays`, `end_time` (s), `stopped_early`, and `events`, one per relay stage that acted (`time`, `bus`, `load_id`, `stage`, `percent`, `load_mw` (the load's power flow P), `MW`, `Mvar`, `voltage`, `frequency`).
 - `boundary_flows`:
   - `oriented`: true with a target zone or area. Each line is then measured at its end inside the group (`from`) and is positive leaving the group. With bus pairs, each line is measured at its RAW from end.
   - `lines`: `id`, `from`, `to`, `p_mw`, `q_mvar`
@@ -1809,3 +1815,25 @@ Test folders added: `savnw_flow_shed_gui_test_activity_savnw`, `_activity_script
 *For the user:* the line of `islanding.jl` for the buses outside the target (`# load_shedding_penalties[bus] = 1.6 * lambda`) is now a row in the form: "All but zone" SPARTANB at 1.6.
 
 Test folders added: `ACTIVSg500_flow_shed_gui_test_ref_except` (the `islanding.jl` copy), `ACTIVSg500_flow_shed_gui_test_rows_bus_last`, `_rows_bus_first`, `_rows_except`, `savnw_flow_shed_gui_test_rows_old`, and a new run in `ACTIVSg500_flow_shed_gui_test` (the dev job).
+
+**UFLS shed beside the preemptive shed (2026-11-21), at the user's request:** "in load shedding tab ... I like to have UFLS sheds next to them (vertical line split the tab); if dynamic simulation is not going to run or there are no records or problems show the proper message at the place".
+
+*What changed:*
+- **`andes_scripts/dynamic.py`** writes `ufls_shed.json` into the results folder (`write_ufls_shed_json`): the relay count, how far the simulation ran, whether it stopped early, and each relay stage that acted with its load's power flow P. It is the first file that goes from Python to the GUI. The PSS®E script is frozen, so it writes none.
+- **`worker.jl`:** `calc_ufls_summary` adds `ufls` to `@@result` (see **Contracts: Result summary**). It reads the file only for an ANDES run with the simulation on, and only when the file is newer than the run's start (`find_ufls_record`), because the folder is reused. It groups like `load_shed`.
+- **Results panel (`results_view.py`):**
+  - The Load shedding tab is always there, in two sides with a line between: "Before the event: optimization" and "After the event: UFLS relays".
+  - Each side shows its tables, or a sentence in their place: the objective sheds no load; the simulation was off; PSS®E (with Open report); no record; no LDSHBL relays in the .dyr; no relay acted; or, in red above the tables, the simulation stopped early.
+  - The Summary tab has a "UFLS shed" fact.
+  - The classes `shed-sides`, `shed-side` and `shed-side-title` are in `theme.css`. Under 900 px the sides stack, with a line between them.
+- **The % of the UFLS shed.** The relays report MW at 1 pu voltage (P0/V0 of the constant current load), so at savnw bus 205 a 5 % stage is 59.10 MW of 1200 MW. Shed (MW) keeps the reported value, which matches the console and the report. Shed (%) is the share the stages tripped (5.00 %).
+
+*How it was verified* (savnw, area LIGHTCO, ANDES):
+- **Through `send_jobs.py`:**
+  - The `opf_shed` run shed 73.51 MW in LIGHTCO by UFLS, 59.10 MW at bus 205 and 14.41 MW at bus 203, as the console printed.
+  - The `flow` run had 8 relays and no stage acted.
+  - With the simulation off, `ufls` was `null`.
+- **On a test instance (port 8090):** the same three runs, from History's Load into Run. Their tabs show the two sides, 5.00 % at both buses (2.34 % in total), and the sentences for the other cases.
+- **Pure functions:** the sentences were checked on hand-made summaries for every status.
+
+Test folders added: `savnw_opf_shed_gui_test_ufls_area`, `savnw_flow_gui_test_ufls_flow`, `savnw_opf_shed_gui_test_ufls_nosim`, and `savnw_flow_gui_test_ufls_area` (the GUI's flow run).
