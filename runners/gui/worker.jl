@@ -244,8 +244,19 @@ function find_settings_problems(settings)
         times_lambda isa Real || push!(problems, "penalty of bus $bus must be a number times lambda")
     end
 
-    isempty(get(settings, "modifications", Dict())) || push!(problems, "network modifications are not supported yet (phase 9)")
+    known_modifications = [first(modification) for modification in MODIFICATIONS]
+    for (key, entries) in find_modifications(settings)
+        key in known_modifications || push!(problems, "unknown network modification \"$key\"")
+        entries isa AbstractVector || push!(problems, "network modification \"$key\" must be a list")
+    end
     return problems
+end
+
+"The settings' network modifications (modification => its entries); empty when there are none."
+function find_modifications(settings)
+    modifications = get(settings, "modifications", nothing)
+    modifications === nothing && return Dict{String,Any}()
+    return modifications
 end
 
 "Buses of the group of kind `kind` (\"zone\" or \"area\") named `name`, sorted."
@@ -260,6 +271,136 @@ function find_group_branches(network_data, kind::AbstractString, name::AbstractS
     kind == "zone" && return find_branches_by_zone(network_data, name)
     kind == "area" && return find_branches_by_area(network_data, name)
     error("unknown group kind \"$kind\"")
+end
+
+"A JSON number (`true` and `false` are not numbers here, though Julia counts them as Real)."
+is_number(value) = value isa Real && !(value isa Bool)
+
+"Whose loads or generators a modification entry names, in a few words: \"zone SPARTANB\", or \"buses 3005, 3007\"."
+function describe_where(entry)
+    kind = string(get(entry, "kind", ""))
+    kind == "buses" && return "buses " * join(get(entry, "buses", []), ", ")
+    return "$kind $(get(entry, "name", ""))"
+end
+
+"""
+Buses a modification entry names: the buses of its group (`kind` "zone" or "area", `name`), or
+its own list (`kind` "buses"). A list is required, because without one scale_loads! scales every load.
+"""
+function find_entry_buses(network_data, entry)
+    kind = string(get(entry, "kind", ""))
+    if kind == "buses"
+        buses = [Int(bus) for bus in get(entry, "buses", [])]
+        isempty(buses) && error("a modification by buses needs at least one bus")
+        return Set(buses)
+    end
+    kind in GROUP_KINDS || error("the kind of a modification must be one of $(join(GROUP_KINDS, ", ")) or buses, not \"$kind\"")
+    return Set(find_group_buses(network_data, kind, string(get(entry, "name", ""))))
+end
+
+"""
+Scale the loads (pd and qd) at each entry's buses by its factor, with scale_loads!.
+Entries: `{kind, name, factor}` for a zone or an area, `{kind: "buses", buses, factor}` for a bus list.
+"""
+function apply_load_scaling!(network_data, entries)
+    for entry in entries
+        factor = get(entry, "factor", nothing)
+        is_number(factor) && factor >= 0 || error("load scaling of $(describe_where(entry)) needs a factor of zero or more")
+        buses = find_entry_buses(network_data, entry)
+        println("Load scaling: $(describe_where(entry)) × $factor")
+        if !any(load -> Int(load["load_bus"]) in buses, values(network_data["load"]))
+            println("  no load there, nothing scaled")
+            continue
+        end
+        scale_loads!(network_data, factor, buses)
+    end
+end
+
+"""
+Set the pd (MW) and the qd (Mvar) of single loads, each when given.
+Entries: `{id, bus, pd_mw, qd_mvar}`; `bus`, when given, has to be the load's bus, so settings
+made for another version of the case do not change a different load.
+"""
+function apply_load_overrides!(network_data, entries)
+    base_mva = network_data["baseMVA"]
+    for entry in entries
+        id = string(get(entry, "id", ""))
+        haskey(network_data["load"], id) || error("load $id is not in the case")
+        load = network_data["load"][id]
+        load_bus = Int(load["load_bus"])
+        bus = get(entry, "bus", nothing)
+        bus === nothing || bus == load_bus || error("load $id is at bus $load_bus, not at bus $bus as the settings say")
+
+        pd_mw = get(entry, "pd_mw", nothing)
+        qd_mvar = get(entry, "qd_mvar", nothing)
+        pd_mw === nothing && qd_mvar === nothing && error("load $id needs a pd or a qd")
+        if pd_mw !== nothing
+            is_number(pd_mw) || error("the pd of load $id must be a number (MW)")
+            println("Load $id at bus $load_bus: pd $(round(load["pd"] * base_mva, digits=2)) MW set to $pd_mw MW")
+            load["pd"] = pd_mw / base_mva
+        end
+        if qd_mvar !== nothing
+            is_number(qd_mvar) || error("the qd of load $id must be a number (Mvar)")
+            println("Load $id at bus $load_bus: qd $(round(load["qd"] * base_mva, digits=2)) Mvar set to $qd_mvar Mvar")
+            load["qd"] = qd_mvar / base_mva
+        end
+    end
+end
+
+"""
+Set the pmin and the pmax (MW) of every generator at each entry's buses, each when given; a
+limit that is not given stays as the case has it. Entries: `{kind, name, pmin_mw, pmax_mw}` for
+a zone or an area, `{kind: "buses", buses, pmin_mw, pmax_mw}` for a bus list. The limits are set
+on generators in service or not; one in service that would get a pmin above its pmax is refused.
+"""
+function apply_generator_settings!(network_data, entries)
+    base_mva = network_data["baseMVA"]
+    for entry in entries
+        place = describe_where(entry)
+        pmin_mw = get(entry, "pmin_mw", nothing)
+        pmax_mw = get(entry, "pmax_mw", nothing)
+        pmin_mw === nothing && pmax_mw === nothing && error("the generators of $place need a pmin or a pmax")
+        pmin_mw === nothing || is_number(pmin_mw) || error("the pmin of the generators of $place must be a number (MW)")
+        pmax_mw === nothing || is_number(pmax_mw) || error("the pmax of the generators of $place must be a number (MW)")
+        buses = find_entry_buses(network_data, entry)
+
+        gens_set = 0
+        for (id, gen) in network_data["gen"]
+            Int(gen["gen_bus"]) in buses || continue
+            pmin_mw === nothing || (gen["pmin"] = pmin_mw / base_mva)
+            pmax_mw === nothing || (gen["pmax"] = pmax_mw / base_mva)
+            if get(gen, "gen_status", 1) != 0 && gen["pmin"] > gen["pmax"]
+                pmin_text = round(gen["pmin"] * base_mva, digits=2)
+                pmax_text = round(gen["pmax"] * base_mva, digits=2)
+                error("generator $id at bus $(gen["gen_bus"]): its pmin, $pmin_text MW, would be above its pmax, $pmax_text MW")
+            end
+            gens_set += 1
+        end
+
+        limits = String[]
+        pmin_mw === nothing || push!(limits, "pmin $pmin_mw MW")
+        pmax_mw === nothing || push!(limits, "pmax $pmax_mw MW")
+        println("Generators of $place: $(join(limits, ", ")) set for $gens_set generator$(gens_set == 1 ? "" : "s")")
+    end
+end
+
+# network modifications: key in the settings' `modifications` => the function that applies its
+# entries. They are applied in this order, so a load's own pd and qd come after the scaling.
+const MODIFICATIONS = [
+    "load_scaling" => apply_load_scaling!,
+    "loads" => apply_load_overrides!,
+    "generators" => apply_generator_settings!,
+]
+
+"Apply the network modifications of the settings to `network_data`, in the order of MODIFICATIONS."
+function apply_modifications!(network_data, modifications)
+    for (key, apply_entries!) in MODIFICATIONS
+        entries = get(modifications, key, nothing)
+        entries === nothing && continue
+        isempty(entries) && continue
+        apply_entries!(network_data, entries)
+        println("---------------------------")
+    end
 end
 
 """
@@ -338,8 +479,9 @@ function run_from_settings(settings; progress=stage -> nothing)
     case_files = find_case_files(case_path; require_dyr=run_dynamic_sim)
     network_data = load_case(case_files.raw)
 
-    # boundary lines
+    # network modifications, then the boundary lines
     progress("prepare")
+    apply_modifications!(network_data, find_modifications(settings))
     target = find_target(network_data, settings["boundary"])
 
     # load shedding penalties

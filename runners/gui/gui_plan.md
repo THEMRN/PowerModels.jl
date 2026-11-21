@@ -28,11 +28,11 @@ A local GUI for running islanding scenarios without editing code. It sets the ru
 | 3 | Run hooks: stages and per-run settings file | 1 | done (2026-11-20) |
 | 4a | Report data: calc/print split | 2 | done (2026-11-20) |
 | 4b | Result summary from the worker | 3, 4a | done (2026-11-20) |
-| 5 | GUI shell and worker client | 1 | not started |
-| 6 | Run page: settings form | 2, 5 | not started |
-| 7 | Run page: status strip | 3, 6 | not started |
-| 8 | Run page: results panel | 4b, 7 | not started |
-| 9 | Advanced settings dialog | 6 | not started |
+| 5 | GUI shell and worker client | 1 | done (2026-11-20) |
+| 6 | Run page: settings form | 2, 5 | done (2026-11-20) |
+| 7 | Run page: status strip | 3, 6 | done (2026-11-20) |
+| 8 | Run page: results panel | 4b, 7 | done (2026-11-20) |
+| 9 | Advanced settings dialog | 6 | done (2026-11-21) |
 | 10 | History page | 3, 6 | not started |
 | 11 | Network page | 2, 6 | not started |
 | 12 | Presets (optional, ask the user first) | 6 | not started |
@@ -69,6 +69,7 @@ These were made by the user. Do not reopen them.
     The console, `@@result`, `run_info.json` (`group_kind`), the Excel bus sheet and the ANDES report all follow it. A new report that groups buses uses it too.
 12. **A load belongs to its bus's zone and area**, never to the zone or area on its own RAW record.
 13. **The PSS®E script (`psse_scripts/dynamic.py`) is no longer updated.** New report features go into the ANDES side only (`andes_scripts/dynamic.py`, `report.py`).
+14. **The look: simple, elegant, compact, and not Material Design.** The user rejected the first look of phases 5 and 6 (NiceGUI's default, which is Quasar's Material Design): wasted space, poor colours, no taste. Every page follows the rules under "Look" below.
 
 ## Architecture
 
@@ -90,21 +91,67 @@ Planned files:
 runners/gui/
   gui_plan.md            this plan
   worker.jl              Julia side: job loop, handlers, settings → run
-  app.py                 entry point: python runners/gui/app.py
+  app.py                 entry point: python runners/gui/app.py [--port N] [--no-browser]
+  start_gui.bat          double-click launcher for app.py (passes its arguments on)
   julia_worker.py        Python client for worker.jl
-  settings.py            settings schema v1: defaults, validation, (de)serialisation
+  session_runs.py        the runs of this app session (settings, status, result), shared by all tabs
+  settings.py            settings schema v1: defaults, form values <-> settings, validation, JSON files
+  theme.py               the look: element defaults, icons, building blocks (panel, sheet, Section, fields, button, State, FoldButton)
+  theme.css              the look: colours and sizes as variables, the building blocks, Quasar without the Material look
   results_index.py       scans results/psse for the History page
-  components/            reusable UI pieces (status_strip.py, results_view.py)
+  components/            reusable UI pieces: status_strip.py (where a run is), log_dialog.py (log lines as text),
+                         results_view.py (a run's report numbers as tables), voltage_details.py (the voltage rounds),
+                         row_list.py (rows to edit, with Add row and remove)
   pages/                 one file per page: run.py, history.py, network.py
-  advanced/              one file per advanced-settings tab
+  advanced/              the advanced settings: __init__.py (the tab list, the dialog, what the modifications say),
+                         one file per tab (load_scaling.py, loads.py, generators.py) and where.py (a row's zone,
+                         area or bus list, shared by load scaling and the generators)
   dev/send_jobs.py       command-line client for testing the worker without the GUI
+  dev/check_results_tables.py  compares the results panel's tables with the printed reports in a send_jobs log
+  dev/jobs_results_check.json  the five runs that check is made for
 ```
+
+**NiceGUI version.** The installed version is NiceGUI 4.0.0 (with uvicorn 0.54 and FastAPI 0.165), newer than most examples in memory or online. Check the installed API before using an idiom, for example with `inspect.signature` or the package source. For instance, `ui.run` has a `root` parameter since 3.0, and `Client.on_delete` exists since 3.0. `ui.page` still works and is what `app.py` uses.
 
 **Extension rules:**
 - **A new page** is one file in `pages/` that exposes `TITLE` and `build(ctx)`, plus one entry in `PAGES` in `app.py`.
 - **A page that needs Julia** also gets one handler in `HANDLERS` in `worker.jl`.
-- **A new advanced tab** is one file in `advanced/` plus one modification handler in `MODIFICATIONS` in `worker.jl`.
+- **A new advanced tab** is one file in `advanced/`, listed in `ADVANCED_TABS`, plus one function in `MODIFICATIONS` in `worker.jl` under the same key. The file exposes:
+  - `TITLE` and `KEY` (its key in `settings["modifications"]`);
+  - `describe(entries)`, one short text per entry, and `find_problems(entries, study)`, what keeps them from running. Both draw nothing;
+  - `find_rows(entries, study)` and `read_rows(rows, study)`, between the entries and the dialog's rows;
+  - `build(study, rows, on_change)`, the tab's content. A tab of rows builds them with `components/row_list.RowList` and a grid class of its own in `theme.css`.
+
+  `study` (`advanced.Study`) holds the case, its `case_info` and the study's kind of group. A tab whose rows name a zone, an area or a list of buses takes that part from `advanced/where.py`, and its Julia function takes the buses from `find_entry_buses`.
 - **Pages pass values to each other** through `ctx.state`. For example, History's "Load into Run" and Network's "Use as target" both fill the Run form.
+- **What `ctx` holds** (since phase 6):
+  - `ctx.worker`, the `JuliaWorker`;
+  - `ctx.runs`, the `SessionRuns`: one record per run of this session, with its settings, status, the stages it reached with their times, its latest log line, its warnings and its `@@result` summary (the fields are listed in the class's docstring);
+  - `ctx.state`, which also caches what was read from Julia: `"cases"` (the case list) and `"case_infos"` (case path to its `case_info`, or to the error that reading it gave). The worker answers one job at a time, so a question asked during a run would wait for the run to end.
+
+### Look
+
+Decision 14. The look lives in `theme.py` and `theme.css` and nowhere else, so every page gets it.
+
+**What it is:**
+- **Light and quiet.** A grey page, white panels with a hairline border, no shadows.
+- **One accent colour** (blue) for the main action, the chosen option and the focus ring. Green, amber and red only show a state.
+- **Compact.** Text is 13 px in the system font (Segoe UI). Fields and buttons are 28 px high. A label stands left of its control, not above it and not floating inside it.
+- **Nothing leaves the machine.** No web font, no CDN.
+- **One bar on top:** the mark, the title, the page tabs, the Julia state pill and Restart Julia.
+
+**Rules for a page:**
+- **Build with the blocks of `theme.py`:** `panel`, `toolbar`, `sheet` and `Section`, `fields` with `label`, `stack`, `line`, `hint`, `eyebrow`, `button`, `State`, `FoldButton`, `dialog` (a dialog and its white box), `offstage` (a holder for timers, so they take no room), `data_table` (a table of numbers, as one element) and `facts` with `fact` (a name and its value). Plain `ui.select`, `ui.number`, `ui.input`, `ui.textarea`, `ui.checkbox` and `ui.toggle` get the look from the defaults set in `theme.setup()`. Give them no label argument; put a `theme.label` beside them.
+- **Buttons** come from `theme.button`: `primary` for the one main action of a page, `default`, `ghost` for secondary actions, `danger`.
+- **No Quasar colours or spacing classes** (`color=...`, `text-grey`, `q-mt-md`, `bg-primary`): they are Material's palette and they carry `!important`. Use the variables and classes of `theme.css`, and add to that file when something is missing.
+- **Not used:** `ui.card`, `ui.expansion`, `ui.switch`, `ui.badge`, `ui.table` (Quasar's Material table; use `theme.data_table`), Material icon names. Use a panel, a `FoldButton`, a checkbox, a `State`, and the icons in `theme.ICONS` (add a path there for a new icon).
+- **A choice of two or three** is a `ui.toggle` (drawn as a segmented control); more options are a `ui.select`.
+- **Rows to edit** (a list the user adds to and removes from) are a `components/row_list.RowList`.
+- **A dialog that changes something** edits a copy and ends with a row of the class `dialog-foot`: what clears on the left, then Cancel and the dialog's own primary button. A click beside it does not close it (`no-backdrop-dismiss`). Its problems show above that row, in the class `problems`.
+- **Class names:** before adding a class to `theme.css`, check that Quasar and Tailwind do not use the name (`inline` and `row` are taken).
+- **A Quasar part used for the first time** (a dialog, a table, a chart) still has its Material look. Add its rules to `theme.css`, section "Quasar, without the Material look", and check a screenshot. Popups are where Material comes back most easily.
+
+**How the stylesheet wins.** NiceGUI loads Quasar's rules in CSS layers. `theme.css` is loaded outside any layer, so its rules win over Quasar's whatever the selector. Only Quasar's `!important` rules need the block `@layer overrides` at the end of the file. The stylesheet is read once, when the app starts, so a change to it needs a restart of the app.
 
 ## Contracts
 
@@ -146,6 +193,7 @@ Rules on the GUI side:
 - **Reading the output.** Merge stderr into stdout, decode as UTF-8 with replacement, and read continuously so the pipe never fills.
 - **Long lines.** asyncio's `readline` fails on lines longer than its 64 KiB default, and the `@@result`, `case_info` and `network` lines for ACTIVSg500 can be longer. Pass a large `limit` (for example 16 MiB) when creating the subprocess.
 - **Stop.** Run `taskkill /T /F /PID <pid>` so the `dynamic.py` child dies too, then restart the worker.
+- **Own process group.** Start the worker with `CREATE_NEW_PROCESS_GROUP`. Ctrl+Break in the app's console then reaches only the app, whose shutdown stops the worker tree. A keyboard Ctrl+C still reaches Julia, which handles it itself even in its own group (phase 6 test); the app shuts down at the same time and stops whatever is left.
 
 ### Stages
 
@@ -160,6 +208,8 @@ Rules on the GUI side:
 | `export` | `run_islanding` | raw, line outage and dyr files, only with the dynamic simulation |
 | `dynamic_sim` | `run_islanding` | before calling `dynamic.py` |
 | `summary` | worker | building `@@result` |
+
+The GUI keeps the same list, in this order, as `STAGES` in `components/status_strip.py`, because it shows the stages a run has not reached yet. A new stage goes in three places: this table, `STAGE_LABELS` in `worker.jl` and `STAGES`. A stage that only some runs reach also goes in `STAGE_SETTINGS` there, with the setting that turns it on.
 
 ### Settings schema v1
 
@@ -197,7 +247,31 @@ The GUI sends this to the worker, and `run_islanding` stores it verbatim as `gui
 | `boundary.kind` | `zone` or `area`: the lines are that group's boundary lines and its buses orient the flows. `bus_pairs`: the lines come from `find_branches_by_bus_pairs` and nothing is oriented |
 | `penalties` | All values are multiples of λ. `uniform` (if not null) applies to every load and ignores the rest. Otherwise the precedence is `buses` over `groups` over `others`. `others: null` keeps today's default of 1e4 absolute for loads that are not listed (`add_load_shedding_penalty!`) |
 | `output_tag` | suffix of the results folder; empty means none |
-| `modifications` | filled by the advanced dialog (phase 9); `{}` means none |
+| `modifications` | changes to the network made before the boundary and the penalties, filled by the advanced dialog; `{}` means none. See below |
+
+`modifications` holds a list of entries per kind. A kind without entries is left out. The worker applies the kinds in this order (`MODIFICATIONS` in `worker.jl`), and the entries of a kind in the order of the list:
+
+```json
+"modifications": {
+  "load_scaling": [
+    {"kind": "zone", "name": "SPARTANB", "factor": 0.7},
+    {"kind": "buses", "buses": [3005, 3007, 3008, 153], "factor": 1.6}
+  ],
+  "loads": [{"id": 6, "bus": 3005, "pd_mw": 400, "qd_mvar": null}],
+  "generators": [
+    {"kind": "zone", "name": "SPARTANB", "pmin_mw": 0, "pmax_mw": null},
+    {"kind": "buses", "buses": [101, 102], "pmin_mw": null, "pmax_mw": 500}
+  ]
+}
+```
+
+| kind | entry | what the worker does |
+|---|---|---|
+| `load_scaling` | `kind` `zone` or `area` with `name`, or `kind` `buses` with `buses`; `factor` zero or more | multiplies the pd and qd of every load at those buses, with `scale_loads!(data, factor, buses)`. A bus list is required, because without one that function scales every load |
+| `loads` | `id` (the load's number as PowerModels reads the case), `bus`, `pd_mw` and `qd_mvar` (`null` keeps the case's value; one of the two is needed) | sets pd and qd from MW and Mvar with `baseMVA`. When `bus` is given and the load is at another bus, the run fails: the settings were made for another version of the case |
+| `generators` | `kind` `zone` or `area` with `name`, or `kind` `buses` with `buses`; `pmin_mw` and `pmax_mw` (`null` keeps the case's value; one of the two is needed) | sets the pmin and the pmax of each generator at those buses from MW with `baseMVA`, in service or not: every generator gets the value, it is not shared among them. A generator in service that would end with its pmin above its pmax fails the run |
+
+The loads come after the scaling, so a load's own pd and qd are final. A kind the worker does not know, a missing factor and a load that is not in the case fail the run in the stage `prepare`, with a message. A scaling that meets no load and a group without generators only print a note.
 
 The worker turns penalties into the absolute per-bus dictionary that `add_load_shedding_penalty!` expects (bus string to `times_lambda * lambda`), exactly as `runners/islanding.jl` does by hand today.
 
@@ -285,22 +359,27 @@ A group's name is its record name, or its number when it has no record, as in `c
   - `output_path`, the absolute results folder;
   - the file names in that folder: `settings`, `excel`, `raw`, `report` (`null` when not written).
 
-### Run page layout (target after phase 8)
+### Run page layout (since phase 9)
 
 ```
-┌ Islanding GUI ─────────────────────────────── [● Julia: ready] [Restart Julia] ┐
-│ Run | History | Network                                                        │
-├────────────────────────────────────────────────────────────────────────────────┤
-│ [Case and model] [Boundary] [Load shedding penalties] [Security and simulation]│ ▴ fold
-│ [Advanced settings… (2 active)]                             [▶ Run] [■ Stop]   │
-├────────────────────────────────────────────────────────────────────────────────┤
-│ Results of run 3 ▾   Summary | Generation | Load shed | Boundary | Frequency | Voltage | Files │
-│   tables and summary cards                                                     │
-├────────────────────────────────────────────────────────────────────────────────┤
-│ ✓ load case  ✓ prepare  ✓ solve  ✓ reports  ✓ excel  ✓ export  ● dynamic sim  │
-│ now: -- Solving power flow...          01:42     2 warnings     [Full log]     │
-└────────────────────────────────────────────────────────────────────────────────┘
+┌ ◉ Islanding GUI   Run | History | Network          [● Julia ready]  ↻ Restart Julia ┐
+├────────────────────────────────────────────────────────────────────────────────────┤
+│ ▾ Settings   (folded: the settings on one line)      Advanced (2)  [■ Stop] [▶ Run] │
+│ NETWORK MODIFICATIONS   loads of zone SPARTANB × 0.7 · load 6 at bus 3005: P 400 MW   Reset │
+│ CASE AND MODEL    │ BOUNDARY    │ LOAD SHEDDING PENALTIES   │ SECURITY AND SIMULATION │ ▴ fold
+├────────────────────────────────────────────────────────────────────────────────────┤
+│ RESULTS OF [run 3 · savnw · flow_shed · 4 bus pairs · 22:09:03 ▾]                   │
+│ Summary | Generation | Load shedding | Boundary flows | Frequency | Voltage | Files │
+│   facts and tables of that run                                                     │
+├────────────────────────────────────────────────────────────────────────────────────┤
+│ RUNS IN THIS SESSION   run, started, case, ...   Report  Folder  Log  Load settings │
+├────────────────────────────────────────────────────────────────────────────────────┤
+│ Run 3 ● finished   ✓ Load case — ✓ Prepare — ✓ Solve — ... — ✓ Summary              │
+│ now: latest log line, or the error          total 1:42    2 warnings   [Full log]  │
+└────────────────────────────────────────────────────────────────────────────────────┘
 ```
+
+The page tabs are in the top bar. Run and Stop are in the toolbar of the settings panel, above the sheet, so they stay in the same place when the sheet is folded or a penalty row is added. The problems that keep the settings from running show between the toolbar and the sheet. Under them, the line of the network modifications shows while there are any, also while the sheet is folded. The results panel is hidden until a run has results, and the last two rows are the status strip, fixed to the bottom of the window.
 
 ---
 
@@ -985,3 +1064,388 @@ Test folders added:
 - `ACTIVSg500_opf_shed_gui_test_zone_ufls`.
 
 Reused: `savnw_flow_shed_gui_test_area`, `savnw_flow_shed_gui_test_4a`, `savnw_flow_shed_gui_test_4a_volt`, `ACTIVSg500_flow_shed_gui_test_4a_freq`, `ACTIVSg500_flow_shed_gui_test_4a_volt` and `AU14GenModel_flow_shed_gui_test_area`.
+
+**Phase 5 (2026-11-20).**
+
+*What changed:*
+- **NiceGUI 4.0.0** was installed on the system Python 3.14 (`pip install nicegui`). It imports and runs.
+- **`julia_worker.py`.** `JuliaWorker` is built on `asyncio.create_subprocess_exec`, which works inside NiceGUI's event loop on Windows: with `reload=False`, uvicorn uses a ProactorEventLoop. No reader thread was needed.
+  - **States:** `starting`, `ready`, `busy`, `stopped`, `crashed`, with a `message` saying why.
+  - **Methods:** `start`, `stop`, `restart` (one at a time, under a lock), `send(job)` (returns the id) and `request(job)` (returns the `@@data` payload, or raises `WorkerError` on `@@error`, a crash or a stop).
+  - **Listeners:** `on_log`, `on_control` and `on_state`. Each returns its remover. A listener that throws is reported on the console and never stops the reader.
+  - **Logs:** `job_logs` (per job) and `worker_log` (outside jobs).
+  - **Exit watching.** A separate task waits for the process to exit, so a crash shows even when a `dynamic.py` child still holds the output pipe.
+  - **Robustness:** job ids keep counting across restarts, `starting` has no timeout (a recompile can take minutes), and a missing `julia` gives `crashed` with a message.
+  - **Process group.** The worker runs in its own process group (see the GUI-side rules).
+- **`app.py`:**
+  - `PORT`, `NATIVE_WINDOW = False` and `PAGES = [run]`, with `ctx` holding `worker`, `state` and `repo_root`;
+  - a header with the title, a Julia state pill (its tooltip gives the version, PID and reason) and Restart Julia;
+  - a tab per page;
+  - the worker started in `on_startup` and stopped in `on_shutdown`, with its state changes printed on the console.
+- **`pages/run.py`** is a placeholder with Ping.
+- **`CLAUDE.md`** has the install and start commands.
+
+*How it was verified:*
+- **Headless lifecycle script** (`JuliaWorker` alone):
+  - ready after 5.3 s (precompiled), ping answered, and a failing `case_info` raised the Julia message;
+  - restart left no old process;
+  - a kill by PID with a request pending failed that request and gave `crashed` (exit code 1), and new requests were refused;
+  - restart recovered, and two concurrent restarts left exactly one Julia;
+  - stop left none;
+  - listeners that threw on every event (45 times) did not stop replies.
+- **In the browser** (Chrome, the app started from outside the repo root):
+  - the pill showed ready, and Ping answered "pong from Julia 1.11.3 in 0.90 s";
+  - with two tabs open, a Restart in one turned both pills to starting and then ready;
+  - killing the worker's `julia.exe` by PID (as Task Manager does) turned the pill red, "crashed", without a click; its tooltip gave "Julia exited by itself (code 4294967295)", the 32-bit form of −1 that Windows reports for a forced kill;
+  - Restart recovered.
+  - The busy pill first used `primary`, the header's own colour, and was invisible; it is now `deep-purple`.
+- **Exit, by the worker's PID only.** The user's own `julia.exe` (PID 11896) was never touched.
+  - **Graceful (Ctrl+Break sent to the app's process group, as Ctrl+C would be):** the console printed "Julia worker: stopped" from `on_shutdown`, the app exited within 0.5 s, port 8080 was free and no worker was left. The exit code 3 comes from uvicorn raising the signal again after a completed shutdown. Before the worker had its own process group, the signal reached Julia directly and killed it (code 143) before `on_shutdown` ran.
+  - **App killed outright** (`on_shutdown` does not run): an idle worker exited 0.3 s later, because its stdin closed. A worker killed in the middle of an ACTIVSg500 solve exited 6.1 s later, at its next write to the closed output.
+
+*For the next phases:*
+- **Requests vs. runs.** Use `ctx.worker.request(...)` for `list_cases` and `case_info`, and `send(...)` plus the listeners for `run`. Register listeners per browser tab and remove them in `ui.context.client.on_delete`, as the header does.
+- **Updating elements.** Listeners run on the event loop outside any page context. Updating existing elements there works; creating elements or calling `ui.notify` needs `with <element or client>:`.
+- **Transient busy state.** The `@@data` reply resolves a request before `@@done` arrives, so the state is briefly still `busy` after the reply.
+- **Not handled.** After an external kill of `julia.exe` during the dynamic simulation, the orphaned `dynamic.py` keeps running until it finishes, because Restart's `taskkill /T` only reaches the new worker's tree.
+- **First ping.** The first ping of a fresh worker takes about 1 s, while its handler compiles.
+
+Test folder added: `ACTIVSg500_flow_shed_gui_test_hard_kill` (a run killed mid-solve; its settings file stays `"started"`).
+
+**Phase 6 (2026-11-20).**
+
+*What changed:*
+- **`settings.py`.** Pure functions, no GUI:
+  - `DEFAULT_SETTINGS` and `default_settings()` (simulator `andes`, decision 13);
+  - `parse_bus_pairs` and `format_bus_pairs`;
+  - `build_settings(form)` and its inverse `form_values(settings)`, between the form's flat values and schema v1;
+  - `validate(settings)`, which returns readable problems;
+  - `save_settings` and `load_settings` (JSON files, not used by a page yet).
+- **`session_runs.py`.** `SessionRuns` (`ctx.runs`) keeps one record per run of the app session: `number` (1, 2, 3, as shown), `id` (the worker's job id), `settings`, `status` (`running`, `finished`, `failed`, `stopped`), `started`, `stage`, `summary`, `error`, `seconds`.
+  - It follows the control lines.
+  - A run that Julia never finishes (Stop, Restart Julia, a crash) gets no `@@done`, so its status comes from the worker's state change.
+- **`pages/run.py`:**
+  - **The form (`RunForm`).** Four cards inside one foldable "Run settings" section. `read()` gives the settings and the problems, `write(settings)` fills the form, and `update_view()` keeps it consistent.
+  - **Case information.** Zones, areas and load buses come from `case_info`, cached in `ctx.state`. A refresh button next to the case selector reads them again.
+  - **Buttons.** Run is enabled only when Julia is ready. Stop is enabled only while a run is in progress; it restarts the worker. Advanced settings is visible and disabled.
+  - **Runs in this session.** Newest first, with Report, Folder and Load settings. A new or reloaded tab starts from the last run's settings, or from the defaults.
+  - **Temporary raw log** (`ui.log`), until phase 7.
+- **Decision 11 in the form.** Penalty rows offer the boundary's kind and buses, never the other kind. With bus pairs they offer the kind the case uses (zones before areas). `validate` refuses a mix.
+- **Uniform shedding** sends empty penalty rows and no `others`, so the settings file does not record penalties the run ignored.
+- **`JuliaWorker.send` is now synchronous.** The run's record exists before any of its output can arrive. `JobError` (a `WorkerError`) marks a job that failed in Julia, as opposed to Julia not running.
+- **`app.py`:**
+  - `--port N` and `--no-browser`;
+  - started while the port is in use, it opens the running page and exits, instead of failing to bind.
+- **`start_gui.bat`** starts the GUI with a double click from any folder and passes its arguments on. It keeps its window open when the start fails.
+
+*How it was verified.* In Chrome, on a test instance on port 8090 (the user's own GUI was running on 8080 and was left alone). All runs used `gui_test_form*` tags.
+- **Same results as phase 1, from the form:**
+
+  | run | objective | shed |
+  |---|---|---|
+  | ACTIVSg500 zone Spartanb, 2.5 λ in the zone | 12140.983057017995 | 407.43 MW |
+  | savnw, four bus pairs | 30642.40499516773 | 0 MW |
+  | savnw area LIGHTCO, 2.5 λ in the area | 9097.028165220057 | 25.88 MW |
+  | savnw, uniform 0.2 λ | | 1594.31 MW |
+  | savnw, buses 3008 at 2 λ and 153 at 0.5 λ | | 200 MW |
+
+  The area run is recorded as an area study ("inside area", `group_kind` area).
+- **Case switching.** savnw brought 4 zones and 3 areas and the Area kind. ACTIVSg500z (no `.dyr`) dropped Area, cleared the boundary and the penalty rows, and disabled the dynamic simulation and frequency security with a note. savnw_orig showed its parse error in red under the selector and left the form usable.
+- **DC** turned voltage security off and disabled it.
+- **Bad input,** each refused before anything was sent, with the reason under the buttons: a zone boundary with no zone, an empty bus-pair list, and "154 3008" as a bus pair (one message, naming the text).
+- **A run that fails in Julia.** savnw with the bus pair 154-3001, which has no line: the row turned red, "failed", with Julia's message "no boundary line found for bus pairs 154-3001". The stack trace was in the log and Run was available again.
+- **Load settings.** With savnw_orig in the form, loading the LIGHTCO run restored every field. Running it again stored `gui_settings` identical to the first run's.
+- **Stop during an ANDES simulation, after a page reload mid-run.**
+  - The reloaded page showed the running run, its settings, Run disabled and Stop enabled.
+  - Stop left no `dynamic.py`, marked the run "stopped", and a fresh worker came up.
+  - The next Run finished (79.9 s with the cold worker), with Report and Folder enabled. Both buttons opened without errors.
+- **The form's rule for penalty kinds:** an area boundary offered Area and Bus; bus pairs on savnw offered Zone and Bus.
+- **Launcher.** `start_gui.bat` from another folder, through `cmd /c`:
+  - with the port taken, it reported the running GUI and exited with 0;
+  - with a bad argument, it kept the window open;
+  - on a free port, it served the page (HTTP 200) and started its worker. After the app was killed, the worker exited by itself.
+- **Ctrl+C in a real console window** (sent through the console API to `python app.py` in its own console): the app exited with 3221225786, Windows' "ended by Ctrl+C" code, and within 2 s no worker was left and the port was free. The launcher treats that code and 3 (Ctrl+Break) as normal ends.
+  - A process started from a tool shell inherits "ignore Ctrl+C". In a first try the app therefore ignored it while Julia, which sets its own handler, exited.
+- **Not tested: the window's close button.** Two ways of imitating it from a script did nothing (a close message to the console window, and ending the console's host process). By Windows' rules, closing a console window ends every process attached to it, and the app, Julia and `dynamic.py` are all attached to it.
+- **`settings.py`** passed 27 plain checks, including the exact round trip of both `dev/job_*.json` files through `form_values` and `build_settings`.
+
+*Choices the user can reverse:*
+- **One fold, not four.** The phase text says "four foldable cards". The page has one foldable "Run settings" section holding four cards, which is what decision 4 needs to give the results room.
+- **Switches stay off.** A case without a `.dyr` turns the dynamic simulation and frequency security off. They stay off after switching back to a case that has one.
+
+*For the next phases:*
+- **Starting a run.** Use `ctx.runs.start(settings)`, which sends the job and keeps its record. Don't call `ctx.worker.send` for runs.
+- **Phase 7.** Each record of `ctx.runs` already carries the latest `stage`. The run's log lines are in `ctx.worker.job_logs[record["id"]]` (the job id, not the run number). Remove the temporary log.
+- **Phase 8.** `record["summary"]` is the `@@result` summary. The settings sheet folds with `settings_fold` (a `theme.FoldButton`: `set_opened(False)`), so it can fold when results arrive.
+- **Phases 10 and 11.** `RunForm.write(settings)` fills the form from any schema v1 settings and matches group names without regard to case. Pass settings between pages through `ctx.state`.
+- **Updating from listeners works** in NiceGUI 4: `refreshable.refresh()` and `ui.log.push()` called from worker listeners reach the page. `ui.notify` still needs a page context.
+- **`ui.toggle.set_options`** rebuilds the toggle's buttons.
+- **Setting a value from code** calls the element's `on_change` at once. `RunForm` guards its handlers with `writing` and `updating`, and its case handler does nothing when the case is already loaded.
+- **Run numbers.** Runs are numbered 1, 2, 3 for the user. The worker's job ids also count the form's queries.
+- **Failed runs** show the first line of the `@@error` message in the list, with the whole message as a tooltip. Their Folder button stays disabled, because the folder path arrives only with `@@result`.
+- **Not exercised through the form:** frequency and voltage security runs (the switches only pass a flag the worker already handles), the PSS®E simulator, "all other loads", two tabs watching the same run, and a crash of Julia during a run.
+
+Test folders added: `ACTIVSg500_flow_shed_gui_test_form`, `ACTIVSg500_flow_shed_gui_test_form_stop`, `savnw_flow_shed_gui_test_form`, `savnw_flow_shed_gui_test_form_area`, `savnw_flow_shed_gui_test_form_uniform` and `savnw_flow_shed_gui_test_form_buses`. The failed run (tag `gui_test_form_fail`) left no folder, because it failed before `run_islanding`.
+
+**Look (2026-11-20, after phase 6).**
+
+*What changed.* The user rejected the look of phases 5 and 6 (decision 14). No phase was started; the Run page does what it did.
+- **`theme.css` and `theme.py` (new)** hold the look and the rules under "Look".
+- **`app.py`.** One light bar on top holds the mark, the title, the page tabs, the Julia state pill and Restart Julia. While a run is in progress the pill reads "Julia running · run N". The mark is also the browser tab's icon.
+- **`pages/run.py`, layout only.** `RunForm.read`, `write`, `update_view` and the handlers are as they were.
+  - One panel: a toolbar (the Settings fold, Advanced, Stop, Run), then the sheet with the four sections side by side, divided by hairlines. They stand two by two under 1240 px of page width, and in one column under 680 px.
+  - Labels stand left of the controls. OPF model, the boundary kind and the simulator are segmented controls, and the switches became checkboxes.
+  - Penalties are a small table: where, × λ, remove. "uniform" is a checkbox in the section's title row.
+  - While the sheet is folded, the toolbar shows the settings on one line (case, objective, model, boundary, λ, tag).
+  - Problems show under the toolbar. Pressing Run with problems also unfolds the sheet.
+  - The runs are a table with a coloured dot for the status and text buttons at the right. The log folds with the same kind of button.
+
+*How it was verified.* In Chrome on a test instance on port 8090 (the user's GUI on 8080 was left alone), at 1490 px of page width, with tags `gui_test_look*`.
+- **Same results as before, through the new form:**
+  - savnw with four bus pairs and the ANDES simulation: objective 30642.40499516773, 0 MW shed, Report and Folder enabled;
+  - savnw area LIGHTCO with a penalty row of 2.5 λ in the area, no simulation: objective 9097.028165220057, 25.88 MW shed, recorded as an area study;
+  - ACTIVSg500 zone Spartanb with a penalty row of 2.5 λ in the zone, no simulation: objective 12140.983057017995, 407.43 MW shed.
+- **Looked at, each in a screenshot:** before the case is read; zone, area and bus pairs; penalty rows of kind zone, area and bus, and uniform; DC (voltage security off, with its tooltip); the option lists; the problems list; the folded bar; a notification; running, finished, failed and stopped rows; the open log; savnw_orig (its parse error in red under the selector, the form still usable); ACTIVSg500z (no `.dyr`: the dynamic simulation and frequency security greyed out, with the note); the sheet two by two (forced with a style rule, because the test window could not be made narrower, so not seen in a real narrow window).
+- **Stop** during a run marked it "stopped" and brought up a fresh worker. **Load settings** filled the form from a row.
+
+*Choices the user can reverse.* The user's reference was the concept picture; these differ from it by choice:
+- **Run and Stop are above the sheet,** in the settings toolbar, not under the cards. They keep their place when the sheet folds or a penalty row is added. Under the sheet is a move of the toolbar's three buttons.
+- **Section titles are small grey capitals,** not bold titles (`.eyebrow` in `theme.css`).
+- **Segmented controls and checkboxes,** where the concept has radio buttons.
+- **No notification for settings that cannot run.** The list under the toolbar says it.
+- **Not built, because they belong to later phases or are undecided:** Preset and Save as (phase 12), the History and Network tabs (phases 10 and 11), Clear console (the log goes in phase 7), Network modifications (the Advanced dialog of phase 9).
+
+*For the next phases:*
+- **Follow "Look".** The first dialog (phases 7 to 9), the first table (phase 8) and the first chart (phase 11) need their rules in `theme.css`.
+- **Tabs inside a page** (the results panel of phase 8) get the page tabs' look. If they should look different, scope the rules of `.q-tab` in `theme.css` to the header.
+- **Advanced** is a ghost button in the toolbar. Phase 9 enables it and adds the count to its text.
+- **Presets** (phase 12) fit in the settings toolbar, right of the Settings fold.
+
+Test folders added: `savnw_flow_shed_gui_test_look`, `savnw_flow_shed_gui_test_look_area` and `ACTIVSg500_flow_shed_gui_test_look_zone`. The failed and the stopped run (tag `gui_test_look_fail`) left no folder.
+
+**Phase 7 (2026-11-20).**
+
+*What changed:*
+- **`session_runs.py`.** A run's record now also carries what the strip shows, so every tab shows the same and a reloaded page picks a run up where it is:
+  - `started_at` and `ended_at` (the end is also set when Julia is stopped or crashes, which send no `@@done`);
+  - `stages`, every stage reached with its label and the time it started;
+  - `last_line`, the latest log line with a letter or a digit in it, cut to 300 characters;
+  - `warnings`, the log lines that warn.
+
+  The log-derived fields change without calling the change listeners, which rebuild the runs table.
+- **`components/status_strip.py` (new).** `StatusStrip`, a bar fixed to the bottom of the window. It shows the run in progress, and otherwise the latest run:
+  - **Row 1:** the run number, its status, and the stages as steps. A step is done, current (with its clock), failed, stopped, not reached, or not part of this run (struck through). Each step has a tooltip with its time.
+  - **Row 2:** "now" with the latest log line; for a failed run the `@@error` message in red; for a finished or stopped run the time it ended. Then the run's total time, the warning count when there is one, and Full log.
+  - A timer of 0.5 s reads the clocks, "now" and the warnings, only while a run is in progress.
+- **`components/log_dialog.py` (new).** `LogDialog`, one dialog for any list of lines. It shows them as plain text, follows the list while open, shows only the lines containing a text, and copies what it shows. It serves three things:
+  - Full log on the strip, and a Log button in each row of the runs table (so the log of each run of the session);
+  - the warning count on the strip (the warning lines);
+  - a click on the Julia state pill: what Julia printed outside the runs, which the removed raw log used to show.
+- **`pages/run.py`.** The temporary raw log is gone. "Run N started" is gone too (the strip says it), and the remaining notifications show at the top, clear of the strip.
+- **`theme.py` and `theme.css`.** `dialog` and `offstage`, and the rules for the strip, the steps, the first dialog and the log view.
+
+*How it was verified.* In Chrome on a test instance on port 8090 (the user's GUI on 8080 was left alone), tags `gui_test_strip*`.
+- **A normal run** (ACTIVSg500 zone Spartanb, 2.5 λ, ANDES): the steps went Load case, Prepare, Solve, Reports, Excel report, Export, Dynamic simulation, Summary, with the clock on the current one. "now" followed the lines of `run_islanding` and `dynamic.py`. The result was the reference one (objective 12140.983057017995, 407.43 MW shed).
+- **Full log during that run** opened at the end of the log and showed `dynamic.py`'s lines, with `<LDSHBL>` as text. Searching "relay" left 2 of 126 lines.
+- **Full log following a run** (savnw, four bus pairs, voltage security, opened right after Run on a fresh worker): the dialog went from 3 to 62 lines while open and stayed at the end, with the lines "Voltage viability, round 1" and "Voltage verified in round 1" in it. The run gave objective 30642.40499516773, as without voltage security.
+- **A failing run.** The form cannot name an unknown zone, so a bus pair with no line was used (savnw, 1-2), which fails in the same stage: Prepare turned red and the strip showed "no boundary line found for bus pairs 1-2". Its Log button showed the stack trace.
+- **Frequency security** (savnw, four bus pairs): Frequency limits was a normal step and was reached. Without it the step is struck through.
+- **Reload during that run:** the page came back with the strip on the same run and stage.
+- **Stop during the dynamic simulation:** the step got the stopped mark, Summary stayed not reached, and the clock stopped at 0:45.
+- **A real warning** (ACTIVSg500, `opf_shed`, zone Spartanb, ANDES): "1 warning", and a click listed "-- Warning: dynamic simulation stopped early, see the ANDES log." The PowerModels notice was not counted in any run.
+- **Without the dynamic simulation:** Export and Dynamic simulation were struck through and the run ended after Summary.
+- **Copy** reported the number of lines, and pasting into the search field gave the log's text, so the clipboard was written. **The Julia state pill** opened the lines Julia printed outside the runs.
+- **The dialog's height:** a long log fills it and scrolls; a list of one line gets a short dialog.
+- **Fixed position.** The bar's box was the full window width at the bottom. No element above it has a transform, a filter or a containment that would break `position: fixed`.
+- **A narrow window** was forced with a style rule, as in the look change: only the marks of the steps stay, with their names as tooltips.
+
+*Choices the user can reverse:*
+- **Warnings.** The plan counts every line containing "warning". `PowerModels.silence()` prints "Suppressing information and warning messages" once per Julia worker, so that line is left out (`IGNORED_WARNINGS` in `session_runs.py`).
+- **"now" skips lines without a letter or a digit,** such as the rules of dashes between the report blocks.
+- **Search shows only the lines that contain the text.** It does not highlight matches inside the whole log.
+- **The strip shows the run in progress or the latest run.** The log of an older run is behind its Log button, but its steps are not shown again.
+- **The strip is hidden until the first run** of the session.
+- **A fixed bar built by the Run page,** not NiceGUI's footer: `ui.footer` cannot be made inside a tab panel. The page ends with an empty block of the bar's height (`.strip-room`), so the bar covers nothing.
+
+*For the next phases:*
+- **Phase 8.** The results panel goes between the runs table and the strip. If it gets a run selector, `StatusStrip.find_record` is the one place that decides which run the strip shows.
+- **Dialogs** (phases 8 and 9) start from `theme.dialog()`. Its box is 1100 px wide at most; give a smaller dialog its own width.
+- **Timers** go inside `theme.offstage()`. A timer is an element, and in a panel or a toolbar it would take a gap of the layout.
+- **Elements that are replaced** (the runs table, the steps) lose their browser references on every change. A test that clicks in them has to find the element again after each change.
+- **Not exercised:** a crash of Julia during a run (the code path is the one of Stop, with status "failed"), a voltage security run that needs more than one round, the PSS®E simulator, and a log of many thousands of lines (the largest seen had a few hundred).
+
+Test folders added: `ACTIVSg500_flow_shed_gui_test_strip`, `ACTIVSg500_flow_shed_gui_test_strip_nosim`, `ACTIVSg500_opf_shed_gui_test_strip_nosim`, `ACTIVSg500_opf_shed_gui_test_strip_warn2`, `savnw_flow_shed_gui_test_strip_freq` (stopped), `savnw_flow_shed_gui_test_strip_volt` and `savnw_opf_shed_gui_test_strip_warn`. The failed run (tag `gui_test_strip_fail`) left no folder.
+
+**Phase 8 (2026-11-20).**
+
+*What changed:*
+- **`components/results_view.py` (new).** `ResultsView`, the results panel, between the settings and the runs table:
+  - **"Results of"** lists the runs of the session that have results, newest first, with their case, objective, boundary, tag and start time.
+  - **Summary:** four sections side by side, like the settings sheet. Solution (termination status with a green or red dot, the objective as printed, the solve and simulation times, and the whole run's time), Load and boundary (total load, load shed, net P and Q, the sums of |P| and |Q|, and where the flows are measured), Security (per island the scheduled import against the limit that binds; voltage verified or not, with rounds and worst indicator), and Output (folder, report, Open report, Open folder).
+  - **Generation, Load shedding, Boundary flows, Frequency:** tables. Load shedding has the groups and the buses side by side; the buses are filtered to those with shed by a checkbox that starts ticked, and stand in a box of their own that scrolls.
+  - **Voltage:** verified, rounds, worst indicator, the threshold, and Details.
+  - **Files:** the folder and the four files, each with Open.
+  - A tab whose part is null is left out: Load shedding for `opf` and `flow`, Frequency and Voltage when the check was off.
+- **`components/voltage_details.py` (new).** `VoltageDetailsDialog`: one block per round with four tables (islands, largest indicators, sheds sized, generators at a reactive limit), decision 10.
+- **`theme.py` and `theme.css`.** `data_table` builds a table as one HTML element, with the values escaped as text; `facts` and `fact`; the rules for tables, facts, the tabs inside a page (the page tabs' rules are now scoped to the top bar) and the two new blocks.
+- **`pages/run.py`.** The panel is built after the settings and refreshed with the runs. The openers of a run's report and folder moved to `results_view.py` and the runs table uses them. They now say so in a notification when the file is gone or Windows cannot open it.
+- **The whole run's time** in the Summary is the record's `seconds` (Julia's time for the job, from `@@done`), the number the runs table shows. It arrives after the results, so the Summary shows "..." for a moment. The summary's own `seconds.total` is not shown: it is the time inside `run_islanding`, without loading the case, preparing and Julia's compiling, and it read up to 17 s less than the strip and the runs table.
+- **`dev/check_results_tables.py` and `dev/jobs_results_check.json` (new):** the check described below, and its five runs.
+
+*How it was verified.*
+- **Against the printed reports, by script.** The `find_*` functions that build each table's rows draw nothing, so `dev/check_results_tables.py` compares their cells, formatted as the panel formats them, with the console text of the same runs in a log made with `dev/send_jobs.py --full`. It was run on two logs of the five runs in `dev/jobs_results_check.json` (savnw, ACTIVSg500 with frequency security, savnw and ACTIVSg500 with voltage security, and case9): the phase 4b log, and a fresh one made with the command in the script's first lines. Both times 606 comparisons, none failed.
+  - Printed and compared directly: the objective, load and shed by group and in total, every frequency line, every line of the voltage rounds.
+  - Printed in per unit and compared at the console's precision after ×100: generation (4 decimals, so 0.01 MW) and the net and absolute flow sums (3 decimals, so 0.1 MW; the panel is finer there).
+  - Not printed by the console, so checked against the totals instead: the flow of each boundary line (they add up to the net flow), the load and shed of each bus (they add up to the totals), and the generation total (the sum of the groups; for case9 the console's one "Network" line).
+- **In Chrome,** on a test instance on port 8090, tags `gui_test_results*`, the three runs of "Done when" through the form:
+  - **ACTIVSg500 zone Spartanb, 2.5 λ, frequency security, against its own Full log.** A script in the page read the tables on screen and the text of that run's Full log: the six generation rows, the six shed rows and the total, the two flow sums and the two islands' frequency rows agreed (18 comparisons, at the console's precision).
+  - **savnw, four bus pairs, with ANDES:** objective 30642.40499516773, the simulation time and the report in the Summary, no Frequency or Voltage tab. Its Full log was not opened.
+  - **savnw with voltage security:** the Details dialog read the same as the "Voltage viability, round 1" lines (both islands, six indicators, the generators at a limit, no shed). Those lines were read in the log of the same settings from phase 7, not in this run's own Full log; the script above makes that comparison on logs of the same run.
+- **Also looked at:**
+  - ACTIVSg500 with voltage security: five rounds in the dialog, with the sheds sized and bus lists of 20 and more. That dialog scrolled sideways, because of a long text in the State column. The text was shortened, and the dialog of the next run (both checks, six rounds, 517.91 MW shed) did not;
+  - the unfiltered bus list of 200 rows in its own box, the page staying short;
+  - an `opf` run: no Load shedding tab, a red LOCALLY_INFEASIBLE status and a red "not verified" voltage result;
+  - switching runs in the selector (a tab the other run does not have falls back to Summary), and a reload (the newest results come back);
+  - the selector's list open during a run: it stayed open through five stage changes and was rebuilt only when the run delivered its results;
+  - a failed run after results: the results stayed on show;
+  - the whole run's time: 33.45 s in the Summary, 0:33 on the strip;
+  - the moment a run finishes, at 1490 × 790 with the settings open: the whole Summary is in view above the strip;
+  - a narrow window, forced with a style rule: the Summary stands two by two, a wide table scrolls inside its tab and not the page, and the runs table's buttons fit at 960 px.
+- **The Open buttons.** Clicked once each in the Files tab: the folder, the report and the run record. None gave an error. The Excel report and the RAW file were not clicked, so as not to start Excel or Windows' "open with" on the desktop; a script with a stand-in for Windows' call confirmed that each button passes a file that exists, and that a file that is gone or refused gives a message.
+
+*Choices the user can reverse:*
+- **The order of the page:** settings, results, runs. The results are what a run is for, and the runs table is a list to come back to.
+- **A run that finishes takes over the panel,** with the tab that was open. An older run stays reachable in the selector. A failed or stopped run leaves the panel alone.
+- **The settings do not fold when results arrive.** The Summary fits under the open settings; the other tabs may need the page scrolled.
+- **The objective is shown with all its digits,** as the console prints it.
+- **A group without a record** is named by its number ("1"), as the summary has it, where the console prints "Zone 1".
+- **P + Q** (the console's "Total") is shown for the net flow and the sum of absolute flows only, as printed, not per line.
+- **The frequency verdict** treats an import up to 0.006 MW over its limit as on the limit, because both numbers are rounded to 0.01 MW and an island whose limit binds sits exactly on it.
+- **Files** has an Open button for every file. A file other than the report opens in the program Windows has for it. This machine has no program set for `.raw` and `.json` in the system's list, so Windows may ask which one to use.
+- **The check script and its jobs file in `dev/`** are close to a test, which the project's rules ask for only on request. They are there because "the numbers match the printed reports" is 600 comparisons. Deleting the two files changes nothing else.
+
+*For the next phases:*
+- **Tables** come from `theme.data_table(columns, rows, footers)`: one element, values as text. A long one goes in a `div` with the class `table-scroll`.
+- **Tabs inside a page** are small; the top bar's are scoped under `.q-header`.
+- **Phase 10.** The History page can show an old run the same way if it has a summary: `ResultsView` reads `record["summary"]` and `record["settings"]` only, and the `find_*` functions take the summary alone. A run from disk has no `@@result`, so it would need the summary rebuilt or saved; the per-run settings file keeps only a short one.
+- **Not exercised:** a frequency run in which no island has inertia (the tab then says so), a voltage island whose power flow fails, and the PSS®E simulator's report.
+- **Seen once and not explained:** after a run finished, the zone list of a penalty row was open, its text selected, although nothing had clicked it. Before that the "Results of" list had been opened and closed with Escape during the run. The browser tools went away before it could be tried again, so it is not known whether a user can cause it.
+
+Test folders added: `savnw_flow_shed_gui_test_results`, `savnw_flow_shed_gui_test_results_volt`, `ACTIVSg500_flow_shed_gui_test_results_freq`, `ACTIVSg500_flow_shed_gui_test_results_volt5`, `ACTIVSg500_flow_shed_gui_test_results_both` and `ACTIVSg500_opf_gui_test_results_opf`; and from the check's jobs `savnw_flow_shed_gui_test_check`, `savnw_flow_shed_gui_test_check_volt`, `ACTIVSg500_flow_shed_gui_test_check_freq`, `ACTIVSg500_flow_shed_gui_test_check_volt` and `case9_flow_shed_gui_test_check`.
+
+**Phase 9 (2026-11-21).**
+
+*What changed:*
+- **`worker.jl`.** `MODIFICATIONS` lists the three kinds in the order they are applied (a list of pairs, because a Julia `Dict` keeps no order): `apply_load_scaling!`, `apply_load_overrides!`, `apply_generator_settings!`. `apply_modifications!` runs them in the stage `prepare`, before the boundary lines and the penalties. `find_settings_problems` refuses a kind it does not know. The shape of the entries and what the worker refuses are under "Settings schema v1".
+- **`settings.py`.** The modifications go through `build_settings` and `form_values` (`clean_modifications` drops a kind without entries, so `{}` still means none). `validate` checks their shape only; the entries are checked by the tabs.
+- **`advanced/` (new):**
+  - `__init__.py`: `ADVANCED_TABS`; `Study` (the case, its `case_info` and the study's kind of group, with the lookups the tabs share); `count_entries`, `describe` and `find_problems` over all tabs; and `AdvancedDialog`.
+  - `load_scaling.py`, `loads.py`, `generators.py`: one tab each, with what "Extension rules" lists.
+- **The dialog.** It edits a copy of the modifications as rows, one tab per kind, with the number of rows in each tab's name.
+  - **Load scaling:** a zone or an area, or a list of buses, and a factor.
+  - **Loads:** a load picked by its number, bus and MW (typing filters the list), then P and Q. A field left empty keeps the case's value, which shows in grey.
+  - **Generators:** a zone or an area, or a list of buses, then Pmin and Pmax (see "Generators tab like load scaling" below; at first it was a group and a "Pmin to 0" tick).
+  - **Apply** reads the rows, shows what is wrong in the dialog and closes only when nothing is. **Cancel**, the close button and Escape leave the modifications as they were. **Clear all** empties the rows of every tab.
+- **`components/row_list.py` (new).** `RowList`: column titles, one grid line of fields per row with a remove button, and Add row.
+- **`pages/run.py`:**
+  - **Advanced** opens the dialog and counts the modifications: "Advanced (2)".
+  - **A line under the toolbar** lists them, with **Reset**, which removes them all at once. It stays while the sheet is folded.
+  - **The problems list** is read again after Apply and Reset, so it does not go on naming modifications that were just mended or removed.
+  - **`RunForm`** keeps `modifications` and carries them through `read` and `write`, so a run records them in `gui_settings` and Load settings brings them back.
+  - **The runs table** marks a run whose network was changed with "modified" after the case; the tooltip lists the changes.
+- **`components/results_view.py`.** Beside "Results of", the panel says "network modified:" with the changes of the run on show.
+- **`theme.css`.** The rows to edit (`edit-row` and one grid class per tab), the modifications line, a dialog's foot, a dialog of medium width and its tabs.
+- **`app.py`, outside this phase.** The app now listens on `127.0.0.1` only (`HOST`). NiceGUI's default is every network address, so the page could be opened from other machines on the network, against decision 1.
+
+*How it was verified.*
+- **The worker against `islanding.jl`.** Four temporary copies of `islanding.jl`, each with scenario lines of its notes switched on, no dynamic simulation and a tag `gui_test_ref_*`, were run each in its own Julia process and then deleted. The same four scenarios went to the worker as jobs (`dev/send_jobs.py`, tags `gui_test_mods_*`). The console reports of each pair, from the objective to the flow sums, are the same line for line:
+
+  | scenario | modification | objective | shed |
+  |---|---|---|---|
+  | savnw, island on top (five bus pairs) | load 6 at 400 MW (4.0 pu) | 9431.510209057029 | 0 of 3500 MW |
+  | savnw, north-south separation (four bus pairs) | loads at buses 3005, 3007, 3008, 153 × 1.6 | 45070.19441721722 | 0 of 3620 MW |
+  | ACTIVSg500, zone Spartanb at 2.5 λ | loads of the zone × 0.7 | 8519.135912744756 | 152.66 of 7416.06 MW |
+  | ACTIVSg500, zone Spartanb at 2.5 λ | pmin 0 for the zone's 15 generators | 12140.983056999981 | 407.43 of 7750.72 MW |
+
+  The first and the third are the two of "Done when".
+- **Jobs the worker has to refuse,** eight of them, each failed in `prepare` with its reason: an unknown kind, an empty bus list, a zone that is not there, `true` as a factor, a load recorded at another bus, a load that is not in the case, a load entry without values, and "bus" as a generator group.
+- **The functions that draw nothing,** 67 plain checks in the session's scratch folder: the four jobs through `form_values` and `build_settings` and back, each tab's entries to rows and back, the descriptions, and each problem text.
+- **Through the form,** on a test instance on port 8090, tags `gui_test_adv*`. The Chrome extension was not connected in this session, so the page was driven and looked at in a headless Chrome of its own (own profile folder, real mouse and key events through its debugging port), with screenshots:
+  - **The two runs of "Done when", set up by hand in the form and the dialog:** the same objectives as above, and the `gui_settings` each run saved in its `settings_*.json` equal the settings of the matching job file (apart from the tag).
+  - **Load settings** of the savnw run brought the case, the five bus pairs and "load 6 at bus 3005: P 400 MW" back. Run again with the ANDES simulation, it saved the same settings, gave the same objective, and its exported RAW has 400 MW at bus 3005.
+  - **Cancel, Escape, a click beside the dialog:** a value typed and cancelled was gone at the next opening; the click beside left the dialog open; Escape on an open option list closed the list only.
+  - **The study changes its kind.** With zone rows in place (savnw by bus pairs), choosing an area boundary put a red note on the line, and Run refused with "Advanced, load scaling: zone FIRST: this study is by area, so choose an area or buses". The dialog opened with the same problems and with those rows asking for an area, and Apply refused them until they were filled.
+  - **Another case** removed the modifications, with a notification.
+  - **A reload** came back with the last run's modifications. **Clear all** followed by Cancel changed nothing. **Reset** emptied the line and the count.
+  - **Refused by Apply, with the reason in the dialog:** buses without a load, a row without a group, a generator row that sets nothing.
+  - **case9** (no zones or areas): load scaling and the generators offer buses only.
+  - **The order on one load:** bus 3005 scaled by 2 and its load 6 set to 400 MW in the same run gave 3500 MW of total load, so the load's own P came last (3900 MW the other way round).
+  - **The problems list under the toolbar** was empty right after an Apply that mended the rows it named, and right after Reset.
+  - **The refresh button beside the case** kept a modification (the Q of a load alone, its P left as the case has it). **A case that cannot be read** (savnw_orig): Advanced says to choose a case that can be read.
+  - **Looks:** eight modifications (the line wraps to two lines), the folded sheet, the dialog and the page at 720 px of width (no sideways scrolling), the load list of ACTIVSg500 filtered by typing.
+- **`dev/check_results_tables.py`** still passes its 606 comparisons.
+
+*Choices the user can reverse:*
+- **Groups follow the study's kind** (decision 11): a scaling row and a generator row offer the study's zones, or its areas, and a bus list. So in an area study a zone's loads and generators are reached through their buses.
+- **A modification that stops fitting is kept and blocks Run.** It is not dropped, because the rows are out of sight. Only another case removes them, since they name its loads and groups.
+- **Apply and Cancel,** not changes that take effect as they are typed. A click beside the dialog does not close it.
+- **Every row counts as active,** a factor of 1 too.
+- **A load is named by its number, with its bus recorded.** Julia refuses the entry when the load is at another bus.
+- **Names are stored as the case writes them** ("Spartanb"), as the form's lists show them.
+- **P, Q or both** can be set for a load; the phase text has P, and Q when given.
+- **Two things the phase text does not ask for:** "modified" in the runs table, and "network modified:" in the results panel.
+- **The app listens on this machine only.** To reach it from another machine, `HOST` in `app.py` would be `"0.0.0.0"` again.
+- **A tab's functions** differ from the phase text's `build(ctx, modifications)`: see "Extension rules".
+
+*For the next phases:*
+- **Phase 10.** `advanced.describe(modifications)` describes the modifications of any run without its case, so History can show them from `gui_settings`. Load into Run brings them back through `RunForm.write`; if the case has changed since, `find_problems` says what no longer fits.
+- **Phase 12.** A preset is the settings, so it carries the modifications.
+- **Not possible in the dialog, and not in the plan:** scaling every load, or setting every generator, of the network in one row. In a case without zones or areas both go by bus list.
+- **Without the Chrome extension,** a page can still be driven and looked at in a headless Chrome over its debugging port, with `websockets`, which NiceGUI installs. The script of this phase is `p9/cdp.py` in the session's scratch folder, not in the repo.
+- **Not exercised:** the PSS®E simulator, a load out of service in the load list, and area rows in ACTIVSg500 (it has one area).
+- **Phase 8's unexplained option list:** tried once more (the "Results of" list opened and closed with Escape during a run with a penalty row): no list was open after the run.
+
+Test folders added: `savnw_flow_shed_gui_test_ref_top`, `savnw_flow_shed_gui_test_ref_ns`, `ACTIVSg500_flow_shed_gui_test_ref_scale`, `ACTIVSg500_flow_shed_gui_test_ref_pmin`; `savnw_flow_shed_gui_test_mods_top`, `savnw_flow_shed_gui_test_mods_ns`, `ACTIVSg500_flow_shed_gui_test_mods_scale`, `ACTIVSg500_flow_shed_gui_test_mods_pmin`; `savnw_flow_shed_gui_test_adv_top`, `savnw_flow_shed_gui_test_adv_top_sim`, `savnw_flow_shed_gui_test_adv_kinds`, `savnw_flow_shed_gui_test_adv_final`, `savnw_flow_shed_gui_test_adv_final2`, `savnw_flow_shed_gui_test_adv_order` and `ACTIVSg500_flow_shed_gui_test_adv_scale`. The refused jobs (tag `gui_test_mods_bad`) left no folder.
+
+**Generators tab like load scaling (2026-11-21, after phase 9, on the user's request).**
+
+*What changed:*
+- **The tab.** A row is "Generators of" a zone or an area (the study's kind) or a list of buses, then **Pmin (MW)** and **Pmax (MW)** where load scaling has its factor. A new row starts with both empty (at first Pmin started at 0; the user asked for empty the same day). An empty field leaves that limit as the case has it, and a row needs one of the two. Every generator named gets the value; the hint says so, because a Pmax typed for a zone could be read as the zone's total.
+- **The entry** is `{kind, name | buses, pmin_mw, pmax_mw}` (see "Settings schema v1"). `pmin_zero` of the first version is gone: such an entry sets nothing, so the form and the worker both refuse it. No settings file outside the `gui_test` folders has one (searched in `results/psse`).
+- **`advanced/where.py` (new)** has what load scaling and the generators share: the zone, area or bus list of an entry, its words, its problems and its two fields in a row. `load_scaling.py` and `generators.py` are built on it; the load scaling entries are as they were.
+- **`worker.jl`.** `apply_generator_settings!` sets the limits that are given, from MW. It refuses an entry without a limit, and a generator in service that would end with its pmin above its pmax, naming the generator. `find_entry_buses` and `describe_where` serve both load scaling and the generators.
+- **A half-filled row** is told only what it still needs ("row 1 needs a factor"), in both tabs.
+
+*How it was verified.*
+- **The worker.** The four scenarios of phase 9 again, against the saved logs of their `islanding.jl` copies: the reports are the same line for line, with "pmin 0 for the zone's generators" now sent as `pmin_mw: 0` (objective 12140.983056999981). Then, on savnw with four bus pairs, where zone PLANT has the two generators at buses 101 and 102 (810 MW each, pmin 0):
+
+  | entry | PLANT, Pg of Pmax (MW) | what it shows |
+  |---|---|---|
+  | none | 833.68 of 1620 | |
+  | buses 101 and 102, Pmax 500 | 833.68 of 1000 | each of the two got 500 MW; the log names pmax alone |
+  | zone PLANT, Pmin 600 and Pmax 700 | 1200 of 1400 | both are held at their new pmin |
+  | bus 101, Pmin 300 | 837.18 of 1620 | Pmax is as the case has it |
+
+  The third of these again with the ANDES simulation (tag `gui_test_gen_both_sim`): the report was written, and the exported RAW has 700 MW and 600 MW as the limits of the generators at buses 101 and 102, each at 600 MW, with the generator at bus 206 as before. ANDES stopped at 6.15 s there ("Time step reduced to zero"), and it does the same for this boundary without any modification (tag `gui_test_gen_none_sim`), so that belongs to the scenario and not to the limits.
+
+  Seven jobs were refused with their reason: the entry of the first version, Pmin above Pmax, a Pmin above a unit's own pmax of 810 MW, an empty bus list (for the generators and for load scaling), "bus" as a kind, and text for a number.
+- **The functions that draw nothing:** 85 plain checks in the session's scratch folder, with the new rows in them. Among them: 0 is a value and not "empty", and an entry with a Pmax alone comes back from the dialog's rows without a Pmin.
+- **Through the form,** headless Chrome as in phase 9, tags `gui_test_genform*`:
+  - **A new row** showed Zone, no group yet, Pmin 0 and an empty Pmax that reads "unchanged". Pmin now starts empty too, which was checked on the row's values only, not in the browser.
+  - **Pmax alone** (buses 101 and 102, 500 MW, the Pmin field emptied): the Generation tab went from 1620 to 1000 MW for PLANT, with the other rows as before. Opened again the row had no Pmin, and Apply as it was, and later Load settings, left the entry the same. The settings saved on disk equal the job file's.
+  - **Pmin 0 alone** (then the value of a new row), for zone PLANT and for zone Spartanb of ACTIVSg500: the saved entry has `"pmin_mw": 0` and `"pmax_mw": null`, the Pmax totals did not change, and the ACTIVSg500 run gave 12140.983056999981.
+  - **Both limits** for zone PLANT: 1200 of 1400 MW, as from the worker job.
+  - **Refused by Apply:** a bus without a generator, Pmin above Pmax, a row without a limit, a row without its zone.
+  - **The study changing to area** kept the zone row's limits and asked for an area or buses.
+  - **case9:** the Generators tab offers buses only and takes them.
+  - **Load scaling again,** since its code moved: the bus list of the north-south separation (45070.19441721722) and zone Spartanb by 0.7 (8519.135912744756), each with saved settings equal to its job file's.
+  - **Both tabs in one run** (zone FIFTH by 1.1, the generator at bus 3018 between 50 and 100 MW): 3250 MW of load, 1000 MW of Pmax in FIFTH, and both lines in the Full log.
+
+*Choices the user can reverse:*
+- **MW, and the same value for every generator named.** A limit as a share of each unit's own Pmax would be a different field.
+- **Generators out of service get the limits too,** as the loop in the notes of `islanding.jl` sets them; only those in service are checked for pmin above pmax.
+- **A unit left with its pmin above the new Pmax fails the run in `prepare`,** with the generator named. The dialog cannot see it for a zone, because `case_info` does not say which zone a generator is in.
+- **Two rows on the same zone are refused;** bus lists may overlap, and the later row wins.
+- **Pmin above Pmax is checked after each row,** so a later row cannot mend a generator that an earlier row left with its pmin above its pmax: the earlier row fails first.
+
+Test folders added: `savnw_flow_shed_gui_test_gen_top`, `savnw_flow_shed_gui_test_gen_ns`, `savnw_flow_shed_gui_test_gen_none`, `savnw_flow_shed_gui_test_gen_pmax`, `savnw_flow_shed_gui_test_gen_both`, `savnw_flow_shed_gui_test_gen_both_sim`, `savnw_flow_shed_gui_test_gen_none_sim`, `savnw_flow_shed_gui_test_gen_pmin`, `ACTIVSg500_flow_shed_gui_test_gen_scale`, `ACTIVSg500_flow_shed_gui_test_gen_pmin`; `savnw_flow_shed_gui_test_genform_none`, `savnw_flow_shed_gui_test_genform_pmax`, `savnw_flow_shed_gui_test_genform_pmax2`, `savnw_flow_shed_gui_test_genform_pmin0`, `savnw_flow_shed_gui_test_genform_both`, `savnw_flow_shed_gui_test_genform_ns`, `savnw_flow_shed_gui_test_genform_last`, `ACTIVSg500_flow_shed_gui_test_genform_scale` and `ACTIVSg500_flow_shed_gui_test_genform_zpmin`. The refused jobs (tag `gui_test_gen_bad`) left no folder.

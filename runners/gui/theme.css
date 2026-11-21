@@ -1,0 +1,1093 @@
+/*
+Look of the Islanding GUI (see theme.py and gui_plan.md, "Look").
+
+A quiet, compact, light page: neutral greys, hairline borders, one accent colour, and green,
+amber and red only for state. NiceGUI draws with Quasar (Material Design); the second half of
+this file takes the Material look off the Quasar parts the GUI uses.
+
+NiceGUI puts Quasar's rules in CSS layers, and this file is not in a layer, so a rule here wins
+over Quasar's whatever its selector. Only Quasar's `!important` rules need the `overrides`
+layer, at the end of the file.
+*/
+
+/* ==================== Tokens ==================== */
+:root {
+  --bg: #f4f5f7;                /* page */
+  --surface: #ffffff;           /* panels and fields */
+  --well: #f8f9fb;              /* hover of a row, a disabled field, the log */
+  --hover: #eef0f4;             /* hover of a text button or a menu item */
+  --line: #e4e7ec;              /* hairlines */
+  --line-strong: #cdd2da;       /* field and button borders */
+  --ink: #1b212c;               /* text */
+  --ink-2: #505a69;             /* labels, secondary text */
+  --ink-3: #808998;             /* hints, small titles, placeholders */
+  --accent: #2563eb;            /* the one accent: main action, selection, focus */
+  --accent-hover: #1d4fd7;
+  --accent-pressed: #1a44bd;
+  --accent-ring: rgba(37, 99, 235, 0.18);
+  --ok: #1f9d5b;                /* state colours */
+  --warn: #d48a06;
+  --bad: #d1343f;
+  --off: #a3aab5;
+  --control: 28px;              /* height of a field, a button, a segmented control */
+  --radius: 6px;
+  --font: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --mono: "Cascadia Mono", "Cascadia Code", Consolas, ui-monospace, monospace;
+  --nicegui-default-gap: 8px;
+  --nicegui-default-padding: 12px;
+}
+
+/* ==================== Page ==================== */
+body {
+  font-family: var(--font);
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--ink);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+}
+.nicegui-content {
+  padding: 14px 16px 28px;
+  gap: 12px;
+}
+
+/* -------------------- header: mark, title, page tabs, Julia state -------------------- */
+.q-header {
+  background: var(--surface);
+  color: var(--ink);
+  border-bottom: 1px solid var(--line);
+}
+.nicegui-header {
+  height: 44px;
+  padding: 0 12px 0 16px;
+  gap: 18px;
+  align-items: center;
+  flex-wrap: nowrap;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.brand-title {
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+.header-end {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+/* ==================== Building blocks ==================== */
+/* a white block with a hairline border */
+.panel {
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+/* a panel's top row: fold button or small title, text, then buttons at the right */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 8px 0 6px;
+}
+.toolbar > .eyebrow {
+  padding-left: 8px;
+}
+.toolbar-text {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--ink-2);
+}
+
+/* a sheet of settings: sections side by side, divided by hairlines (the gaps show the sheet's own colour) */
+.sheet {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--line);
+  border-top: 1px solid var(--line);
+}
+@media (max-width: 1240px) {
+  .sheet { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 680px) {
+  .sheet { grid-template-columns: minmax(0, 1fr); }
+}
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 11px 14px 14px;
+  background: var(--surface);
+}
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 20px;
+}
+/* small title of a section or a table column */
+.eyebrow {
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+.eyebrow.exact {
+  text-transform: none;         /* a symbol that capitals would change, such as λ */
+}
+
+.sheet.plain {
+  border-top: 0;                /* under a row of tabs, which has its own line */
+}
+
+/* facts: a name and its value, closer together than fields */
+.facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  column-gap: 14px;
+  row-gap: 5px;
+  align-items: baseline;
+  width: 100%;
+}
+.fact-label {
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+.fact-value {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.fact-value.muted {
+  color: var(--ink-3);
+}
+/* a state as the value of a fact may take more than one line */
+.facts > .state {
+  align-items: baseline;
+  min-width: 0;
+  white-space: normal;
+}
+.facts > .state .dot {
+  position: relative;
+  top: -1px;
+}
+
+/* a table of numbers (theme.data_table) */
+.data-table {
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+.data-table th,
+.data-table td {
+  padding: 5px 14px 5px 0;
+  text-align: left;
+  vertical-align: top;
+  white-space: nowrap;
+}
+.data-table th:last-child,
+.data-table td:last-child {
+  padding-right: 0;
+}
+.data-table th.num,
+.data-table td.num {
+  padding-left: 14px;
+  text-align: right;
+}
+.data-table th {
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--line-strong);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.data-table tbody td {
+  border-bottom: 1px solid var(--line);
+}
+.data-table tbody tr:hover td {
+  background: var(--well);
+}
+.data-table tfoot td {
+  font-weight: 600;
+}
+/* a long table in a box of its own, its column titles staying in view */
+.table-scroll {
+  max-height: 440px;
+  padding-right: 14px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.table-scroll .data-table th {
+  position: sticky;
+  top: 0;
+  border-bottom: 0;
+  background: var(--surface);
+  box-shadow: inset 0 -1px 0 var(--line-strong);
+}
+/* long cells (lists of bus numbers) break into lines */
+.wrap-cells .data-table td {
+  max-width: 560px;
+  white-space: normal;
+}
+/* tables beside each other, each with a small title above it */
+.tables {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 18px 44px;
+}
+.table-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* label on the left, control on the right */
+.fields {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  column-gap: 10px;
+  row-gap: 6px;
+  align-items: center;
+  width: 100%;
+}
+.field-label {
+  align-self: start;
+  line-height: var(--control);
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.grow {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.hint {
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--ink-3);
+}
+.hint.bad {
+  color: var(--bad);
+}
+.hint:empty {
+  display: none;
+}
+.num {
+  font-variant-numeric: tabular-nums;
+}
+/* parts that show nothing (timers): no room in the layout around them */
+.offstage {
+  display: none;
+}
+
+/* a dot and a few words: `data-state` gives the colour */
+.state {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+}
+.state .dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--off);
+}
+.state[data-state="ready"] .dot,
+.state[data-state="finished"] .dot {
+  background: var(--ok);
+}
+.state[data-state="stopped"] .dot {
+  border-radius: 2px;
+}
+.state[data-state="starting"] .dot,
+.state[data-state="busy"] .dot {
+  background: var(--warn);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+.state[data-state="running"] .dot {
+  background: var(--accent);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+.state[data-state="crashed"] .dot,
+.state[data-state="failed"] .dot {
+  background: var(--bad);
+}
+@keyframes pulse {
+  50% { opacity: 0.3; }
+}
+/* the same with a border, for the header */
+.pill {
+  height: 26px;
+  padding: 0 11px 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink-2);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+.pill.clickable {
+  cursor: pointer;
+}
+.pill.clickable:hover {
+  border-color: var(--line-strong);
+}
+.pill[data-state="busy"] {
+  background: #fff8e8;
+  border-color: #f0d08c;
+  color: #875a00;
+}
+.pill[data-state="crashed"] {
+  background: #fdf1f1;
+  border-color: #f1bfc3;
+  color: #a4232c;
+}
+
+/* -------------------- Run page -------------------- */
+/* why the settings cannot run, under the toolbar */
+.problems {
+  padding: 8px 14px;
+  border-top: 1px solid #f3cdd0;
+  background: #fdf3f3;
+  color: #a4232c;
+  white-space: pre-line;
+}
+.problems:empty {
+  display: none;
+}
+
+/* load shedding penalties: where, value, remove */
+.penalty-row {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr) 76px 24px;
+  column-gap: 6px;
+  align-items: center;
+}
+.penalty-row > .wide {
+  grid-column: span 2;
+}
+.penalty-row > .eyebrow {
+  line-height: 18px;
+}
+.penalty-row > .field-label {
+  align-self: center;
+}
+
+/* rows to edit (components/row_list.py): one grid per row, its columns given by a second class */
+.edit-row {
+  display: grid;
+  column-gap: 6px;
+  align-items: center;
+}
+.edit-row > .eyebrow {
+  line-height: 18px;
+}
+.scaling-row {
+  grid-template-columns: 84px minmax(0, 1fr) 96px 24px;
+}
+.load-row {
+  grid-template-columns: minmax(0, 1fr) 104px 104px 24px;
+}
+.generator-row {
+  grid-template-columns: 84px minmax(0, 1fr) 96px 96px 24px;
+}
+
+/* the network modifications that are active, between the settings toolbar and the sheet */
+.modifications {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+  padding: 3px 8px 3px 14px;
+  border-top: 1px solid var(--line);
+  background: var(--well);
+}
+.modifications-text {
+  flex: 1 1 0;
+  min-width: 0;
+  color: var(--ink-2);
+}
+
+/* the runs of the session: one grid per row, same columns in every row */
+.runs-row {
+  display: grid;
+  grid-template-columns: 34px 68px minmax(60px, 1.1fr) 84px minmax(80px, 1.2fr) minmax(40px, 1fr) 96px minmax(40px, 2fr) 262px;
+  column-gap: 14px;
+  align-items: center;
+  min-height: 36px;
+  padding: 0 8px 0 14px;
+  border-top: 1px solid var(--line);
+}
+.runs-row > * {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.runs-row:not(.runs-head):hover {
+  background: var(--well);
+}
+.runs-head {
+  min-height: 30px;
+}
+.runs-row .muted {
+  color: var(--ink-3);
+}
+.runs-row .bad {
+  color: var(--bad);
+}
+.runs-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 2px;
+}
+.empty {
+  padding: 14px;
+  border-top: 1px solid var(--line);
+  color: var(--ink-3);
+}
+
+/* -------------------- results panel: the report numbers of one run -------------------- */
+.results-run {
+  width: min(560px, 62vw);
+}
+.results-tabs,
+.dialog-tabs {
+  padding: 0 6px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+.dialog-tabs {
+  border-top: 0;                /* the dialog's toolbar has the line */
+}
+.tab-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  padding: 14px;
+  overflow-x: auto;
+}
+/* the files of a run: what it is, its name, a button */
+.file-list {
+  display: grid;
+  grid-template-columns: max-content max-content max-content;
+  column-gap: 18px;
+  row-gap: 4px;
+  align-items: center;
+}
+.file-name {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+/* voltage details: one block per round */
+.dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  max-height: min(76vh, 820px);
+  padding: 14px 16px 18px;
+  overflow: auto;
+  scrollbar-width: thin;
+}
+.round {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.round + .round {
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+.round-title {
+  font-weight: 600;
+}
+
+/* -------------------- status strip: where a run is, fixed to the bottom of the window -------------------- */
+.strip {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1000;                /* over the page, under dialogs and option lists */
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px 16px 9px;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+  box-shadow: 0 -6px 18px rgba(16, 24, 40, 0.05);
+}
+/* room at the end of the page for the strip, so it covers nothing */
+.strip-room {
+  flex: none;
+  height: 72px;
+}
+.strip-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  min-height: 24px;
+}
+.strip-run {
+  font-weight: 600;
+  white-space: nowrap;
+}
+.steps {
+  display: flex;
+  align-items: center;
+  flex: 1 1 0;
+  min-width: 0;
+  margin-left: 6px;
+  overflow: hidden;
+}
+.step {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+.step + .step::before {
+  content: "";
+  width: 16px;
+  height: 1px;
+  margin: 0 2px 0 8px;
+  background: var(--line-strong);
+}
+.step-mark {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1.5px var(--line-strong);
+}
+.step-time {
+  font-weight: 500;
+  color: var(--accent);
+}
+.step[data-state="done"] {
+  color: var(--ink-2);
+}
+.step[data-state="done"] .step-mark {
+  box-shadow: none;
+  background: var(--ok) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 12.5l4 4 8-8.5'/%3E%3C/svg%3E") center / 10px no-repeat;
+}
+.step[data-state="current"] {
+  color: var(--ink);
+  font-weight: 600;
+}
+.step[data-state="current"] .step-mark {
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+  background: radial-gradient(circle, var(--accent) 0 3px, transparent 3.6px);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+.step[data-state="failed"] {
+  color: var(--bad);
+  font-weight: 600;
+}
+.step[data-state="failed"] .step-mark {
+  box-shadow: none;
+  background: var(--bad) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3.6' stroke-linecap='round'%3E%3Cpath d='M7.5 7.5l9 9M16.5 7.5l-9 9'/%3E%3C/svg%3E") center / 10px no-repeat;
+}
+.step[data-state="stopped"] {
+  color: var(--ink-2);
+  font-weight: 600;
+}
+.step[data-state="stopped"] .step-mark {
+  box-shadow: inset 0 0 0 1.5px var(--off);
+  background: linear-gradient(var(--off), var(--off)) center / 5px 5px no-repeat;
+}
+.step[data-state="skipped"] {
+  opacity: 0.55;
+  text-decoration: line-through;
+}
+.step[data-state="skipped"] .step-mark {
+  box-shadow: none;
+  border: 1.5px dashed var(--line-strong);
+}
+.strip-now {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink-2);
+}
+.strip-now.bad {
+  color: var(--bad);
+}
+.strip-clock {
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+.strip-warnings:not(.disabled) {
+  color: #8a5a00;
+}
+.strip-warnings .q-btn__content::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--warn);
+}
+/* a narrow window: only the step the run is at keeps its name (the others have it as a tooltip) */
+@media (max-width: 1180px) {
+  .step:not([data-state="current"]):not([data-state="failed"]):not([data-state="stopped"]) .step-label {
+    display: none;
+  }
+  .step + .step::before {
+    width: 10px;
+    margin: 0 0 0 6px;
+  }
+}
+
+/* -------------------- log dialog -------------------- */
+.log-search {
+  width: 260px;
+}
+/* column-reverse: the view starts at the end of the log and stays there while lines are added */
+.log-view {
+  display: flex;
+  flex-direction: column-reverse;
+  min-height: 200px;
+  max-height: min(72vh, 780px);
+  padding: 10px 14px;
+  overflow: auto;
+  background: var(--well);
+  scrollbar-width: thin;
+}
+.log-lines {
+  color: #2c3440;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre;
+  user-select: text;
+  margin-bottom: auto;          /* a short log stands at the top of the view */
+}
+
+/* ==================== Quasar, without the Material look ==================== */
+/* no ink ripples and no grey overlays on hover and focus: each part below has its own states */
+.q-ripple,
+.q-focus-helper {
+  display: none;
+}
+
+/* -------------------- buttons -------------------- */
+.q-btn {
+  min-height: var(--control);
+  padding: 0 10px;
+  border-radius: var(--radius);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 18px;
+  letter-spacing: 0;
+  text-transform: none;
+  transition: background-color 0.12s, box-shadow 0.12s, color 0.12s;
+}
+.q-btn:before {
+  display: none;                /* Quasar draws the elevation shadow here */
+}
+.q-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.q-btn .q-icon {
+  font-size: 15px;
+}
+.q-btn .on-left {
+  margin-right: 6px;
+}
+/* the kinds of button (theme.button) */
+.btn {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+}
+.btn:not(.disabled):hover {
+  background: var(--well);
+  box-shadow: inset 0 0 0 1px var(--ink-3);
+}
+.btn:not(.disabled):active {
+  background: var(--hover);
+}
+.btn-primary {
+  background: var(--accent);
+  color: #fff;
+}
+.btn-primary:not(.disabled):hover {
+  background: var(--accent-hover);
+}
+.btn-primary:not(.disabled):active {
+  background: var(--accent-pressed);
+}
+.btn-ghost {
+  background: transparent;
+  color: var(--ink-2);
+}
+.btn-ghost:not(.disabled):hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+.btn-ghost:not(.disabled):active {
+  background: var(--line);
+}
+.btn-danger:not(.disabled) {
+  color: var(--bad);
+}
+.btn-danger:not(.disabled):hover {
+  background: #fdf3f3;
+  box-shadow: inset 0 0 0 1px var(--bad);
+}
+.btn-icon {
+  width: var(--control);
+  min-width: var(--control);
+  padding: 0;
+}
+.btn-small {
+  min-height: 24px;
+  padding: 0 7px;
+  font-size: 12.5px;
+}
+.btn-small.btn-icon {
+  width: 24px;
+  min-width: 24px;
+  padding: 0;
+}
+.btn-fold {
+  padding: 0 9px 0 6px;
+  color: var(--ink);
+  font-weight: 600;
+}
+.btn-fold .q-icon {
+  color: var(--ink-3);
+}
+
+/* -------------------- segmented control (ui.toggle) -------------------- */
+.q-btn-toggle {
+  display: inline-flex;
+  width: fit-content;
+  padding: 2px;
+  gap: 2px;
+  border-radius: 7px;
+  background: #e9ecf1;
+  box-shadow: none;
+}
+.q-btn-toggle .q-btn {
+  min-height: 24px;
+  padding: 0 11px;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ink-2);
+}
+.q-btn-toggle .q-btn:hover {
+  color: var(--ink);
+}
+.q-btn-toggle .q-btn[aria-pressed="true"] {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 0 0 1px rgba(16, 24, 40, 0.05), 0 1px 2px rgba(16, 24, 40, 0.14);
+}
+
+/* -------------------- fields (ui.select, ui.number, ui.input, ui.textarea) -------------------- */
+.q-field {
+  font-size: 13px;
+}
+.q-field--outlined .q-field__control {
+  padding: 0 8px;
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.q-field--outlined .q-field__control:before {
+  border-color: var(--line-strong);
+  transition: border-color 0.12s;
+}
+.q-field--outlined .q-field__control:hover:before {
+  border-color: var(--ink-3);
+}
+.q-field--outlined .q-field__control:after {
+  border-width: 1px;
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+.q-field--outlined.q-field--highlighted .q-field__control:after {
+  border-width: 1px;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+.q-field--dense .q-field__control,
+.q-field--dense .q-field__marginal,
+.q-field--dense .q-field__native,
+.q-field--auto-height.q-field--dense .q-field__control,
+.q-field--auto-height.q-field--dense .q-field__native {
+  min-height: var(--control);
+}
+.q-field--dense:not(.q-field--auto-height):not(.q-textarea) .q-field__control,
+.q-field--dense .q-field__marginal {
+  height: var(--control);
+}
+.q-field__native,
+.q-field__input {
+  color: var(--ink);
+  line-height: 18px;
+  text-overflow: ellipsis;
+}
+.q-field--dense .q-field__native,
+.q-field--dense .q-field__input {
+  padding-top: 0;
+  padding-bottom: 0;
+}
+.q-field__native::placeholder,
+.q-field__input::placeholder {
+  color: var(--ink-3);
+  opacity: 1;
+}
+.q-field__marginal {
+  font-size: 16px;
+  color: var(--ink-3);
+}
+.q-field__suffix {
+  padding-left: 5px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--ink-3);
+}
+.q-field--disabled .q-field__control {
+  background: var(--well);
+}
+/* a number is typed, not stepped */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  margin: 0;
+  -webkit-appearance: none;
+}
+/* the chosen option on one line, cut with "..." */
+.q-select .q-field__native {
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+.q-select .q-field__native > span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+/* a chevron in place of Material's filled arrow */
+.q-select__dropdown-icon {
+  width: 14px;
+  height: 14px;
+  font-size: 0;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23808998' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E") center / 14px no-repeat;
+}
+/* a text area grows with its lines, from the height of one field */
+.q-textarea.q-field--dense .q-field__control {
+  height: auto;
+}
+.q-textarea.q-field--dense .q-field__control-container {
+  padding: 0;
+}
+.q-textarea.q-field--dense .q-field__native {
+  min-height: var(--control);
+  padding: 5px 0;
+  resize: none;
+}
+
+/* -------------------- checkbox -------------------- */
+.q-checkbox {
+  width: fit-content;
+}
+.q-checkbox__inner {
+  font-size: 32px;              /* a dense box is half of it */
+  color: var(--line-strong);
+}
+.q-checkbox__inner:before {
+  display: none;                /* Material's round halo */
+}
+.q-checkbox__bg {
+  border-width: 1.5px;
+  border-radius: 4px;
+  background: var(--surface);
+}
+.q-checkbox:hover .q-checkbox__inner--falsy {
+  color: var(--ink-3);
+}
+.q-checkbox__inner--truthy,
+.q-checkbox__inner--indet {
+  color: var(--accent);
+}
+.q-checkbox__inner--truthy .q-checkbox__bg,
+.q-checkbox__inner--indet .q-checkbox__bg {
+  background: currentColor;
+}
+.q-checkbox__label {
+  padding-left: 8px;
+  font-size: 13px;
+  color: var(--ink);
+}
+.q-checkbox:focus-visible .q-checkbox__bg {
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+
+/* -------------------- page tabs -------------------- */
+.q-tabs {
+  color: var(--ink-3);
+}
+.q-tab {
+  flex: 0 0 auto;
+  min-height: 36px;
+  padding: 0 10px;
+  text-transform: none;
+  transition: color 0.12s;
+}
+.q-header .q-tab {
+  min-height: 44px;             /* the page tabs fill the top bar */
+}
+.q-tab:hover,
+.q-tab--active {
+  color: var(--ink);
+}
+.q-tab__label {
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+.q-tab__indicator {
+  height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: var(--accent);
+}
+.q-tab-panels {
+  background: transparent;
+}
+.nicegui-tab-panel {
+  padding: 0;
+  gap: 12px;
+}
+
+/* -------------------- popups: option lists, tooltips, notifications -------------------- */
+.q-menu {
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 10px 30px rgba(16, 24, 40, 0.12), 0 2px 6px rgba(16, 24, 40, 0.06);
+  font-size: 13px;
+  scrollbar-width: thin;
+}
+.q-menu .q-item {
+  min-height: 28px;
+  padding: 4px 8px;
+  border-radius: 5px;
+  color: var(--ink);
+  transition: none;
+}
+.q-menu .q-item:hover,
+.q-menu .q-item.q-manual-focusable--focused {
+  background: var(--hover);
+}
+.q-menu .q-item--active {
+  color: var(--accent);
+  font-weight: 600;
+}
+.q-tooltip {
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: #1f2430;
+  color: #fff;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.q-notification {
+  border-radius: 8px;
+  background: #1f2430;
+  box-shadow: 0 10px 30px rgba(16, 24, 40, 0.2);
+  font-size: 13px;
+}
+
+/* -------------------- dialog -------------------- */
+.q-dialog__backdrop {
+  background: rgba(16, 24, 40, 0.38);
+}
+.dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(1100px, 94vw);
+  max-width: none;              /* Quasar keeps a dialog under 560 px */
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 24px 60px rgba(16, 24, 40, 0.28);
+  overflow: hidden;
+}
+.dialog > .toolbar {
+  flex: none;
+  padding: 0 8px 0 14px;
+  border-bottom: 1px solid var(--line);
+}
+.dialog-title {
+  font-weight: 600;
+  white-space: nowrap;
+}
+.dialog.medium {
+  width: min(760px, 94vw);
+}
+/* a dialog's last row: what clears on the left, then Cancel and the main button on the right */
+.dialog-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--line);
+}
+/* advanced settings: the tabs have different numbers of rows, and the dialog keeps its height */
+.advanced-body {
+  min-height: 300px;
+}
+.advanced-body .tab-body {
+  max-height: min(56vh, 520px);
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+/* ==================== Over Quasar's !important rules ==================== */
+@layer overrides {
+  .q-btn.disabled,
+  .q-checkbox.disabled {
+    opacity: 0.45 !important;
+  }
+}
