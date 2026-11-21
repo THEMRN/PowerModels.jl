@@ -2,8 +2,9 @@ using Dates
 using XLSX
 include("calc_line_flow.jl")
 
-# Create Excel file with multiple sheets
-function create_excel_report(result, network_data, filepth="results.xlsx"; powerworld=false)
+# Create Excel file with multiple sheets. The bus sheet's group column is the bus's zone or area
+# (`group_kind`, the study's kind of group, see find_group_kind).
+function create_excel_report(result, network_data, filepth="results.xlsx"; powerworld=false, group_kind="zone")
     # timestamp = Dates.format(Dates.now(), "yyyy-mm-dd_HH-MM-SS")
     # name_parts = splitext(filepth)
     # final_pth = "$(name_parts[1])_$(timestamp)$(name_parts[2])"
@@ -32,7 +33,7 @@ function create_excel_report(result, network_data, filepth="results.xlsx"; power
         sheet1[XLSX.CellRef(row, 2)] = network_data["baseMVA"]
 
         sheet2 = XLSX.addsheet!(xf, "buses")
-        bus_headers = ["bus number", "bus type", "zone", "vmax", "vmin", "vm", "va (rad)", "va (deg)", "p mismatch (MW)", "mva mismatch (MVA)"]
+        bus_headers = ["bus number", "bus type", group_kind, "vmax", "vmin", "vm", "va (rad)", "va (deg)", "p mismatch (MW)", "mva mismatch (MVA)"]
 
         # Write bus headers
         for (i, header) in enumerate(bus_headers)
@@ -105,7 +106,7 @@ function create_excel_report(result, network_data, filepth="results.xlsx"; power
 
             sheet2[XLSX.CellRef(row, 1)] = bus_id
             sheet2[XLSX.CellRef(row, 2)] = bus_net["bus_type"]
-            sheet2[XLSX.CellRef(row, 3)] = bus_net["zone"]
+            sheet2[XLSX.CellRef(row, 3)] = bus_net[group_kind]
             sheet2[XLSX.CellRef(row, 4)] = bus_net["vmax"]
             sheet2[XLSX.CellRef(row, 5)] = bus_net["vmin"]
             # Add solution data

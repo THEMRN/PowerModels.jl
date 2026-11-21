@@ -194,7 +194,9 @@ voltage collapse indicator of each island (see voltage.jl); it needs the AC mode
 
 `target_zone` or `target_area` names the group the boundary encloses; `selected_buses`
 are its buses (flows are reported into them). An area goes to run_info as
-"target_area", which the Python report does not show as a zone.
+"target_area", which the Python report does not show as a zone. The console reports group
+generation and load shedding by the same kind; with neither (bus pairs), by the kind the case
+uses (`find_group_kind`).
 
 Every run writes `settings_<timestamp>.json` into its results folder: the settings with
 `"status": "started"` before the solve, rewritten at the end with `"finished"`, the file
@@ -231,6 +233,7 @@ function run_islanding(network_data;
 )
     simulator in ("psse", "andes") || error("unknown simulator \"$simulator\", use \"psse\" or \"andes\"")
     voltage_security && opf_model != "AC" && error("voltage_security needs the AC model (bus voltages and reactive power)")
+    target_zone !== nothing && target_area !== nothing && error("give target_zone or target_area, not both: a study is by zone or by area")
     report_stage(stage) = progress === nothing || progress(stage)
 
     # results folder and the per-run settings file
@@ -309,10 +312,11 @@ function run_islanding(network_data;
     println("Power Flow Solved")
     println("objective:", result["objective"])
 
-    # log flow results and load shedding status
-    print_generation_status(network_data, result)
+    # log flow results and load shedding status, by area for an area study and by zone otherwise
+    group_kind = find_group_kind(network_data, target_zone, target_area)
+    print_generation_status(network_data, result; group_kind=group_kind)
     if occursin("shed", objective)
-        print_load_shedding_status(result, network_data)
+        print_load_shedding_status(result, network_data; group_kind=group_kind)
     end
     if target_zone !== nothing
         print_branch_flows(result, network_data, target_lines, false, target_zone)
@@ -331,6 +335,7 @@ function run_islanding(network_data;
     run_info = Dict{String,Any}(
         "objective" => objective,
         "flow_model" => flow_model,
+        "group_kind" => group_kind,             # the report groups by zone or area, as the console does
         "uniform_shedding" => uniform_shedding,
         "frequency_security" => frequency_security,
         "voltage_security" => voltage_security,
@@ -345,7 +350,6 @@ function run_islanding(network_data;
     if target_area !== nothing
         run_info["target_area"] = target_area
     end
-    group_word = target_area !== nothing ? "area" : "zone"     # in the penalty scope text
     if uniform_shedding
         run_info["uniform_penalty_rel"] = lambda != 0 ? uniform_penalty / lambda : uniform_penalty
     elseif !isempty(load_shedding_penalties) && lambda != 0
@@ -355,9 +359,9 @@ function run_islanding(network_data;
             penalized_buses = Set(parse(Int, k) for k in keys(load_shedding_penalties))
             zone_buses = Set(selected_buses)
             if issubset(penalized_buses, zone_buses)
-                run_info["shed_penalty_scope"] = "inside $group_word"
+                run_info["shed_penalty_scope"] = "inside $group_kind"
             elseif isempty(intersect(penalized_buses, zone_buses))
-                run_info["shed_penalty_scope"] = "outside $group_word"
+                run_info["shed_penalty_scope"] = "outside $group_kind"
             else
                 run_info["shed_penalty_scope"] = "mixed"
             end
@@ -378,7 +382,7 @@ function run_islanding(network_data;
     end
     # generate excel report
     excel_file = "$output_path/pm_res_$(objective)_$(timestamp).xlsx"
-    create_excel_report(result, network_data, excel_file, powerworld=true)
+    create_excel_report(result, network_data, excel_file, powerworld=true, group_kind=group_kind)
     println("Excel file created successfully!")
 
     # voltage_prediction = predict_voltage_change_from_opened_lines(network_data, result, target_lines)
@@ -432,7 +436,12 @@ function run_islanding(network_data;
         report_file = find_new_report(output_path, run_started)
     end
 
-    # the outcome of the run, in its settings file
+    # the outcome of the run, in its settings file (voltage: main results only, not the per-round details)
+    voltage_summary = nothing
+    if haskey(result, "voltage_security")
+        voltage = result["voltage_security"]
+        voltage_summary = (verified=voltage["verified"], rounds=voltage["rounds"], worst_indicator=voltage["worst_indicator"])
+    end
     files = (
         excel=basename(excel_file),
         raw=(raw_file === nothing ? nothing : basename(raw_file)),
@@ -442,7 +451,7 @@ function run_islanding(network_data;
         termination_status=string(result["termination_status"]),
         objective=result["objective"],
         preemptive_shed_mw=get(run_info, "preemptive_shed_mw", nothing),
-        voltage_security=get(result, "voltage_security", nothing),
+        voltage_security=voltage_summary,
     )
     seconds = (
         solve=round(solve_seconds, digits=2),

@@ -7,7 +7,8 @@ psse_scripts/dynamic.py with the same command line and outputs:
 Loads the case exported by PowerModels, solves the power flow, trips the lines listed in
 line_outage.json at EVENT_TIME, runs to SIM_END_TIME and writes into the case folder the power
 flow report (andes_res_*.xlsx), the channels (output_andes_*.csv.gz), voltage_stats.json, the
-Plotly HTML report and the ANDES log.
+Plotly HTML report and the ANDES log. An area study (run_info.json "group_kind") reports the UFLS
+shed by area, any other study by zone.
 
 Not modelled by ANDES (approximated when reading the dyr): GENSAL is approximated by GENROU and
 SCRX by SEXS with default parameters. Generator frequency relays (FRQTPAT) and UFLS relays (LDSHBL)
@@ -32,7 +33,13 @@ import numpy as np
 import pandas as pd
 import andes
 
-from report import build_voltage_stats_json, write_voltage_stats_json, write_html_report, print_frequency_extremes
+from report import (
+    build_voltage_stats_json,
+    write_voltage_stats_json,
+    write_html_report,
+    print_frequency_extremes,
+    load_run_info,
+)
 from models import register_models, find_stale_models, add_frqtpat_relays, add_ldshbl_relays
 
 # ==================== Settings ====================
@@ -78,6 +85,41 @@ def read_raw_block(raw_file, block_name):
             if f"BEGIN {block_name} DATA" in line:
                 inside_block = True
     return records
+
+
+def read_group_names(raw_file, group_kind):
+    """
+    Names of the case's areas or zones (`group_kind` "area" or "zone") by number, from the RAW
+    AREA or ZONE records (ANDES keeps the area names but no zones).
+    """
+    block_name, name_field = ("AREA", 4) if group_kind == "area" else ("ZONE", 1)
+    names = {}
+    for record in read_raw_block(raw_file, block_name):
+        if len(record) <= name_field or not record[0].isdigit():
+            continue
+        names[int(record[0])] = record[name_field]
+    return names
+
+
+def calc_ufls_by_group(shed_events, group_by_bus, group_names):
+    """
+    UFLS shed per zone or area (the study's group): name, number of events, MW and Mvar, sorted by
+    group number. A group without a record is named by its number.
+    """
+    totals = {}
+    for event in shed_events:
+        group = group_by_bus.get(int(event["bus"]), 0)
+        total = totals.setdefault(group, {"events": 0, "MW": 0.0, "Mvar": 0.0})
+        total["events"] += 1
+        total["MW"] += event["MW"]
+        total["Mvar"] += event["Mvar"]
+
+    rows = []
+    for group in sorted(totals):
+        row = {"name": group_names.get(group, str(group))}
+        row.update(totals[group])
+        rows.append(row)
+    return rows
 
 
 def find_dead_island_buses(ss, tripped_lines):
@@ -192,6 +234,12 @@ for i, record in enumerate(branch_records):
     ss.Line.b2.v[i] = float(record[12])  # BJ
 
 load_ids = [r[1] for r in read_raw_block(raw_file_pth, "LOAD")]  # in the order of ANDES PQ loads
+
+# the study's kind of group from the Julia runner: an area study reports by area, otherwise by zone
+group_kind = load_run_info(output_dir).get("group_kind", "zone")
+group_names = read_group_names(raw_file_pth, group_kind)
+bus_groups = ss.Bus.area.v if group_kind == "area" else ss.Bus.zone.v
+group_by_bus = {int(bus): int(group) for bus, group in zip(ss.Bus.idx.v, bus_groups)}
 
 # generator reactive limits in the power flow, as PSS®E
 ss.PV.config.pv2pq = 1
@@ -396,11 +444,23 @@ print(
     f"P={round(ufls_total_p_mw, 2)} MW, Q={round(ufls_total_q_mvar, 2)} Mvar"
 )
 for event in shed_events:
+    group = group_by_bus.get(int(event["bus"]), 0)
+    group_name = group_names.get(group, str(group))
     print(
-        f"   t={round(event['time'], 3)}s  bus {event['bus']} load {event['load_id']} stage {event['stage']}  "
+        f"   t={round(event['time'], 3)}s  bus {event['bus']} ({group_name}) load {event['load_id']} stage {event['stage']}  "
         f"{round(event['percent'], 2)} %  {round(event['MW'], 2)} MW  {round(event['Mvar'], 2)} Mvar  "
         f"V={round(event['voltage'], 3)} pu  f={round(event['frequency'], 3)} Hz"
     )
+
+# UFLS shed by the study's group (area or zone)
+ufls_by_group = calc_ufls_by_group(shed_events, group_by_bus, group_names)
+if ufls_by_group:
+    print(f"-- UFLS load shed by {group_kind}:")
+    for group in ufls_by_group:
+        print(
+            f"   {group['name']}: {group['events']} events  "
+            f"P={round(group['MW'], 2)} MW  Q={round(group['Mvar'], 2)} Mvar"
+        )
 if ss.LDSHBL.n == 0:
     ufls_total_p_mw = None  # no UFLS relays in the dyr, nothing to report
 
@@ -464,7 +524,13 @@ write_voltage_stats_json(output_dir, voltage_stats)
 
 print("-- Plotting dynamic simulation channels...")
 plots_path = write_html_report(
-    df, output_dir, now, voltage_stats["wtvsi"], ufls_total_p_mw=ufls_total_p_mw, simulator="ANDES"
+    df,
+    output_dir,
+    now,
+    voltage_stats["wtvsi"],
+    ufls_total_p_mw=ufls_total_p_mw,
+    simulator="ANDES",
+    ufls_by_group=ufls_by_group,
 )
 output_time = time.perf_counter() - output_start  # s, channels, CSV, voltage stats and HTML report
 webbrowser.open(plots_path.resolve().as_uri())

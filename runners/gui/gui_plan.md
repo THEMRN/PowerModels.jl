@@ -26,8 +26,8 @@ A local GUI for running islanding scenarios without editing code. It sets the ru
 | 1 | Julia worker | none | done (2026-11-20) |
 | 2 | Areas as well as zones | 1 | done (2026-11-20) |
 | 3 | Run hooks: stages and per-run settings file | 1 | done (2026-11-20) |
-| 4a | Report data: calc/print split | 2 | not started |
-| 4b | Result summary from the worker | 3, 4a | not started |
+| 4a | Report data: calc/print split | 2 | done (2026-11-20) |
+| 4b | Result summary from the worker | 3, 4a | done (2026-11-20) |
 | 5 | GUI shell and worker client | 1 | not started |
 | 6 | Run page: settings form | 2, 5 | not started |
 | 7 | Run page: status strip | 3, 6 | not started |
@@ -62,6 +62,13 @@ These were made by the user. Do not reopen them.
     - the sheds that were sized.
 
     To get these as data, `voltage.jl` returns them in `result["voltage_security"]["details"]` (phase 4a). That is a change inside the PowerModels module, so it triggers a recompile.
+11. **An area study is reported by area, a zone study by zone, never mixed.** `find_group_kind` (`utils.jl`) picks the kind:
+    - the target's own kind;
+    - for bus pairs, zones when the case has more than one zone, otherwise areas.
+
+    The console, `@@result`, `run_info.json` (`group_kind`), the Excel bus sheet and the ANDES report all follow it. A new report that groups buses uses it too.
+12. **A load belongs to its bus's zone and area**, never to the zone or area on its own RAW record.
+13. **The PSS®E script (`psse_scripts/dynamic.py`) is no longer updated.** New report features go into the ANDES side only (`andes_scripts/dynamic.py`, `report.py`).
 
 ## Architecture
 
@@ -222,34 +229,61 @@ A run that throws leaves `"started"`, and History shows that as incomplete.
 }
 ```
 
-The report name is `dynamic.py`'s own `dynamic_channels_<ts>.html`. `run_islanding` finds it after the simulation as the newest such file modified after the run started. `run_info.json` stays exactly as it is, because the Python report reads it.
+The report name is `dynamic.py`'s own `dynamic_channels_<ts>.html`. `run_islanding` finds it after the simulation as the newest such file modified after the run started. `run_info.json` keeps its keys, because the Python report reads them. It gained `target_area` in phase 2 and `group_kind` in phase 4b; the ANDES report uses both.
 
 ### Result summary (`@@result`)
 
-The summary is in MW and Mvar, rounded as the console reports round. Keys whose feature was off are `null`:
-- `termination_status`, `objective`, `seconds` (`solve`, `dynamic_sim`, `total`)
+The worker sends it at the end of a run, after the stage `summary`. A run that fails sends `@@error` and no `@@result`.
+
+**Units and rounding.** The summary is in MW and Mvar, rounded as the console prints:
+- MW, Mvar and % to 2 decimals;
+- H, K, D, voltages (pu) and voltage indicators to 3 decimals. The GUI shows these as they are and does not round them again.
+
+A number that is not finite is `null`. Keys whose feature was off are `null`.
+
+**Source.** The numbers come from a copy of the network data taken just before `run_islanding`. The export step writes the solution into the network data, which turns each load's `pd` into its served load.
+
+**Groups.** The summary groups exactly like the console reports, by `find_group_kind` in `utils.jl`:
+- an area boundary groups by area;
+- a zone boundary groups by zone;
+- a bus-pair boundary groups by the kind the case divides its buses into: zones when there is more than one zone, otherwise areas when there is more than one area.
+
+A group's name is its record name, or its number when it has no record, as in `case_info`.
+
+- `termination_status`, `objective`
+- `seconds` (`solve`, `dynamic_sim`, `total`), from the per-run settings file
 - `generation`:
   - `group_kind`
-  - `groups`: name, `pg_mw`, `pmax_mw`, `qg_mvar`, `qmax_mvar`
-  - `total`
-- `load_shed`:
-  - `total_load_mw`, `total_shed_mw`
-  - `groups`
-  - `buses`: bus, `pd_mw`, `shed_mw`, `shed_pct`
+  - `groups`, one per zone or area record (none when the case has no such records): `index`, `name`, `pg_mw`, `pmax_mw`, `qg_mvar`, `qmax_mvar`, `p_used_pct`, `q_used_pct`
+  - `total`: the same fields without `index` and `name`
+- `load_shed`, for objectives with shedding only:
+  - `group_kind`, `total_load_mw`, `total_shed_mw`
+  - `groups`, one per group with load: `index`, `name`, `load_mw`, `shed_mw`, `shed_pct`
+  - `buses`, every load bus, with the loads at that bus added up: `bus`, `pd_mw`, `shed_mw`, `shed_pct`. Solver noise rounds to 0, so "only buses with shed" means `shed_mw > 0`.
 - `boundary_flows`:
-  - `lines`: id, from, to, `p_mw`, `q_mvar`, oriented into the target group when there is one
-  - `net`, `abs_sum`
-- `frequency`, one entry per island:
-  - `island_bus`, `n_buses`, `H`, `K`, `D`
+  - `oriented`: true with a target zone or area. Each line is then measured at its end inside the group (`from`) and is positive leaving the group. With bus pairs, each line is measured at its RAW from end.
+  - `lines`: `id`, `from`, `to`, `p_mw`, `q_mvar`
+  - `net` and `abs_sum`: `p_mw`, `q_mvar`, and `total` (P + Q, as the console prints it)
+- `frequency`, one entry per island that has frequency limits (an empty list when no island has inertia):
+  - `island_bus`, `n_buses`, `gens`, `governors`
+  - `H` (s), and `K` and `D` (pu on the system base)
   - `limits_mw` (`rocof`, `qss`, `nadir`), `binding`
-  - `scheduled_import_mw`
+  - `scheduled_import_mw`, positive into the island, which is the opposite sign of the boundary flows. The limits hold in both directions, so an island is within them when the import's magnitude is at most the binding limit (for example −342.15 MW against 592.4 MW).
 - `voltage`, from `result["voltage_security"]`:
   - `verified`, `rounds`, `worst_indicator`;
   - `details`, one entry per round:
-    - `round` and the optimization status;
-    - `islands`: for each island, its bus, bus count, buses with generation, buses holding voltage, generators at the upper and at the lower reactive limit, slack P and Q, and the largest indicators (value, bus, V, load MW). It also has a `status` of `checked`, `no_generator` or `power_flow_failed`;
-    - `sheds`: bus, shed MW, of MW, and the indicator left after the shed.
-- `files`: `output_path`, `excel`, `raw`, `report`
+    - `round`, `termination_status` and `indicator_threshold`;
+    - `islands`, one entry per island. Each has a `status` of `checked`, `no_generator` or `power_flow_failed` and its `bus` and `n_buses`. A checked island also has:
+      - `n_with_generation`, `n_holding_voltage`;
+      - `at_upper_limit`, `at_lower_limit` (bus numbers);
+      - `slack_bus`, `slack_pg_mw`, `slack_qg_mvar`;
+      - `largest_indicators` (`value`, `bus`, `vm`, `pd_mw`);
+      - `worst_indicator`;
+      - `shed`: `null`, or `sheds` (`bus`, `shed_mw`, `of_mw`) with `indicator_after` and `indicator_after_bus`.
+  - `voltage.jl` keeps these in per unit (`slack_pg`, `pd`, `shed`, `of`). The worker converts them and adds the unit to the key.
+- `files`, from the per-run settings file:
+  - `output_path`, the absolute results folder;
+  - the file names in that folder: `settings`, `excel`, `raw`, `report` (`null` when not written).
 
 ### Run page layout (target after phase 8)
 
@@ -728,6 +762,11 @@ Test folders left in `results/psse`:
 
 `dev/send_jobs.py --full` prints control lines without cutting them (useful for checking `@@result` in phase 4b).
 
+*For the next phases:*
+- **Phase 2.** The extension points are `BOUNDARY_KINDS`, `GROUP_KINDS` and `find_group_buses` in `worker.jl`. `find_target` and `case_info` (`calc_zone_table`) need the area cases.
+- **Target zone name.** `target_zone` is passed exactly as given, so `run_info.json` shows the name as the GUI sends it. That is the record name from `case_info`, for example "Spartanb" for ACTIVSg500 and "SPARTANB" for ACTIVSg500z, where `islanding.jl` writes "spartanb".
+- **Not yet supported.** Settings with a non-empty `modifications` are rejected until phase 9.
+
 **Phase 2 (2026-11-20).**
 
 *What changed:*
@@ -815,7 +854,134 @@ Not exercised:
 
 Test folders added or reused: `savnw_flow_shed_gui_test_stages`, `_gui_test_freq`, `_gui_test_dyn`, `_gui_test_fail`, `_gui_test_volt`, and `ACTIVSg500_flow_shed_gui_test_ref`.
 
+**Phase 4a (2026-11-20).**
+
+*What changed:*
+- **`utils.jl`.** New `find_group_names`, `calc_generation_shares`, `calc_generation_status`, `calc_load_shedding_status` and `calc_branch_flows`. All return plain `Dict`s in per unit, and the first two take `group_kind` (`"zone"` or `"area"`). `print_generation_status`, `print_load_shedding_status` and `print_branch_flows` keep their signatures, which the archived `islanding2.jl` and `helpers/` still use, and now print from the `calc_*` data.
+  - **Bug fixed:** `print_branch_flows(...; detailed=true)` referred to an undefined `total_flow`. It now prints P + Q.
+- **`frequency.jl`.** New `calc_scheduled_import`.
+- **`voltage.jl`.** New `calc_island_voltage` and `calc_island_shed`. `print_island_voltage` and `print_island_shed` now take that data. `solve_voltage_secure_opf` collects each round in `result["voltage_security"]["details"]`.
+- **`islanding_core.jl`.** The settings file's summary keeps only `verified`, `rounds` and `worst_indicator`.
+- **`dev/send_jobs.py`.** It now prints UTF-8. It crashed on the ✓ in Julia's "Precompiling" output when its own output was redirected (cp1252).
+
+*How it was verified.* The console logs were captured before any edit and again after, with the dynamic simulation off and `gui_test_4a*` tags. They are identical apart from control lines and Ipopt's timing line:
+
+| run | lines |
+|---|---|
+| savnw `flow_shed` | 66 |
+| ACTIVSg500 SPARTANB with frequency security | 88 |
+| savnw with voltage security (verified in round 1) | 74 |
+| ACTIVSg500 SPARTANB with voltage security (5 rounds with sheds at 383, 469, 252 and 28 twice) | 334 |
+
+Other checks, in a scratch script:
+- **Voltage details.** They match the printed rounds: worst indicators, top buses and every shed with its MW.
+- **Area grouping on savnw.** Generation by area (FLAPCO = zones FIRST + PLANT, and so on) and load by area (1200, 1500, 500 MW) agree with the zone sums and with `case_info`.
+- **Settings file.** Its voltage summary has the three keys only.
+- **Old against new.** The committed `utils.jl` (`git show HEAD`) and the new one, loaded side by side on the same solved results, printed identical text:
+  - the whole-network generation block (case9, no zone records);
+  - `print_load_shedding_status`, with and without `detailed` (savnw, uniform 0.2 λ, 1594.31 MW shed);
+  - `print_branch_flows`.
+- **Other readers.** Nothing else reads `result["voltage_security"]` except `run_info` and the settings summary, which take named keys.
+
+*Load grouping.* In this phase a load's zone was its RAW record's own zone and its area was its bus's area. savnw's two loads at bus 154 carry area 2 while bus 154 is in area 1, which would put 1000 MW of load outside the LIGHTCO boundary into LIGHTCO. The user then decided that a load belongs to its bus's zone and area, and phase 4b made zones follow the bus too.
+
+*For phase 4b:*
+- **Units.** Every `calc_*` value is per unit:
+  - generation `pg`, `pmax`, `qg`, `qmax`;
+  - load `load`, `shed`, `pd`;
+  - flows `p`, `q`;
+  - voltage `slack_pg`, `slack_qg`, `pd`, `shed`, `of`.
+
+  Convert with `baseMVA`. Shares and indicators are already unitless.
+- **Generation groups.** These exist only for cases with zone or area records; otherwise use `"total"`.
+- **Flow sign.** Each branch flow is measured at the end inside the target and is positive leaving it. In the SPARTANB frequency run the net flow was -104.5 MW, the main island inside imported +32.03 MW, and the other small islands have no generation. That is consistent. It matches the console, not the objective's "into the target zone" wording in `CLAUDE.md`, so state the sign in the GUI.
+
+Not exercised: the planned/forced split shedding output; no objective produces it today.
+
+Test folders added: `savnw_flow_shed_gui_test_4a`, `savnw_flow_shed_gui_test_4a_volt`, `ACTIVSg500_flow_shed_gui_test_4a_freq`, `ACTIVSg500_flow_shed_gui_test_4a_volt` and `ACTIVSg500_flow_shed_gui_test_4a_check`.
+
+**Phase 4b (2026-11-20).**
+
+*What changed:*
+- **`run_from_settings`.** It now returns what the summary needs:
+  - the result;
+  - a copy of the network data taken before `run_islanding`, with the embedded `frequency_islands` added back;
+  - the settings and the target;
+  - the results folder and the start time.
+- **`handle_run`.** It sends the stage `summary` and then `@@result`.
+- **`calc_result_summary` and its helpers** build the summary as **Contracts: Result summary** now describes it, from:
+  - the phase 4a `calc_*` functions;
+  - `calc_scheduled_import`;
+  - `result["voltage_security"]`;
+  - the per-run settings file, for the files and durations. It is found as the newest finished `settings_*.json` written since the run started.
+- **`send_control`** writes NaN and Infinity, which Python's `json` reads, instead of failing.
+- **Load grouping (the user's decision).** A load belongs to its bus's zone and area everywhere. `calc_load_shedding_status`, `scale_loads!(data, scale, zone_name)` and `print_network_summary` no longer read the load record's own zone.
+- **Study grouping (the user's decision).** An area study is reported by area throughout and a zone study by zone, in the console as well as in `@@result`. There is no mixing of the two kinds.
+  - `find_group_kind` in `utils.jl` picks the kind:
+    - the target's own kind;
+    - for bus pairs, zones when the buses are in more than one zone, otherwise areas when they are in more than one area.
+  - `run_islanding` passes it to `print_generation_status` and `print_load_shedding_status`, which have a new `group_kind` keyword (default `"zone"`). It also uses it for the penalty scope word in `run_info.json`.
+  - The worker uses the same function for the summary.
+  - `calc_generation_status` also lists a group that has no record when the buses are in more than one group. No current case has such a group, but a future case could.
+  - The rest of the pipeline follows the same kind:
+    - `run_info.json` carries `group_kind`;
+    - the Excel bus sheet's group column is the area or the zone;
+    - the ANDES report puts the target area in its header and title, and totals the UFLS shed by area or zone in the console and the header. Each event line names its group.
+  - The PSS®E script is no longer updated, by the user's decision, so it keeps its zone totals.
+- **`islanding.jl` targets an area too.** `target_kind` (`"zone"` or `"area"`) and `target_name` replace the hardcoded zone. Both `target_zone` and `target_area` are reset to `nothing` first, so a group left from an earlier `include` in the same session is not passed. `run_islanding` now refuses a zone and an area together.
+  - Checked with temporary copies run in one session. The default ACTIVSg500 SPARTANB zone setting gave the phase 1 objective 12140.983057017995 and 407.43 MW. savnw area LIGHTCO, run after it, gave 9097.028165220057 and 25.88 MW, reported by area like the worker's area run.
+  - Test folders: `ACTIVSg500_flow_shed_gui_test_ref` (reused) and `savnw_flow_shed_gui_test_ref_area`.
+- **Export fix in `src/io/pti.jl`.** `export_pti` wrote zone and owner records with their positions (savnw zones 1 to 4) instead of their numbers (1, 2, 5, 77). It now writes `"i"`, as the area records already did. ANDES reads the zone names from those records.
+- **Contract.** **Contracts: Result summary** was rewritten to the final keys. The flow line now gives the measured sign; it used to say "oriented into the target group".
+
+*How it was verified:*
+- **The four 4a jobs, rerun with `--full` on the final worker.** Their logs are identical to phase 4a's, apart from the blank line printed before each new control line.
+- **Lines and buses.** The console does not print single lines or shed buses at `detailed=false`. They were checked through the sums they add up to, and through bus 203 against the zone and area totals.
+- **`@@result` against the printed reports:**
+  - **savnw:**
+    - SECOND generation 14.0334 pu became 1403.34 MW;
+    - net P 6.287 pu became 628.67 MW;
+    - 0 MW shed of 3200 MW.
+  - **ACTIVSg500 with frequency security:**
+    - generation by zone matches;
+    - Spartanb shed 408.68 MW of 1115.53 MW (36.64 %);
+    - net P −1.045 pu became −104.51 MW;
+    - island 23 has H 29.664, K 145.505, limits 49.44, 72.75 and 32.03 MW with nadir binding, and an import of 32.03 MW;
+    - island 1 imports −342.15 MW.
+  - **Voltage.** A scratch script rebuilt the console's voltage lines from `details` and got them identical:
+    - savnw: 13 lines, verified in round 1, worst indicator 0.396;
+    - ACTIVSg500: 95 lines over 5 rounds.
+- **savnw area LIGHTCO with the ANDES simulation:**
+  - 25.88 MW shed of 3200 MW, with bus 203 at its original 300 MW, so the copy taken before the export works;
+  - the area groups equal the zone sums;
+  - `files` names the raw, the Excel file and `dynamic_channels_20261120_181931.html`, and the durations are there.
+- **AU14GenModel area "3":** groups "1" to "5", 183.82 MW shed.
+- **case9 with bus pairs 4-5 and 8-9 (no zone records).** There are no generation groups, and the total of 2.7466 pu matches as 274.66 MW. The one load group is named "1" (the console prints "Zone 1").
+- **Study grouping**, after `find_group_kind` was added:
+  - **Zone runs unchanged.** The four 4a jobs (zone and bus-pair runs on zone cases) still print exactly the phase 4a console.
+  - **savnw area LIGHTCO.** The console now prints "Generation status by area" and "Load Shed by Area" (FLAPCO, LIGHTCO, WORLD; 25.88 MW shed in LIGHTCO). `@@result` matches, and `run_info.json` has "inside area".
+  - **AU14GenModel with area 3's boundary as bus pairs (309-102, 315-509).** It picked areas by itself: 1 zone and 5 areas, 198.76 MW shed in area "3".
+  - **case9** still prints the whole-network block.
+  - **ANDES with UFLS** (`opf_shed`, so the islands import and the relays act):
+    - savnw area LIGHTCO and zone SECOND shed the same 73.51 MW (buses 205 and 203). The area study shows "LIGHTCO", "UFLS shed by area" and "Area: LIGHTCO" in the header, and an `area` column in Excel. The zone study shows "SECOND" and "by zone".
+    - ACTIVSg500 zone SPARTANB: 102 events, 164.75 MW in Spartanb.
+    - The exported savnw RAW has zone records 1, 2, 5, 77 and owner records 1, 2, 5, 11, 22, 55, 100.
+    - `read_group_names` and `calc_ufls_by_group`, run on exported savnw RAWs with events in four zones: before the fix zones 5 and 77 had no name; after it they are FIFTH and PLANT. The area totals add up over several groups (FLAPCO 2 events).
+    - The `export_pti` round trip of `test/pti.jl` passes on case3 and case30. On savnw, its zones and owners now come back unchanged.
+- **Errors.** An unknown zone sent `@@error` and no `@@result`, and the next ping answered.
+- **Old against new.** The committed `scale_loads!` and `print_network_summary` were compared with the new ones on every zone of savnw and ACTIVSg500: identical text and loads.
+  - `print_network_summary` throws for zones without generators or loads (savnw FIRST and PLANT), both before and after this phase.
+
 *For the next phases:*
-- **Phase 2.** The extension points are `BOUNDARY_KINDS`, `GROUP_KINDS` and `find_group_buses` in `worker.jl`. `find_target` and `case_info` (`calc_zone_table`) need the area cases.
-- **Target zone name.** `target_zone` is passed exactly as given, so `run_info.json` shows the name as the GUI sends it. That is the record name from `case_info`, for example "Spartanb" for ACTIVSg500 and "SPARTANB" for ACTIVSg500z, where `islanding.jl` writes "spartanb".
-- **Not yet supported.** Settings with a non-empty `modifications` are rejected until phase 9.
+- **Line length.** The largest `@@result` was 23 KB (ACTIVSg500 with 5 voltage rounds). That is below asyncio's 64 KiB default, but phase 5 still sets the large `limit`.
+- **Results folder.** The worker builds the folder name the way `run_islanding` does (`calc_output_path`). Keep the two in step.
+- **Generation groups** exist only for cases with records of that kind. Otherwise show `total` alone.
+- **Summary errors.** An error while building the summary fails the job at the `summary` stage, although the run's files exist.
+- **Left out.** `@@result` leaves out the planned and forced split of shedding (`planned_shed`, `forced_shed`), because no objective produces it today. Add it if one does.
+
+Test folders added:
+- `savnw_flow_shed_gui_test_4b_area_dyn`, `case9_flow_shed_gui_test_4b` and `AU14GenModel_flow_shed_gui_test_pairs`;
+- `savnw_opf_shed_gui_test_area_ufls`, `_zone_ufls` and `_pairs_ufls`;
+- `ACTIVSg500_opf_shed_gui_test_zone_ufls`.
+
+Reused: `savnw_flow_shed_gui_test_area`, `savnw_flow_shed_gui_test_4a`, `savnw_flow_shed_gui_test_4a_volt`, `ACTIVSg500_flow_shed_gui_test_4a_freq`, `ACTIVSg500_flow_shed_gui_test_4a_volt` and `AU14GenModel_flow_shed_gui_test_area`.

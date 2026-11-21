@@ -4,7 +4,8 @@ frequency stats and the Plotly HTML report.
 
 Copied from psse_scripts/dynamic.py, which does the same after its simulation; it only needs a
 channel DataFrame with PSS®E channel names ("FREQ <bus> ...", "VOLT", "POWR", "VARS", "PLOD")
-and a "Time(s)" column. Keep the two in sync.
+and a "Time(s)" column. The PSS®E script is no longer updated, so features added since (the
+target area and the UFLS shed by the study's zones or areas in the header) exist only here.
 """
 
 import json
@@ -519,13 +520,15 @@ def load_run_info(output_dir):
 
 
 def build_page_title(info, default="Dynamic Simulation Channels"):
-    parts = [str(info[key]) for key in ("target_zone", "objective", "flow_model") if info.get(key)]
+    parts = [str(info[key]) for key in ("target_zone", "target_area", "objective", "flow_model") if info.get(key)]
     return ", ".join(parts) if parts else default
 
 
-def build_run_info_html(info, ufls_shed_mw=None):
+def build_run_info_html(info, ufls_shed_mw=None, ufls_by_group=None):
     """Build a compact header bar from run info.
 
+    `ufls_by_group` is the UFLS shed per zone or area of the study (name and MW), in the
+    study's kind of group (`info["group_kind"]`).
     Returns an empty string if no relevant field is present.
     """
 
@@ -539,6 +542,8 @@ def build_run_info_html(info, ufls_shed_mw=None):
         items.append(("Simulator", str(info["simulator"])))
     if info.get("target_zone"):
         items.append(("Zone", str(info["target_zone"])))
+    if info.get("target_area"):
+        items.append(("Area", str(info["target_area"])))
     if info.get("objective"):
         items.append(("Objective", str(info["objective"])))
     if info.get("flow_model"):
@@ -561,6 +566,10 @@ def build_run_info_html(info, ufls_shed_mw=None):
             items.append(("Preemptive shed", f"{info['preemptive_shed_mw']:.2f} MW"))
         if ufls_shed_mw is not None:
             items.append(("UFLS shed", f"{ufls_shed_mw:.2f} MW"))
+        if ufls_by_group:
+            group_word = str(info.get("group_kind", "zone"))
+            group_texts = [f"{group['name']} {group['MW']:.2f} MW" for group in ufls_by_group]
+            items.append((f"UFLS shed by {group_word}", ", ".join(group_texts)))
 
     if not items:
         return ""
@@ -579,10 +588,11 @@ def build_signal_stats_html(keyword, plotted_series, wtvsi_summary=None):
     return ""
 
 
-def write_html_report(df, output_dir, now, wtvsi_summary, ufls_total_p_mw=None, simulator=None):
+def write_html_report(df, output_dir, now, wtvsi_summary, ufls_total_p_mw=None, simulator=None, ufls_by_group=None):
     """
     Plot the FREQ, VOLT, POWR, VARS and PLOD channels of `df` with their stats into
-    `dynamic_channels_<now>.html` in `output_dir`. Returns the file path.
+    `dynamic_channels_<now>.html` in `output_dir`, under a header with the run information and
+    the UFLS shed (in total and `ufls_by_group`). Returns the file path.
     """
     plot_blocks = []
     plot_count = 0
@@ -690,7 +700,7 @@ def write_html_report(df, output_dir, now, wtvsi_summary, ufls_total_p_mw=None, 
         ".stats-table th{color:#555;background:#fafafa;font-weight:600;}"
         ".stats-empty{color:#666;font-size:13px;}</style></head><body>"
     )
-    html_doc += build_run_info_html(run_info, ufls_total_p_mw)
+    html_doc += build_run_info_html(run_info, ufls_total_p_mw, ufls_by_group)
     html_doc += "".join([f"<div class='{block['kind']}'>{block['html']}</div>" for block in plot_blocks])
     html_doc += "</body></html>"
 

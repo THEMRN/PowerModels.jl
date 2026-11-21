@@ -5,8 +5,9 @@
 # It reads one JSON job per line on stdin, for example
 #   {"id": 7, "type": "run", "settings": {...}}
 # prints its log as the runners always do, and marks job events with control lines
-# that start with "@@" (@@ready, @@start, @@data, @@error, @@done). The protocol and
-# the settings schema are in runners/gui/gui_plan.md ("Contracts").
+# that start with "@@" (@@ready, @@start, @@stage, @@data, @@result, @@error, @@done). A run
+# ends with @@result, the report information in MW. The protocol, the settings schema and the
+# result summary are in runners/gui/gui_plan.md ("Contracts").
 #
 # Packages load once; the runner files are re-included before every run, so edits to
 # them apply without a restart. Edits to src/, frequency.jl or voltage.jl need a restart.
@@ -34,6 +35,8 @@ const GROUP_RECORDS = Dict(                       # kind => (network data key of
     "area" => ("area interchange", "arname"),
 )
 const MAX_ERROR_MESSAGE = 2000                    # characters of an error message sent in @@error
+const MW_DIGITS = 2                               # MW, Mvar and % in @@result, as the console prints them
+const PU_DIGITS = 3                               # H, K, D, voltages (pu) and voltage indicators in @@result, as the console prints them
 const STAGE_LABELS = Dict(                        # stage => label shown by the GUI (gui_plan.md, "Stages")
     "load_case" => "Load case",
     "prepare" => "Prepare",
@@ -56,7 +59,7 @@ function send_control(kind::AbstractString, payload::AbstractDict)
     flush(stdout)
     Libc.flush_cstdio()
     print(stdout, "\n@@", kind, " ")
-    JSON3.write(stdout, payload)
+    JSON3.write(stdout, payload; allow_inf=true)      # NaN and Infinity, which Python's json reads
     println(stdout)
     flush(stdout)
 end
@@ -309,9 +312,20 @@ function calc_shed_penalties(network_data, penalties, lambda::Real)
     return bus_penalty
 end
 
+"Results folder of a run, named as run_islanding names it: results/psse/<case>_<objective>[_<tag>]."
+function calc_output_path(case_name::AbstractString, objective::AbstractString, output_tag)
+    output_path = "results/psse/$(case_name)_$(objective)"
+    if output_tag !== nothing
+        output_path *= "_$(output_tag)"
+    end
+    return output_path
+end
+
 """
 Run one islanding scenario from settings (schema v1), the way islanding.jl's hardcoded block does.
-`progress` is called with each stage name (gui_plan.md, "Stages"). Returns the solve result.
+`progress` is called with each stage name (gui_plan.md, "Stages"). Returns what the result summary
+needs: the solve `result`, the network data as the console reports read it (with the embedded
+`frequency_islands`), the settings, the target, the results folder and the start time (Unix).
 """
 function run_from_settings(settings; progress=stage -> nothing)
     problems = find_settings_problems(settings)
@@ -342,11 +356,17 @@ function run_from_settings(settings; progress=stage -> nothing)
         penalties=load_shedding_penalties
     )
 
+    # the network as the console reports read it: before the export, run_islanding writes the
+    # solution into network_data, which replaces each load's pd by its served load
+    report_data = deepcopy(network_data)
+
     # run the shared pipeline (solve, reports, export, dynamic simulation)
     output_tag = isempty(strip(settings["output_tag"])) ? nothing : strip(settings["output_tag"])
-    return run_islanding(
+    case_name = case_name_of(case_path)
+    run_started = time()
+    result = run_islanding(
         network_data;
-        case_name=case_name_of(case_path),
+        case_name=case_name,
         case_files=case_files,
         objective=settings["objective"],
         lambda=lambda,
@@ -366,6 +386,350 @@ function run_from_settings(settings; progress=stage -> nothing)
         simulator=settings["simulator"],
         progress=progress,
         run_settings=settings,
+    )
+    if haskey(network_data, "frequency_islands")
+        report_data["frequency_islands"] = network_data["frequency_islands"]     # embedded by run_islanding
+    end
+
+    return (
+        result=result,
+        network_data=report_data,
+        settings=settings,
+        target=target,
+        output_path=calc_output_path(case_name, settings["objective"], output_tag),
+        started=run_started,
+    )
+end
+
+
+# ==================== Result summary ====================
+"`value` rounded to `digits`, or `nothing` when it is not a finite number (JSON has no NaN)."
+function round_value(value::Real, digits::Integer)
+    isfinite(value) || return nothing
+    return round(value, digits=digits)
+end
+
+"A per-unit power in MW (or Mvar), rounded for @@result."
+to_mw(value_pu::Real, base_mva::Real) = round_value(value_pu * base_mva, MW_DIGITS)
+
+"`part` as a share of `whole` (%), `nothing` when the whole is 0."
+function calc_share(part::Real, whole::Real)
+    whole == 0 && return nothing
+    return round_value(100 * part / whole, MW_DIGITS)
+end
+
+"""
+The finished settings record that run_islanding wrote into `output_path` at or after `since`
+(Unix time), as `(file, record)`; `nothing` when there is none.
+"""
+function find_run_record(output_path::AbstractString, since::Real)
+    isdir(output_path) || return nothing
+    newest_file = nothing
+    newest_time = since
+    for file in readdir(output_path)
+        startswith(file, "settings_") && endswith(file, ".json") || continue
+        modified = mtime(joinpath(output_path, file))
+        modified >= newest_time || continue
+        newest_file = file
+        newest_time = modified
+    end
+    newest_file === nothing && return nothing
+
+    record = JSON3.read(read(joinpath(output_path, newest_file), String), Dict{String,Any}; allow_inf=true)
+    get(record, "status", "") == "finished" || return nothing
+    return (file=newest_file, record=record)
+end
+
+"P and Q of generators (MW, Mvar) with the used shares of Pmax and Qmax (%), from calc_generation_status sums."
+function calc_generation_row(sums, base_mva::Real)
+    return Dict{String,Any}(
+        "pg_mw" => to_mw(sums["pg"], base_mva),
+        "pmax_mw" => to_mw(sums["pmax"], base_mva),
+        "qg_mvar" => to_mw(sums["qg"], base_mva),
+        "qmax_mvar" => to_mw(sums["qmax"], base_mva),
+        "p_used_pct" => round_value(sums["p_used_pct"], MW_DIGITS),
+        "q_used_pct" => round_value(sums["q_used_pct"], MW_DIGITS),
+    )
+end
+
+"Generation by zone or area (one row per record of the case, none without records) and in total."
+function calc_generation_summary(network_data, result, group_kind::AbstractString)
+    base_mva = network_data["baseMVA"]
+    status = calc_generation_status(network_data, result; group_kind=group_kind)
+
+    groups = Dict{String,Any}[]
+    for group in status["groups"]
+        row = calc_generation_row(group, base_mva)
+        row["index"] = group["index"]
+        row["name"] = group["name"]
+        push!(groups, row)
+    end
+    return Dict{String,Any}(
+        "group_kind" => group_kind,
+        "groups" => groups,
+        "total" => calc_generation_row(status["total"], base_mva),
+    )
+end
+
+"""
+Load and shed (MW) in total, by zone or area, and at every load bus (the loads at a bus added
+up). Group names are the record names, or the group number as in case_info.
+"""
+function calc_load_shed_summary(network_data, result, group_kind::AbstractString)
+    base_mva = network_data["baseMVA"]
+    status = calc_load_shedding_status(result, network_data; group_kind=group_kind)
+    group_names = find_group_names(network_data, group_kind)
+
+    groups = Dict{String,Any}[]
+    for group in status["groups"]
+        push!(groups, Dict{String,Any}(
+            "index" => group["index"],
+            "name" => get(group_names, group["index"], string(group["index"])),
+            "load_mw" => to_mw(group["load"], base_mva),
+            "shed_mw" => to_mw(group["shed"], base_mva),
+            "shed_pct" => calc_share(group["shed"], group["load"]),
+        ))
+    end
+
+    # every load bus, the shed loads from the status
+    load_by_bus = Dict{Int,Float64}()
+    for (_, load) in network_data["load"]
+        bus = Int(load["load_bus"])
+        load_by_bus[bus] = get(load_by_bus, bus, 0.0) + load["pd"]
+    end
+    shed_by_bus = Dict{Int,Float64}()
+    for load in status["loads"]
+        shed_by_bus[load["bus"]] = get(shed_by_bus, load["bus"], 0.0) + load["shed"]
+    end
+    buses = Dict{String,Any}[]
+    for bus in sort(collect(keys(load_by_bus)))
+        bus_load = load_by_bus[bus]
+        bus_shed = get(shed_by_bus, bus, 0.0)
+        push!(buses, Dict{String,Any}(
+            "bus" => bus,
+            "pd_mw" => to_mw(bus_load, base_mva),
+            "shed_mw" => to_mw(bus_shed, base_mva),
+            "shed_pct" => calc_share(bus_shed, bus_load),
+        ))
+    end
+
+    return Dict{String,Any}(
+        "group_kind" => group_kind,
+        "total_load_mw" => to_mw(status["total_load"], base_mva),
+        "total_shed_mw" => to_mw(status["total_shed"], base_mva),
+        "groups" => groups,
+        "buses" => buses,
+    )
+end
+
+"P and Q (MW, Mvar) of a flow sum from calc_branch_flows; `total` is P + Q, as the console prints it."
+function calc_flow_sums(sums, base_mva::Real)
+    return Dict{String,Any}(
+        "p_mw" => to_mw(sums["p"], base_mva),
+        "q_mvar" => to_mw(sums["q"], base_mva),
+        "total" => to_mw(sums["total"], base_mva),
+    )
+end
+
+"""
+Flows on the boundary lines (MW, Mvar). With a target zone or area (`"oriented"`), each line is
+measured at its end inside the group (`from`) and is positive leaving it; with bus pairs, at its
+RAW from end.
+"""
+function calc_flow_summary(network_data, result, target)
+    base_mva = network_data["baseMVA"]
+    flows = calc_branch_flows(result, network_data, target.lines, target.buses)
+
+    lines = Dict{String,Any}[]
+    for line in flows["lines"]
+        push!(lines, Dict{String,Any}(
+            "id" => line["id"],
+            "from" => line["from"],
+            "to" => line["to"],
+            "p_mw" => to_mw(line["p"], base_mva),
+            "q_mvar" => to_mw(line["q"], base_mva),
+        ))
+    end
+    return Dict{String,Any}(
+        "oriented" => target.buses !== nothing,
+        "lines" => lines,
+        "net" => calc_flow_sums(flows["net"], base_mva),
+        "abs_sum" => calc_flow_sums(flows["abs_sum"], base_mva),
+    )
+end
+
+"""
+Each island's frequency response (H in s, K and D in pu on the system base), its import limits
+(MW) with the binding one, and its solved scheduled import (MW, positive into the island).
+"""
+function calc_frequency_summary(network_data, result)
+    base_mva = network_data["baseMVA"]
+    islands = Dict{String,Any}[]
+    for island in network_data["frequency_islands"]
+        limits = island["limits"]
+        limits_mw = Dict{String,Any}()
+        for (name, limit) in limits
+            limits_mw[name] = to_mw(limit, base_mva)
+        end
+        scheduled_import = calc_scheduled_import(network_data, result, island)
+
+        push!(islands, Dict{String,Any}(
+            "island_bus" => first(island["buses"]),
+            "n_buses" => length(island["buses"]),
+            "gens" => island["gens"],
+            "governors" => island["governors"],
+            "H" => round_value(island["inertia"], PU_DIGITS),
+            "K" => round_value(island["governor_gain"], PU_DIGITS),
+            "D" => round_value(island["damping"], PU_DIGITS),
+            "limits_mw" => limits_mw,
+            "binding" => argmin(limits),
+            "scheduled_import_mw" => to_mw(scheduled_import, base_mva),
+        ))
+    end
+    return islands
+end
+
+"A shed sized in a voltage round: each bus's shed and the load it was taken from (MW), and the worst indicator it leaves."
+function calc_voltage_shed_summary(island_shed, base_mva::Real)
+    sheds = Dict{String,Any}[]
+    for shed in island_shed["sheds"]
+        push!(sheds, Dict{String,Any}(
+            "bus" => shed["bus"],
+            "shed_mw" => to_mw(shed["shed"], base_mva),
+            "of_mw" => to_mw(shed["of"], base_mva),
+        ))
+    end
+    indicator_after = island_shed["indicator_after"]
+    if indicator_after !== nothing
+        indicator_after = round_value(indicator_after, PU_DIGITS)
+    end
+    return Dict{String,Any}(
+        "sheds" => sheds,
+        "indicator_after" => indicator_after,
+        "indicator_after_bus" => island_shed["indicator_after_bus"],
+    )
+end
+
+"One island of a voltage round with P and Q in MW and Mvar; an island that was not checked has only its status, bus and size."
+function calc_island_voltage_summary(island, base_mva::Real)
+    summary = Dict{String,Any}(
+        "status" => island["status"],
+        "bus" => island["bus"],
+        "n_buses" => island["n_buses"],
+    )
+    island["status"] == "checked" || return summary
+
+    largest_indicators = Dict{String,Any}[]
+    for indicator in island["largest_indicators"]
+        push!(largest_indicators, Dict{String,Any}(
+            "value" => round_value(indicator["value"], PU_DIGITS),
+            "bus" => indicator["bus"],
+            "vm" => round_value(indicator["vm"], PU_DIGITS),
+            "pd_mw" => to_mw(indicator["pd"], base_mva),
+        ))
+    end
+    shed = nothing
+    if island["shed"] !== nothing
+        shed = calc_voltage_shed_summary(island["shed"], base_mva)
+    end
+
+    summary["n_with_generation"] = island["n_with_generation"]
+    summary["n_holding_voltage"] = island["n_holding_voltage"]
+    summary["at_upper_limit"] = island["at_upper_limit"]
+    summary["at_lower_limit"] = island["at_lower_limit"]
+    summary["slack_bus"] = island["slack_bus"]
+    summary["slack_pg_mw"] = to_mw(island["slack_pg"], base_mva)
+    summary["slack_qg_mvar"] = to_mw(island["slack_qg"], base_mva)
+    summary["largest_indicators"] = largest_indicators
+    summary["worst_indicator"] = round_value(island["worst_indicator"], PU_DIGITS)
+    summary["shed"] = shed
+    return summary
+end
+
+"The voltage security results (`result[\"voltage_security\"]`) with each round's details, P and Q in MW and Mvar."
+function calc_voltage_summary(voltage_security, base_mva::Real)
+    details = Dict{String,Any}[]
+    for round_detail in voltage_security["details"]
+        islands = Dict{String,Any}[]
+        for island in round_detail["islands"]
+            push!(islands, calc_island_voltage_summary(island, base_mva))
+        end
+        push!(details, Dict{String,Any}(
+            "round" => round_detail["round"],
+            "termination_status" => round_detail["termination_status"],
+            "indicator_threshold" => round_detail["indicator_threshold"],
+            "islands" => islands,
+        ))
+    end
+    return Dict{String,Any}(
+        "verified" => voltage_security["verified"],
+        "rounds" => voltage_security["rounds"],
+        "worst_indicator" => round_value(voltage_security["worst_indicator"], PU_DIGITS),
+        "details" => details,
+    )
+end
+
+"The results folder (absolute) and the names of the files the run wrote, from its settings record."
+function calc_files_summary(output_path::AbstractString, run_record)
+    files = Dict{String,Any}(
+        "output_path" => abspath(output_path),
+        "settings" => nothing,
+        "excel" => nothing,
+        "raw" => nothing,
+        "report" => nothing,
+    )
+    run_record === nothing && return files
+
+    files["settings"] = run_record.file
+    for name in ("excel", "raw", "report")
+        files[name] = run_record.record["files"][name]
+    end
+    return files
+end
+
+"""
+The report information of a finished run, sent as @@result (gui_plan.md, "Result summary"), in
+MW and Mvar. Grouped like the console reports (`find_group_kind`); parts whose feature was off
+are `nothing`.
+"""
+function calc_result_summary(finished_run)
+    result = finished_run.result
+    network_data = finished_run.network_data
+    settings = finished_run.settings
+    target = finished_run.target
+    base_mva = network_data["baseMVA"]
+    group_kind = find_group_kind(network_data, target.zone, target.area)
+    run_record = find_run_record(finished_run.output_path, finished_run.started)
+
+    objective = result["objective"]
+    isfinite(objective) || (objective = nothing)
+    seconds = nothing
+    if run_record !== nothing
+        seconds = run_record.record["seconds"]
+    end
+    load_shed = nothing
+    if occursin("shed", settings["objective"])
+        load_shed = calc_load_shed_summary(network_data, result, group_kind)
+    end
+    frequency = nothing
+    if haskey(network_data, "frequency_islands")
+        frequency = calc_frequency_summary(network_data, result)
+    end
+    voltage = nothing
+    if haskey(result, "voltage_security")
+        voltage = calc_voltage_summary(result["voltage_security"], base_mva)
+    end
+
+    return Dict{String,Any}(
+        "termination_status" => string(result["termination_status"]),
+        "objective" => objective,
+        "seconds" => seconds,
+        "generation" => calc_generation_summary(network_data, result, group_kind),
+        "load_shed" => load_shed,
+        "boundary_flows" => calc_flow_summary(network_data, result, target),
+        "frequency" => frequency,
+        "voltage" => voltage,
+        "files" => calc_files_summary(finished_run.output_path, run_record),
     )
 end
 
@@ -392,11 +756,19 @@ function handle_case_info(job)
     ))
 end
 
-"Run a scenario: re-include the runner files so edits apply, then run the settings, reporting each stage."
+"""
+Run a scenario: re-include the runner files so edits apply, run the settings reporting each
+stage, then send the report information as @@result. Both calls go through invokelatest, so they
+see the re-included runner functions.
+"""
 function handle_run(job)
     include_runner_files()
     progress = stage -> send_stage(job, stage)
-    Base.invokelatest(run_from_settings, job["settings"]; progress=progress)
+    finished_run = Base.invokelatest(run_from_settings, job["settings"]; progress=progress)
+
+    send_stage(job, "summary")
+    summary = Base.invokelatest(calc_result_summary, finished_run)
+    send_control("result", Dict("id" => get(job, "id", nothing), "summary" => summary))
     return nothing
 end
 

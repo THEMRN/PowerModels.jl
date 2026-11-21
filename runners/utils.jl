@@ -298,18 +298,12 @@ function scale_loads!(network_data, scale::Real, buses=nothing)
 end
 
 # Scale all loads in a zone (matched case-insensitively) by a fixed percentage.
+# A load belongs to its bus's zone.
 function scale_loads!(network_data, scale::Real, zone_name::AbstractString)
-    zone_index = nothing
-    for (_, zone) in network_data["zone"]
-        if lowercase(strip(zone["zoname"])) == lowercase(strip(zone_name))
-            zone_index = zone["i"]
-            break
-        end
-    end
-    zone_index === nothing && error("Zone '$zone_name' not found in network data")
+    zone_buses = Set(find_buses_by_zone(network_data, zone_name))
 
     for (i, load) in network_data["load"]
-        load["zone"] == zone_index || continue
+        Int(load["load_bus"]) in zone_buses || continue
         println("Scaling load at bus $(load["load_bus"]) (zone '$zone_name') by $((scale - 1) * 100)%")
         load["pd"] *= scale
         load["qd"] *= scale
@@ -466,17 +460,23 @@ function reduce_graph(graph)
     return graph
 end
 
-function print_branch_flows(result, modified_network_data, target_lines, detailed=false, zone=nothing)
-    println("---------------------------")
+"""
+    calc_branch_flows(result, network_data, target_lines, zone=nothing)
 
-    # flows are oriented into `zone`: a zone name, or the target buses themselves (e.g. an area's)
+Flows (pu) on the in-service target lines. `"lines"`: id, from, to, p, q, with `from` the end
+the flow is measured at: the end inside `zone` (a zone name, or the target buses themselves,
+e.g. an area's) when the line's from end is outside it, else the RAW from end. `"net"` and
+`"abs_sum"`: p, q and total (p + q) summed over the lines, signed and absolute.
+"""
+function calc_branch_flows(result, network_data, target_lines, zone=nothing)
     zone_buses = nothing
     if zone isa AbstractString
-        zone_buses = find_buses_by_zone(modified_network_data, zone)
+        zone_buses = find_buses_by_zone(network_data, zone)
     elseif zone !== nothing
         zone_buses = Set(zone)
     end
 
+    lines = Dict{String,Any}[]
     p_flow_sum = 0.0
     q_flow_sum = 0.0
     total_flow_sum = 0.0
@@ -484,7 +484,7 @@ function print_branch_flows(result, modified_network_data, target_lines, detaile
     abs_q_flow_sum = 0.0
     abs_total_flow_sum = 0.0
     for line in target_lines
-        branch = modified_network_data["branch"][string(line)]
+        branch = network_data["branch"][string(line)]
         branch["br_status"] != 0 || continue        # out of service: no flow, no solution entry
         f_bus = Int(branch["f_bus"])
         t_bus = Int(branch["t_bus"])
@@ -501,18 +501,36 @@ function print_branch_flows(result, modified_network_data, target_lines, detaile
 
         p_flow = result["solution"]["branch"][string(line)][p_flow_key]
         q_flow = result["solution"]["branch"][string(line)][q_flow_key]
+        push!(lines, Dict{String,Any}("id" => line, "from" => fr, "to" => to, "p" => p_flow, "q" => q_flow))
         p_flow_sum += p_flow
         q_flow_sum += q_flow
         total_flow_sum += p_flow + q_flow
         abs_p_flow_sum += abs(p_flow)
         abs_q_flow_sum += abs(q_flow)
         abs_total_flow_sum += abs(p_flow) + abs(q_flow)
-        if detailed
-            println("Line $line (Bus $fr -> Bus $to) flow: $total_flow")
+    end
+
+    return Dict{String,Any}(
+        "lines" => lines,
+        "net" => Dict("p" => p_flow_sum, "q" => q_flow_sum, "total" => total_flow_sum),
+        "abs_sum" => Dict("p" => abs_p_flow_sum, "q" => abs_q_flow_sum, "total" => abs_total_flow_sum),
+    )
+end
+
+"Print the flows on the target lines (`calc_branch_flows`): their net and absolute sums, and each line when `detailed`."
+function print_branch_flows(result, modified_network_data, target_lines, detailed=false, zone=nothing)
+    println("---------------------------")
+    flows = calc_branch_flows(result, modified_network_data, target_lines, zone)
+
+    if detailed
+        for line in flows["lines"]
+            println("Line $(line["id"]) (Bus $(line["from"]) -> Bus $(line["to"])) flow: $(line["p"] + line["q"])")
         end
     end
-    println("Total net flow through target lines:\t\t P = $(round(p_flow_sum, digits=3)), Q = $(round(q_flow_sum, digits=3)), Total = $(round(total_flow_sum, digits=3))")
-    println("Sum of absolute flows through target lines:\t P = $(round(abs_p_flow_sum, digits=3)), Q = $(round(abs_q_flow_sum, digits=3)), Total = $(round(abs_total_flow_sum, digits=3))")
+    net = flows["net"]
+    abs_sum = flows["abs_sum"]
+    println("Total net flow through target lines:\t\t P = $(round(net["p"], digits=3)), Q = $(round(net["q"], digits=3)), Total = $(round(net["total"], digits=3))")
+    println("Sum of absolute flows through target lines:\t P = $(round(abs_sum["p"], digits=3)), Q = $(round(abs_sum["q"], digits=3)), Total = $(round(abs_sum["total"], digits=3))")
 end
 
 """
@@ -562,95 +580,155 @@ function print_zone_capacity(network_data, zone_name=nothing)
 end
 
 """
-    print_generation_status(network_data, result)
+The kind of group ("zone" or "area") a study's reports group by: the target's own kind, and with
+no target group (a bus-pair boundary) the kind the case divides its buses into: zones when the
+buses are in more than one zone, else areas when they are in more than one area, else zones.
+"""
+function find_group_kind(network_data, target_zone=nothing, target_area=nothing)
+    target_area !== nothing && return "area"
+    target_zone !== nothing && return "zone"
+    for group_kind in ("zone", "area")
+        groups = Set{Int}()
+        for (_, bus) in network_data["bus"]
+            push!(groups, Int(bus[group_kind]))
+        end
+        length(groups) > 1 && return group_kind
+    end
+    return "zone"
+end
 
-Print active generation status by zone:
+"Names of the case's zone or area records (`group_kind` \"zone\" or \"area\"), by index."
+function find_group_names(network_data, group_kind::AbstractString)
+    group_kind in ("zone", "area") || error("unknown group kind \"$group_kind\", use \"zone\" or \"area\"")
+    records_key = group_kind == "zone" ? "zone" : "area interchange"
+    name_field = group_kind == "zone" ? "zoname" : "arname"
+    names = Dict{Int,String}()
+    for (_, record) in get(network_data, records_key, Dict())
+        names[Int(record["i"])] = strip(string(record[name_field]))
+    end
+    return names
+end
+
+"Generation sums (pu) with the used shares of Pmax and Qmax (%, 0 when the maximum is 0)."
+function calc_generation_shares(sums)
+    pg = sums["pg"]
+    pmax = sums["pmax"]
+    qg = sums["qg"]
+    qmax = sums["qmax"]
+    return Dict{String,Any}(
+        "pg" => pg, "pmax" => pmax, "qg" => qg, "qmax" => qmax,
+        "p_used_pct" => pmax > 0 ? 100 * pg / pmax : 0.0,
+        "q_used_pct" => qmax > 0 ? 100 * qg / qmax : 0.0,
+    )
+end
+
+"""
+    calc_generation_status(network_data, result; group_kind="zone")
+
+Generation of the in-service generators (pu): `"groups"` (index, name, pg, pmax, qg, qmax and the
+used shares in %), sorted by index, and `"total"` for the whole network. The groups are the zone or
+area records of the case, plus, when the buses are in more than one group, the groups that have
+no record (named by their number); none for a case without records and with one group.
+`pg`/`qg` come from the solution, `pmax`/`qmax` from `network_data["gen"]`.
+"""
+function calc_generation_status(network_data, result; group_kind::AbstractString="zone")
+    gens = get(network_data, "gen", Dict())
+    sol_gens = get(get(result, "solution", Dict()), "gen", Dict())
+    group_name_by_index = find_group_names(network_data, group_kind)
+
+    group_by_bus = Dict{Int,Int}()
+    for (_, bus) in get(network_data, "bus", Dict())
+        group_by_bus[Int(bus["bus_i"])] = Int(get(bus, group_kind, 0))
+    end
+
+    # sums over the in-service generators, for the whole network and per group
+    total = Dict("pg" => 0.0, "pmax" => 0.0, "qg" => 0.0, "qmax" => 0.0)
+    group_sums = Dict{Int,Dict{String,Float64}}()
+    for (gen_id, g) in gens
+        get(g, "gen_status", 1) == 0 && continue
+        g_sol = get(sol_gens, gen_id, get(sol_gens, string(gen_id), Dict()))
+        pg = get(g_sol, "pg", 0.0)
+        pmax = get(g, "pmax", 0.0)
+        qg = get(g_sol, "qg", 0.0)
+        qmax = get(g, "qmax", 0.0)
+        total["pg"] += pg
+        total["pmax"] += pmax
+        total["qg"] += qg
+        total["qmax"] += qmax
+
+        group_index = get(group_by_bus, Int(get(g, "gen_bus", 0)), 0)
+        group_index == 0 && continue
+        sums = get!(group_sums, group_index, Dict("pg" => 0.0, "pmax" => 0.0, "qg" => 0.0, "qmax" => 0.0))
+        sums["pg"] += pg
+        sums["pmax"] += pmax
+        sums["qg"] += qg
+        sums["qmax"] += qmax
+    end
+
+    # the records, and the groups the buses use without a record when they use more than one
+    group_indices = Set(keys(group_name_by_index))
+    bus_groups = setdiff(Set(values(group_by_bus)), [0])
+    if length(bus_groups) > 1
+        union!(group_indices, bus_groups)
+    end
+
+    groups = Dict{String,Any}[]
+    for group_index in sort(collect(group_indices))
+        sums = get(group_sums, group_index, Dict("pg" => 0.0, "pmax" => 0.0, "qg" => 0.0, "qmax" => 0.0))
+        group = calc_generation_shares(sums)
+        group["index"] = group_index
+        group["name"] = get(group_name_by_index, group_index, string(group_index))
+        push!(groups, group)
+    end
+
+    return Dict{String,Any}(
+        "group_kind" => group_kind,
+        "groups" => groups,
+        "total" => calc_generation_shares(total),
+    )
+end
+
+"""
+    print_generation_status(network_data, result; group_kind="zone")
+
+Print active generation status by zone or area (`group_kind`, see `find_group_kind`; from
+`calc_generation_status`):
 - P: `Pg`, `Pmax`, used % of `Pmax` (printed as `Used`); `Pg` from `result["solution"]["gen"]`
 - Q: `Qg`, `Qmax`, used % of `Qmax` (printed as `Used`, after the Q values); `Qg` from solution
 
 `Pmax` and `Qmax` still come from `network_data["gen"]`. Inactive generators are skipped.
 
-If no zones are available in the network data, print the same values for the
-whole network.
+If the network data has no such groups, print the same values for the whole network.
 """
-function print_generation_status(network_data, result)
-    gens = get(network_data, "gen", Dict())
-    sol_gens = get(get(result, "solution", Dict()), "gen", Dict())
-    zones = get(network_data, "zone", Dict())
-    buses = get(network_data, "bus", Dict())
+function print_generation_status(network_data, result; group_kind::AbstractString="zone")
+    status = calc_generation_status(network_data, result; group_kind=group_kind)
 
-    bus_zone_by_bus = Dict{Int,Int}()
-    for (_, bus) in buses
-        bus_zone_by_bus[Int(bus["bus_i"])] = Int(get(bus, "zone", 0))
-    end
-
-    zone_name_by_index = Dict{Int,String}()
-    for (_, zone) in zones
-        zone_name_by_index[Int(zone["i"])] = strip(string(zone["zoname"]))
-    end
-
-    if isempty(zones)
-        pg_total = 0.0
-        pmax_total = 0.0
-        qg_total = 0.0
-        qmax_total = 0.0
-        for (gen_id, g) in gens
-            get(g, "gen_status", 1) == 0 && continue
-            g_sol = get(sol_gens, gen_id, get(sol_gens, string(gen_id), Dict()))
-            pg_total += get(g_sol, "pg", 0.0)
-            pmax_total += get(g, "pmax", 0.0)
-            qg_total += get(g_sol, "qg", 0.0)
-            qmax_total += get(g, "qmax", 0.0)
-        end
-        p_used_pct = pmax_total > 0 ? 100 * pg_total / pmax_total : 0.0
-        q_used_pct = qmax_total > 0 ? 100 * qg_total / qmax_total : 0.0
+    if isempty(status["groups"])
+        total = status["total"]
         println("Generation status (whole network):")
         println(
-            "Network: Pg=$(round(pg_total, digits=4)), " *
-            "Pmax=$(round(pmax_total, digits=4)), " *
-            "Used=$(round(p_used_pct, digits=2))%, " *
-            "Qg=$(round(qg_total, digits=4)), " *
-            "Qmax=$(round(qmax_total, digits=4)), " *
-            "Used=$(round(q_used_pct, digits=2))%",
+            "Network: Pg=$(round(total["pg"], digits=4)), " *
+            "Pmax=$(round(total["pmax"], digits=4)), " *
+            "Used=$(round(total["p_used_pct"], digits=2))%, " *
+            "Qg=$(round(total["qg"], digits=4)), " *
+            "Qmax=$(round(total["qmax"], digits=4)), " *
+            "Used=$(round(total["q_used_pct"], digits=2))%",
         )
         return
     end
 
-    zone_pg = Dict{Int,Float64}()
-    zone_pmax = Dict{Int,Float64}()
-    zone_qg = Dict{Int,Float64}()
-    zone_qmax = Dict{Int,Float64}()
-    for zone_index in keys(zone_name_by_index)
-        zone_pg[zone_index] = 0.0
-        zone_pmax[zone_index] = 0.0
-        zone_qg[zone_index] = 0.0
-        zone_qmax[zone_index] = 0.0
-    end
-
-    for (gen_id, g) in gens
-        get(g, "gen_status", 1) == 0 && continue
-        gen_bus = Int(get(g, "gen_bus", 0))
-        zone_index = get(bus_zone_by_bus, gen_bus, 0)
-        zone_index == 0 && continue
-        g_sol = get(sol_gens, gen_id, get(sol_gens, string(gen_id), Dict()))
-        zone_pg[zone_index] = get(zone_pg, zone_index, 0.0) + get(g_sol, "pg", 0.0)
-        zone_pmax[zone_index] = get(zone_pmax, zone_index, 0.0) + get(g, "pmax", 0.0)
-        zone_qg[zone_index] = get(zone_qg, zone_index, 0.0) + get(g_sol, "qg", 0.0)
-        zone_qmax[zone_index] = get(zone_qmax, zone_index, 0.0) + get(g, "qmax", 0.0)
-    end
-
-    println("Generation status by zone:")
-    println(@sprintf("%-16s %-12.4s %-12.4s %-12s %-12s %-10s %-10s", "Zone", "Pg", "Pmax", "Used", "Qg", "Qmax", "Used"))
-    for zone_index in sort(collect(keys(zone_name_by_index)))
-        zone_name = zone_name_by_index[zone_index]
-        pg_total = get(zone_pg, zone_index, 0.0)
-        pmax_total = get(zone_pmax, zone_index, 0.0)
-        qg_total = get(zone_qg, zone_index, 0.0)
-        qmax_total = get(zone_qmax, zone_index, 0.0)
-        p_used_pct = pmax_total > 0 ? 100 * pg_total / pmax_total : 0.0
-        q_used_pct = qmax_total > 0 ? 100 * qg_total / qmax_total : 0.0
+    println("Generation status by $(group_kind):")
+    println(@sprintf("%-16s %-12.4s %-12.4s %-12s %-12s %-10s %-10s", titlecase(group_kind), "Pg", "Pmax", "Used", "Qg", "Qmax", "Used"))
+    for group in status["groups"]
+        group_name = group["name"]
+        pg_total = group["pg"]
+        pmax_total = group["pmax"]
+        qg_total = group["qg"]
+        qmax_total = group["qmax"]
+        p_used_pct = group["p_used_pct"]
+        q_used_pct = group["q_used_pct"]
         # println(
-        #     @sprintf("%-10s ", zone_name) *
+        #     @sprintf("%-10s ", group_name) *
         #     @sprintf("%-10.4f ", pg_total) *
         #     @sprintf("%-10.4f ", pmax_total) *
         #     @sprintf("%-10.2f%% ", p_used_pct) *
@@ -659,7 +737,7 @@ function print_generation_status(network_data, result)
         #     @sprintf("%-10.2f%% ", q_used_pct))
         println(@sprintf(
             "%-10s %12.4f %12.4f %10.2f%% %12.4f %12.4f %10.2f%%",
-            zone_name,
+            group_name,
             pg_total,
             pmax_total,
             p_used_pct,
@@ -732,7 +810,7 @@ function print_network_summary(network_data; zone_name::Union{String,Nothing}=no
     loads = get(network_data, "load", Dict())
     load_list = [
         l for (_, l) in loads
-        if (zone_buses === nothing || Int(get(l, "zone", 0)) == zone_index) &&
+        if (zone_buses === nothing || Int(l["load_bus"]) in zone_buses) &&
         get(l, "status", 1) != 0
     ]
     n_loads = length(load_list)
@@ -825,13 +903,110 @@ function print_network_summary(network_data; zone_name::Union{String,Nothing}=no
     println("========================================")
 end
 
-function print_load_shedding_status(result, modified_network_data, detailed=false)
-    println("Load shedding results:")
+"""
+    calc_load_shedding_status(result, network_data; group_kind="zone")
+
+Load shedding of a solved run (pu): `"loads"` that shed (id, bus, pd, served_pd, shed,
+planned_shed, forced_shed, shed_pct in %), in the order of `network_data["load"]`; `"groups"`, one
+per zone or area that has load (index, name, load, shed, planned_shed, forced_shed), sorted by
+index; the totals; and `"has_split_shedding"` (the solution splits planned and forced shedding).
+
+A load belongs to its bus's zone or area, like the boundary (a RAW load record can name another
+area, e.g. the two loads at savnw bus 154).
+"""
+function calc_load_shedding_status(result, network_data; group_kind::AbstractString="zone")
     sol_loads = get(get(result, "solution", Dict()), "load", Dict())
     has_split_shedding = any(
         haskey(load_sol, "planned_shed") || haskey(load_sol, "forced_shed")
         for (_, load_sol) in sol_loads
     )
+    group_name_by_index = find_group_names(network_data, group_kind)
+    group_by_bus = Dict{Int,Int}()
+    for (_, bus) in get(network_data, "bus", Dict())
+        group_by_bus[Int(bus["bus_i"])] = Int(get(bus, group_kind, 0))
+    end
+
+    total_shed = 0.0
+    total_planned_shed = 0.0
+    total_forced_shed = 0.0
+    total_load = 0.0
+    group_total_load = Dict{Int,Float64}()
+    group_total_shed = Dict{Int,Float64}()
+    group_total_planned_shed = Dict{Int,Float64}()
+    group_total_forced_shed = Dict{Int,Float64}()
+    shed_loads = Dict{String,Any}[]
+    for (i, load) in network_data["load"]
+        total_load += load["pd"]
+        load_bus = Int(load["load_bus"])
+        group_index = get(group_by_bus, load_bus, 0)
+        if group_index != 0
+            group_total_load[group_index] = get(group_total_load, group_index, 0.0) + load["pd"]
+        end
+        haskey(sol_loads, i) && haskey(sol_loads[i], "status") || continue
+        status = sol_loads[i]["status"]
+        status >= 1.0 && continue
+
+        original_pd = load["pd"]
+        served_pd = get(sol_loads[i], "pd", original_pd * status)
+        shed_amount = original_pd - served_pd
+        planned_shed_amount = 0.0
+        forced_shed_amount = 0.0
+        if has_split_shedding
+            planned_shed_amount = original_pd * get(sol_loads[i], "planned_shed", 0.0)
+            forced_shed_amount = original_pd * get(sol_loads[i], "forced_shed", 0.0)
+        end
+        total_shed += shed_amount
+        total_planned_shed += planned_shed_amount
+        total_forced_shed += forced_shed_amount
+        if group_index != 0
+            group_total_shed[group_index] = get(group_total_shed, group_index, 0.0) + shed_amount
+            group_total_planned_shed[group_index] = get(group_total_planned_shed, group_index, 0.0) + planned_shed_amount
+            group_total_forced_shed[group_index] = get(group_total_forced_shed, group_index, 0.0) + forced_shed_amount
+        end
+        push!(shed_loads, Dict{String,Any}(
+            "id" => i,
+            "bus" => load_bus,
+            "pd" => original_pd,
+            "served_pd" => served_pd,
+            "shed" => shed_amount,
+            "planned_shed" => planned_shed_amount,
+            "forced_shed" => forced_shed_amount,
+            "shed_pct" => (shed_amount / original_pd) * 100,
+        ))
+    end
+
+    groups = Dict{String,Any}[]
+    for group_index in sort(collect(keys(group_total_load)))
+        push!(groups, Dict{String,Any}(
+            "index" => group_index,
+            "name" => get(group_name_by_index, group_index, "$(titlecase(group_kind)) $group_index"),
+            "load" => group_total_load[group_index],
+            "shed" => get(group_total_shed, group_index, 0.0),
+            "planned_shed" => get(group_total_planned_shed, group_index, 0.0),
+            "forced_shed" => get(group_total_forced_shed, group_index, 0.0),
+        ))
+    end
+
+    return Dict{String,Any}(
+        "group_kind" => group_kind,
+        "has_split_shedding" => has_split_shedding,
+        "loads" => shed_loads,
+        "groups" => groups,
+        "total_load" => total_load,
+        "total_shed" => total_shed,
+        "total_planned_shed" => total_planned_shed,
+        "total_forced_shed" => total_forced_shed,
+    )
+end
+
+"""
+Print the load shedding of a solved run (`calc_load_shedding_status`): by zone or area
+(`group_kind`, see `find_group_kind`), the total, and each shed load when `detailed`.
+"""
+function print_load_shedding_status(result, modified_network_data, detailed=false; group_kind::AbstractString="zone")
+    println("Load shedding results:")
+    status = calc_load_shedding_status(result, modified_network_data; group_kind=group_kind)
+    has_split_shedding = status["has_split_shedding"]
     if detailed
         println("---  Load Serving Status by Bus ---")
         if has_split_shedding
@@ -839,89 +1014,49 @@ function print_load_shedding_status(result, modified_network_data, detailed=fals
         else
             println("Bus \t PDn \t PD \t Shed \t Shed Percentage")
         end
-    end
-    total_shed = 0.0
-    total_planned_shed = 0.0
-    total_forced_shed = 0.0
-    total_load = 0.0
-    zone_name_by_index = Dict{Int,String}()
-    for (_, zone) in get(modified_network_data, "zone", Dict())
-        zone_name_by_index[Int(zone["i"])] = strip(zone["zoname"])
-    end
-    bus_zone_by_bus = Dict{Int,Int}()
-    for (_, bus) in get(modified_network_data, "bus", Dict())
-        bus_zone_by_bus[Int(bus["bus_i"])] = Int(get(bus, "zone", 0))
-    end
-    zone_total_load = Dict{Int,Float64}()
-    zone_total_shed = Dict{Int,Float64}()
-    zone_total_planned_shed = Dict{Int,Float64}()
-    zone_total_forced_shed = Dict{Int,Float64}()
-    for (i, load) in modified_network_data["load"]
-        total_load += load["pd"]
-        load_bus = Int(load["load_bus"])
-        zone_index = Int(get(load, "zone", get(bus_zone_by_bus, load_bus, 0)))
-        if zone_index != 0
-            zone_total_load[zone_index] = get(zone_total_load, zone_index, 0.0) + load["pd"]
-        end
-        if haskey(sol_loads, i) && haskey(sol_loads[i], "status")
-            status = sol_loads[i]["status"]
-
-            if status >= 1.0
-                continue
-            end
+        for load in status["loads"]
+            load_bus = load["bus"]
             original_pd = load["pd"]
-            served_pd = get(sol_loads[i], "pd", original_pd * status)
-            shed_amount = original_pd - served_pd
-            planned_shed_amount = 0.0
-            forced_shed_amount = 0.0
+            served_pd = load["served_pd"]
+            shed_amount = load["shed"]
+            shed_percentage = load["shed_pct"]
             if has_split_shedding
-                planned_shed_amount = original_pd * get(sol_loads[i], "planned_shed", 0.0)
-                forced_shed_amount = original_pd * get(sol_loads[i], "forced_shed", 0.0)
-            end
-            shed_percentage = (shed_amount / original_pd) * 100
-            total_shed += shed_amount
-            total_planned_shed += planned_shed_amount
-            total_forced_shed += forced_shed_amount
-            if zone_index != 0
-                zone_total_shed[zone_index] = get(zone_total_shed, zone_index, 0.0) + shed_amount
-                zone_total_planned_shed[zone_index] = get(zone_total_planned_shed, zone_index, 0.0) + planned_shed_amount
-                zone_total_forced_shed[zone_index] = get(zone_total_forced_shed, zone_index, 0.0) + forced_shed_amount
-            end
-            if detailed
-                if has_split_shedding
-                    println("$(load_bus) \t $(round(original_pd, digits=2)) \t $(round(served_pd, digits=2)) \t $(round(shed_amount, digits=2)) \t $(round(planned_shed_amount, digits=2)) \t $(round(forced_shed_amount, digits=2)) \t $(round(shed_percentage, digits=2))%")
-                else
-                    println("$(load_bus) \t $(round(original_pd, digits=2)) \t $(round(served_pd, digits=2)) \t $(round(shed_amount, digits=2)) \t $(round(shed_percentage, digits=2))%")
-                end
+                println("$(load_bus) \t $(round(original_pd, digits=2)) \t $(round(served_pd, digits=2)) \t $(round(shed_amount, digits=2)) \t $(round(load["planned_shed"], digits=2)) \t $(round(load["forced_shed"], digits=2)) \t $(round(shed_percentage, digits=2))%")
+            else
+                println("$(load_bus) \t $(round(original_pd, digits=2)) \t $(round(served_pd, digits=2)) \t $(round(shed_amount, digits=2)) \t $(round(shed_percentage, digits=2))%")
             end
         end
     end
+    total_shed = status["total_shed"]
+    total_planned_shed = status["total_planned_shed"]
+    total_forced_shed = status["total_forced_shed"]
+    total_load = status["total_load"]
     base_mva = modified_network_data["baseMVA"]
-    if !isempty(zone_total_load)
-        println("---  Load Shed by Zone ---")
-        for zone_index in sort(collect(keys(zone_total_load)))
-            zone_name = get(zone_name_by_index, zone_index, "Zone $zone_index")
-            zone_shed_mw = round(get(zone_total_shed, zone_index, 0.0) * base_mva, digits=2)
-            zone_planned_shed_mw = round(get(zone_total_planned_shed, zone_index, 0.0) * base_mva, digits=2)
-            zone_forced_shed_mw = round(get(zone_total_forced_shed, zone_index, 0.0) * base_mva, digits=2)
-            zone_load_mw = round(zone_total_load[zone_index] * base_mva, digits=2)
+    if !isempty(status["groups"])
+        println("---  Load Shed by $(titlecase(group_kind)) ---")
+        for group in status["groups"]
+            group_name = group["name"]
+            group_shed_mw = round(group["shed"] * base_mva, digits=2)
+            group_planned_shed_mw = round(group["planned_shed"] * base_mva, digits=2)
+            group_forced_shed_mw = round(group["forced_shed"] * base_mva, digits=2)
+            group_load_mw = round(group["load"] * base_mva, digits=2)
             if has_split_shedding
                 println(@sprintf(
                     "%-10s: total %12.4f planned %12.4f forced %12.4f load %12.4f %10.2f%%",
-                    zone_name,
-                    zone_shed_mw,
-                    zone_planned_shed_mw,
-                    zone_forced_shed_mw,
-                    zone_load_mw,
-                    round(zone_shed_mw / zone_load_mw * 100, digits=2)
+                    group_name,
+                    group_shed_mw,
+                    group_planned_shed_mw,
+                    group_forced_shed_mw,
+                    group_load_mw,
+                    round(group_shed_mw / group_load_mw * 100, digits=2)
                 ))
             else
                 println(@sprintf(
                     "%-10s: %12.4f %12.4f %10.2f%%",
-                    zone_name,
-                    zone_shed_mw,
-                    zone_load_mw,
-                    round(zone_shed_mw / zone_load_mw * 100, digits=2)
+                    group_name,
+                    group_shed_mw,
+                    group_load_mw,
+                    round(group_shed_mw / group_load_mw * 100, digits=2)
                 ))
             end
         end

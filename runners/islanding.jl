@@ -90,17 +90,29 @@ else
     load_shedding_penalties = Dict()
 
     # ======================================================================
-    # ACTIVSg500 case targets --------------------
-    # zone names:  CLEMSON, GREENVIL, SPARTANB, YORK, MIDLANDS, COLUMBIA
-    target_zone = "spartanb"  # case insensitive
-    target_lines = find_branches_by_zone(modified_network_data, target_zone)
-    selected_buses = find_buses_by_zone(modified_network_data, target_zone)
+    # target group: its boundary lines open, and the reports group by its kind (zone or area)
+    # ACTIVSg500 zone names:  CLEMSON, GREENVIL, SPARTANB, YORK, MIDLANDS, COLUMBIA (one area)
+    # savnw area names:  FLAPCO, LIGHTCO, WORLD (zones: FIRST, SECOND, FIFTH, PLANT)
+    target_kind = "zone"        # "zone", "area"
+    target_name = "spartanb"    # case insensitive
+    target_zone = nothing       # both reset, so a group left from an earlier run in this session is not passed
+    target_area = nothing
+    if target_kind == "area"
+        target_area = target_name
+        target_lines = find_branches_by_area(modified_network_data, target_area)
+        selected_buses = find_buses_by_area(modified_network_data, target_area)
+    else
+        target_zone = target_name
+        target_lines = find_branches_by_zone(modified_network_data, target_zone)
+        selected_buses = find_buses_by_zone(modified_network_data, target_zone)
+    end
 
+    # load shedding penalties inside and outside the target group --------------------
     for bus in keys(network_data["bus"])
-        if parse(Int, bus) in selected_buses        # bus inside the target zone
+        if parse(Int, bus) in selected_buses        # bus inside the target group
             # spartanb: 2.5, midlands: 0.95
             load_shedding_penalties[bus] = 2.5 * lambda
-        else                                        # bus outside the target zone
+        else                                        # bus outside the target group
             # clemson: 1.6, york: 2.5
             # load_shedding_penalties[bus] = 1.6 * lambda
         end
@@ -192,6 +204,7 @@ result = run_islanding(
     uniform_penalty=uniform_penalty,
     load_shedding_penalties=load_shedding_penalties,
     target_zone=(@isdefined(target_zone) ? target_zone : nothing),
+    target_area=(@isdefined(target_area) ? target_area : nothing),
     selected_buses=(@isdefined(selected_buses) ? selected_buses : nothing),
     frequency_security=frequency_security,
     voltage_security=voltage_security,

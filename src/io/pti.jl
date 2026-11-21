@@ -1723,7 +1723,7 @@ Parses PM zone to PSS(R) E-style
 """
 function _pm2psse_zone(zone::Dict{String, Any})
     sub_data = Dict{String, Any}()
-    sub_data["I"] = zone["index"]
+    sub_data["I"] = zone["i"]       # the zone number the buses carry, not the record's position
     sub_data["ZONAME"] = "\'$(get(zone, "zoname", _default_zone["ZONAME"]))\'"
     
     return sub_data
@@ -1749,7 +1749,7 @@ Parses PM zone to PSS(R) E-style
 """
 function _pm2psse_owner(owner::Dict{String, Any})
     sub_data = Dict{String, Any}()
-    sub_data["I"] = owner["index"]
+    sub_data["I"] = owner["i"]      # the owner number the buses carry, not the record's position
     sub_data["OWNAME"] = "\'$(get(owner, "owname", _default_owner["OWNAME"]))\'"
 
     return sub_data

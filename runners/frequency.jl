@@ -14,7 +14,7 @@
 #   offline (run_islanding):  add_frequency_security! embeds the limits of every island in
 #                             network_data["frequency_islands"]
 #   model (build_custom_pf):  constraint_island_frequency_security, when that key exists
-#   report (run_islanding):   print_frequency_security
+#   report (run_islanding):   print_frequency_security, with calc_scheduled_import (also used by the GUI)
 #
 # This file is included into the PowerModels module by src/prob/opf.jl, so `using PowerModels`
 # already exports everything here; do not include it again from the runners.
@@ -352,22 +352,27 @@ end
 
 
 # ==================== Report ====================
+"Solved scheduled import of an island (pu): the boundary flows into it, measured at its end of each boundary arc."
+function calc_scheduled_import(network_data, result, island)
+    sol_branches = result["solution"]["branch"]
+    scheduled_import = 0.0
+    for (branch_id, island_bus, _) in island["boundary_arcs"]
+        island_end = network_data["branch"][string(branch_id)]["f_bus"] == island_bus ? "pf" : "pt"
+        scheduled_import -= sol_branches[string(branch_id)][island_end]
+    end
+    return scheduled_import
+end
+
 "Print each island's frequency response, its import limits and the solved scheduled import."
 function print_frequency_security(network_data, result)
     base_mva = network_data["baseMVA"]
     to_mw(value) = round(value * base_mva, digits=2)
-    sol_branches = result["solution"]["branch"]
 
     println("---------------------------")
     println("Frequency security (limits on each island's scheduled import)")
     for island in network_data["frequency_islands"]
         limits = island["limits"]
-
-        scheduled_import = 0.0
-        for (branch_id, island_bus, _) in island["boundary_arcs"]
-            island_end = network_data["branch"][string(branch_id)]["f_bus"] == island_bus ? "pf" : "pt"
-            scheduled_import -= sol_branches[string(branch_id)][island_end]
-        end
+        scheduled_import = calc_scheduled_import(network_data, result, island)
 
         println("Island at bus $(first(island["buses"])): $(length(island["buses"])) buses, $(island["gens"]) gens ($(island["governors"]) with governor)")
         println("  H = $(round(island["inertia"], digits=3)) s, K = $(round(island["governor_gain"], digits=3)) pu, D = $(round(island["damping"], digits=3)) pu (system base)")

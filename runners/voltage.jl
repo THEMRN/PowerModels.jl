@@ -408,42 +408,92 @@ end
 
 
 # ==================== Report ====================
-"Print the predicted state of an island: its generators at a reactive limit, its slack and its largest indicators."
-function print_island_voltage(island, base_mva)
-    to_mw(value) = round(value * base_mva, digits=2)
-    list(buses) = isempty(buses) ? "none" : join(buses, ", ")
+"""
+The predicted state of a checked island, as data (pu): its first bus, bus counts, the buses of
+its generators at the upper and at the lower reactive limit, its slack bus with P and Q, and its
+three largest indicators (value, bus, V, load). `"shed"` is filled by the loop when one is sized.
+"""
+function calc_island_voltage(island)
     limited = findall(island.has_gen .& .!island.holds_voltage)
     at_upper_limit = [island.buses[i] for i in limited if island.qg[i] >= island.qmax[i]]
     at_lower_limit = [island.buses[i] for i in limited if island.qg[i] < island.qmax[i]]
     slack = island.slack
 
-    println("Island at bus $(first(island.buses)): $(length(island.buses)) buses, $(count(island.has_gen)) with generation, $(count(island.holds_voltage)) holding their voltage")
-    println("  generators at a reactive limit: upper $(list(at_upper_limit)); lower $(list(at_lower_limit))")
-    println("  slack bus $(island.buses[slack]): P = $(to_mw(island.pg[slack])) MW, Q = $(to_mw(island.qg[slack])) Mvar")
-
+    largest_indicators = Dict{String,Any}[]
     load_buses = find_load_buses(island)
-    isempty(load_buses) && return
-    indicators = abs.(first(calc_voltage_indicators(island)))
-    for k in sortperm(indicators, rev=true)[1:min(3, end)]
-        bus = load_buses[k]
-        println("  indicator $(round(indicators[k], digits=3)) at bus $(island.buses[bus]) (V = $(round(island.vm[bus], digits=3)) pu, load $(to_mw(island.pd[bus])) MW)")
+    if !isempty(load_buses)
+        indicators = abs.(first(calc_voltage_indicators(island)))
+        for k in sortperm(indicators, rev=true)[1:min(3, end)]
+            bus = load_buses[k]
+            push!(largest_indicators, Dict{String,Any}(
+                "value" => indicators[k],
+                "bus" => island.buses[bus],
+                "vm" => island.vm[bus],
+                "pd" => island.pd[bus],
+            ))
+        end
+    end
+
+    return Dict{String,Any}(
+        "status" => "checked",
+        "bus" => first(island.buses),
+        "n_buses" => length(island.buses),
+        "n_with_generation" => count(island.has_gen),
+        "n_holding_voltage" => count(island.holds_voltage),
+        "at_upper_limit" => at_upper_limit,
+        "at_lower_limit" => at_lower_limit,
+        "slack_bus" => island.buses[slack],
+        "slack_pg" => island.pg[slack],
+        "slack_qg" => island.qg[slack],
+        "largest_indicators" => largest_indicators,
+        "shed" => nothing,
+    )
+end
+
+"Print the predicted state of an island (`calc_island_voltage`): its generators at a reactive limit, its slack and its largest indicators."
+function print_island_voltage(island_voltage, base_mva)
+    to_mw(value) = round(value * base_mva, digits=2)
+    list(buses) = isempty(buses) ? "none" : join(buses, ", ")
+
+    println("Island at bus $(island_voltage["bus"]): $(island_voltage["n_buses"]) buses, $(island_voltage["n_with_generation"]) with generation, $(island_voltage["n_holding_voltage"]) holding their voltage")
+    println("  generators at a reactive limit: upper $(list(island_voltage["at_upper_limit"])); lower $(list(island_voltage["at_lower_limit"]))")
+    println("  slack bus $(island_voltage["slack_bus"]): P = $(to_mw(island_voltage["slack_pg"])) MW, Q = $(to_mw(island_voltage["slack_qg"])) Mvar")
+    for indicator in island_voltage["largest_indicators"]
+        println("  indicator $(round(indicator["value"], digits=3)) at bus $(indicator["bus"]) (V = $(round(indicator["vm"], digits=3)) pu, load $(to_mw(indicator["pd"])) MW)")
     end
 end
 
-"Print the shed sized in an island (MW at each bus) and the worst indicator it leaves."
-function print_island_shed(island, shed, base_mva)
+"""
+The shed sized in an island, as data (pu): `"sheds"` (bus, shed, and the load it was taken from)
+and the worst indicator it leaves with its bus; no sheds and no indicator when none could be sized.
+"""
+function calc_island_shed(island, shed)
+    sheds = Dict{String,Any}[]
+    for i in findall(>(0), shed)
+        push!(sheds, Dict{String,Any}("bus" => island.buses[i], "shed" => shed[i], "of" => island.pd[i] + shed[i]))
+    end
+    isempty(sheds) && return Dict{String,Any}("sheds" => sheds, "indicator_after" => nothing, "indicator_after_bus" => nothing)
+
+    worst_indicator, worst_bus = find_worst_indicator(island)
+    return Dict{String,Any}(
+        "sheds" => sheds,
+        "indicator_after" => worst_indicator,
+        "indicator_after_bus" => island.buses[worst_bus],
+    )
+end
+
+"Print the shed sized in an island (`calc_island_shed`, MW at each bus) and the worst indicator it leaves."
+function print_island_shed(island_shed, base_mva)
     to_mw(value) = round(value * base_mva, digits=2)
-    shed_buses = findall(>(0), shed)
-    if isempty(shed_buses)
+    if isempty(island_shed["sheds"])
         println("  no shed could be sized")
         return
     end
 
-    for i in shed_buses
-        println("  shed sized at bus $(island.buses[i]): $(to_mw(shed[i])) MW of $(to_mw(island.pd[i] + shed[i])) MW")
+    for shed in island_shed["sheds"]
+        println("  shed sized at bus $(shed["bus"]): $(to_mw(shed["shed"])) MW of $(to_mw(shed["of"])) MW")
     end
-    worst_indicator, worst_bus = find_worst_indicator(island)
-    println("  indicator after that shed: $(round(worst_indicator, digits=3)) at bus $(island.buses[worst_bus])")
+    println("  indicator after that shed: $(round(island_shed["indicator_after"], digits=3)) at bus $(island_shed["indicator_after_bus"])")
 end
 
 
@@ -457,7 +507,9 @@ where a bus is above the threshold a preemptive shed is sized and handed back to
 solve as `load["voltage_shed"]`. Objectives without load shedding are only checked.
 
 Returns the result of the last solve, with `result["voltage_security"]`: `"verified"`,
-`"rounds"` and the `"worst_indicator"` of the last round.
+`"rounds"`, the `"worst_indicator"` of the last round, and `"details"`, one entry per round
+(round, optimization status, threshold, and each island: `calc_island_voltage` with its worst
+indicator and the `calc_island_shed` sized there, or only its status when it was not checked).
 """
 function solve_voltage_secure_opf(network_data, model_type, optimizer, target_lines)
     base_mva = network_data["baseMVA"]
@@ -474,6 +526,7 @@ function solve_voltage_secure_opf(network_data, model_type, optimizer, target_li
     end
 
     result = Dict{String,Any}()
+    details = Dict{String,Any}[]                     # one entry per round, kept across the solves
     for round in 1:MAX_VOLTAGE_ROUNDS
         # 1. solve the pre-event optimization
         result = solve_custom_opf(network_data, model_type, optimizer)
@@ -491,21 +544,27 @@ function solve_voltage_secure_opf(network_data, model_type, optimizer, target_li
         verified = true
         shed_handed_back = false
         worst_indicator = 0.0
+        round_islands = Dict{String,Any}[]
         for island_buses in islands
             island = calc_island_state(opened_network, admittance, island_buses)
             if island === nothing
                 println("Island at bus $(minimum(island_buses)) has no generator to hold its voltage, not checked")
+                push!(round_islands, Dict{String,Any}("status" => "no_generator", "bus" => minimum(island_buses), "n_buses" => length(island_buses)))
                 continue
             end
             if !solve_island_power_flow!(island)
                 println("Island at bus $(first(island.buses)): the island power flow did not solve, not verified")
+                push!(round_islands, Dict{String,Any}("status" => "power_flow_failed", "bus" => first(island.buses), "n_buses" => length(island.buses)))
                 verified = false
                 continue
             end
 
             # 3. indicator at every load bus of the island
-            print_island_voltage(island, base_mva)
+            island_voltage = calc_island_voltage(island)
+            print_island_voltage(island_voltage, base_mva)
+            push!(round_islands, island_voltage)
             island_indicator, _ = find_worst_indicator(island)
+            island_voltage["worst_indicator"] = island_indicator
             worst_indicator = max(worst_indicator, island_indicator)
             island_indicator <= INDICATOR_THRESHOLD && continue
             verified = false
@@ -513,14 +572,22 @@ function solve_voltage_secure_opf(network_data, model_type, optimizer, target_li
 
             # 4. size a shed at the worst buses
             shed = size_island_shed!(island)
-            print_island_shed(island, shed, base_mva)
+            island_shed = calc_island_shed(island, shed)
+            print_island_shed(island_shed, base_mva)
+            island_voltage["shed"] = island_shed
 
             # 5. hand it back to the optimization
             add_voltage_shed_requirement!(network_data, result, island, shed)
             shed_handed_back = shed_handed_back || any(>(0), shed)
         end
 
-        result["voltage_security"] = Dict("verified" => verified, "rounds" => round, "worst_indicator" => worst_indicator)
+        push!(details, Dict{String,Any}(
+            "round" => round,
+            "termination_status" => string(result["termination_status"]),
+            "indicator_threshold" => INDICATOR_THRESHOLD,
+            "islands" => round_islands,
+        ))
+        result["voltage_security"] = Dict("verified" => verified, "rounds" => round, "worst_indicator" => worst_indicator, "details" => details)
         if verified
             println("Voltage verified in round $round")
             break

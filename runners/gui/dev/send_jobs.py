@@ -86,6 +86,7 @@ def wait_for_control(worker, wanted_kind, job_id=None, full=False):
 
 
 def main():
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")     # Julia prints ✓ and other non-cp1252 characters
     full = "--full" in sys.argv[1:]
     job_files = [arg for arg in sys.argv[1:] if arg != "--full"]
     if not job_files:
