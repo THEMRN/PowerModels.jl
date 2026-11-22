@@ -158,8 +158,13 @@ for job, (first, last) in enumerate(zip(starts, starts[1:]), start=1):
 
             islands = voltage_details.find_island_table(voltage_round)
             by_bus = {str(row["bus"]): row for row in islands[1]}
-            for bus in re.findall(r"Island at bus (\d+) has no generator", block):
-                check(by_bus[bus]["status"] == "no_generator" and "no generator" in shown(islands, by_bus[bus], "State"), f"{where}: island {bus} without generator")
+            # islands without a generator, and those whose power flow failed, have no rows
+            dead = {str(island["bus"]) for island in voltage_details.find_dead_islands(voltage_round)}
+            printed_dead = set(re.findall(r"Island at bus (\d+) has no generator", block))
+            check(printed_dead == dead and not dead & set(by_bus), f"{where}: islands without generator {sorted(printed_dead)} vs {sorted(dead)}")
+            failed = {str(island["bus"]) for island in voltage_round["islands"] if island["status"] == "power_flow_failed"}
+            printed_failed = set(re.findall(r"Island at bus (\d+): the island power flow did not solve", block))
+            check(printed_failed == failed and not failed & set(by_bus), f"{where}: failed islands {sorted(printed_failed)} vs {sorted(failed)}")
             checked = re.findall(
                 rf"Island at bus (\d+): (\d+) buses, (\d+) with generation, (\d+) holding their voltage\n"
                 rf"\s+generators at a reactive limit: upper (.*); lower (.*)\n"
@@ -175,24 +180,26 @@ for job, (first, last) in enumerate(zip(starts, starts[1:]), start=1):
             indicators = voltage_details.find_indicator_table(voltage_round)
             printed_indicators = re.findall(rf"indicator ({NUMBER}) at bus (\d+) \(V = ({NUMBER}) pu, load ({NUMBER}) MW\)", block)
             check(len(printed_indicators) == len(indicators[1]), f"{where}: {len(printed_indicators)} indicators printed, {len(indicators[1])} rows")
-            for printed, row in zip(printed_indicators, indicators[1]):
-                for title, value in zip(("Indicator", "Bus", "V (pu)", "Load (MW)"), printed):
-                    check(float(shown(indicators, row, title)) == float(value), f"{where}: indicator {title}: {shown(indicators, row, title)} vs {value}")
+            for (value, bus, vm, load), row in zip(printed_indicators, indicators[1]):
+                check(row["bus"] == int(bus) and shown(indicators, row, "Where").endswith(f" at bus {bus}"), f"{where}: indicator at '{shown(indicators, row, 'Where')}' vs bus {bus}")
+                for title, printed in (("Indicator", value), ("V (pu)", vm), ("Load (MW)", load)):
+                    check(float(shown(indicators, row, title)) == float(printed), f"{where}: indicator {title}: {shown(indicators, row, title)} vs {printed}")
             # each island's worst indicator is its first printed one
             for row in islands[1]:
-                if row["status"] == "checked":
-                    first = next(r for r in indicators[1] if r["island"] == row["bus"])
-                    check(row["worst_indicator"] == first["value"], f"{where}: island {row['bus']} worst indicator")
+                first = next(r for r in indicators[1] if r["island"] == row["bus"])
+                check(row["worst_indicator"] == first["value"], f"{where}: island {row['bus']} worst indicator")
 
             sheds = voltage_details.find_shed_table(voltage_round)
             printed_sheds = re.findall(rf"shed sized at bus (\d+): ({NUMBER}) MW of ({NUMBER}) MW", block)
             printed_after = re.findall(rf"indicator after that shed: ({NUMBER}) at bus (\d+)", block)
             check(len(printed_sheds) == len(sheds[1]), f"{where}: {len(printed_sheds)} sheds printed, {len(sheds[1])} rows")
-            for printed, row in zip(printed_sheds, sheds[1]):
-                for title, value in zip(("Shed at bus", "Shed (MW)", "Of load (MW)"), printed):
-                    check(float(shown(sheds, row, title)) == float(value), f"{where}: shed {title}: {shown(sheds, row, title)} vs {value}")
-            shown_after = sorted({(shown(sheds, row, "Indicator after"), shown(sheds, row, "At bus")) for row in sheds[1]})
-            check(sorted((f"{float(value):.3f}", bus) for value, bus in printed_after) == shown_after, f"{where}: indicators after the sheds {printed_after} vs {shown_after}")
+            for (bus, shed_mw, of_mw), row in zip(printed_sheds, sheds[1]):
+                check(row["bus"] == int(bus) and shown(sheds, row, "Where").endswith(f" at bus {bus}"), f"{where}: shed at '{shown(sheds, row, 'Where')}' vs bus {bus}")
+                for title, printed in (("Shed (MW)", shed_mw), ("Of load (MW)", of_mw)):
+                    check(float(shown(sheds, row, title)) == float(printed), f"{where}: shed {title}: {shown(sheds, row, title)} vs {printed}")
+            # the indicator after an island's sheds stands on its last shed row only
+            shown_after = sorted(shown(sheds, row, "Worst indicator after") for row in sheds[1] if row.get("after"))
+            check(sorted(f"{float(value):.3f} at bus {bus}" for value, bus in printed_after) == shown_after, f"{where}: indicators after the sheds {printed_after} vs {shown_after}")
         last = voltage["details"][-1]
         worst = max(row["worst_indicator"] for row in voltage_details.find_checked_islands(last))
         check(worst == voltage["worst_indicator"], f"{tag}: worst indicator {voltage['worst_indicator']} vs the last round's {worst}")

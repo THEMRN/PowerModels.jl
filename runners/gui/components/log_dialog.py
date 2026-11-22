@@ -12,16 +12,16 @@ from nicegui import ui
 import theme
 
 # ==================== Settings ====================
-REFRESH_SECONDS = 0.5           # how often an open dialog looks for new lines
+REFRESH_SECONDS = 0.5  # how often an open dialog looks for new lines
 
 
 class LogDialog:
     """One dialog of a browser tab, reused for every log: `open(title, lines)`."""
 
     def __init__(self):
-        self.lines = []         # the list on show; the worker may still be adding to it
-        self.seen = 0           # lines of it already looked at
-        self.shown = 0          # lines of it on screen: those that contain the search text
+        self.lines = []  # the list on show; the worker may still be adding to it
+        self.seen = 0  # lines of it already looked at
+        self.shown = 0  # lines of it on screen: those that contain the search text
         self.dialog, box = theme.dialog()
         with box:
             with theme.toolbar():
@@ -30,7 +30,7 @@ class LogDialog:
                 self.search = ui.input(placeholder="Only lines containing...", on_change=self._show_again)
                 self.search.props("debounce=250").classes("log-search")
                 theme.button("Copy", on_click=self._copy).tooltip("Copy the lines shown")
-                theme.button(icon="close", kind="ghost", on_click=self.dialog.close).tooltip("Close")
+                theme.button(icon="close", kind="ghost", on_click=self.dialog.close)
             # the view starts at the end of the log and stays there while lines are added
             with ui.element("div").classes("log-view"):
                 self.text = ui.element("div").classes("log-lines")
@@ -63,7 +63,7 @@ class LogDialog:
 
     def _follow(self):
         """Add the lines that came since the last look, as one block of text."""
-        new_lines = self.lines[self.seen:]
+        new_lines = self.lines[self.seen :]
         self.seen += len(new_lines)
         matching = self._find_matching(new_lines)
         if matching:
@@ -82,7 +82,7 @@ class LogDialog:
             self.count.text = f"{total} line" + ("" if total == 1 else "s")
 
     def _opened_or_closed(self, event):
-        self.timer.active = bool(event.value)      # look for new lines only while open
+        self.timer.active = bool(event.value)  # look for new lines only while open
 
     def _copy(self):
         shown = self._find_matching(self.lines)

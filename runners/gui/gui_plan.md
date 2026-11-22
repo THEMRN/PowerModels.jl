@@ -393,7 +393,7 @@ A group's name is its record name, or its number when it has no record, as in `c
 
 - `termination_status`, `objective`
 - `seconds` (`solve`, `dynamic_sim`, `total`), from the per-run settings file
-- `target`, since 2026-11-21: the target zone or area, `kind`, `name` and its `buses` (sorted), by which the GUI names the islands of the frequency and voltage parts ("zone SECOND", "outside zone SECOND"; `voltage_details.name_islands`); `null` for a bus-pair boundary, and missing in results kept before, whose islands stay "island at bus N"
+- `target`, since 2026-11-21: the target zone or area, `kind`, `name` and its `buses` (sorted), by which the GUI names the islands of the frequency and voltage parts ("zone SECOND", "outside zone SECOND", numbered by size as "zone SECOND island 1" when a side has more than one; `voltage_details.name_islands`); `null` for a bus-pair boundary, and missing in results kept before, whose islands are "island 1", "island 2", ... (since 2026-11-22; before, "island at bus N")
 - `generation`:
   - `group_kind`
   - `groups`, one per zone or area record (none when the case has no such records): `index`, `name`, `pg_mw`, `pmax_mw`, `qg_mvar`, `qmax_mvar`, `p_used_pct`, `q_used_pct`
@@ -2003,3 +2003,18 @@ Test folders added: `savnw_flow_shed_gui_test_kept`, `savnw_flow_shed_gui_test_k
 Test folder added: `savnw_flow_shed_gui_test_results_panel` (four runs).
 
 Test folder added: `savnw_flow_shed_gui_test_uiux`.
+
+**Voltage details tables (2026-11-22), at the user's request:** "don't need the dead buses rows ... at the beginning of the round say total number of dead buses or dead buses inside or outside the zone ... we don't need the state col ... remove the part 'at bus 23' ... zone spartanb at bus 383 ... and then remove the bus col ... do the same changes for shed table as well".
+
+*What changed (`components/voltage_details.py` only; the summary and `voltage.jl` are unchanged, so kept results show the new tables too):*
+- **Dead islands.** Islands without a generator that can hold their voltage (`no_generator`) have no rows. The round's title line says how many buses they hold, "dead buses: 6 inside zone Spartanb, 10 outside", or the total without a target (`describe_dead_buses`), with a tooltip saying what they are. Nothing is shown when there are none.
+- **No State column.** The Islands table has the checked islands only. An island whose power flow did not solve gets a red line under the title instead, since it leaves the round not verified (`describe_failed_islands`).
+- **Island names.** Names count only the islands that get rows, so the four dead islands of a Spartanb run no longer force "at bus N" onto the two live ones. The tag was the island's lowest-numbered bus, which says nothing about the island. When one side does have two live islands, they are numbered by size, largest first: "zone SECOND island 1". Without a target they are "island 1", "island 2", ... ("island" when alone). The Summary and Frequency tab use the same `name_islands` and were already given only the live islands.
+- **Buses in the first column.** Largest indicators and Sheds sized name each bus with its island, "zone Spartanb at bus 383", in a column "Where", and the Bus and "Shed at bus" columns are gone. The shed table's "Indicator after" and "At bus" are one column, "Worst indicator after" ("0.389 at bus 28"): the island's worst indicator once all its sheds of the round are applied, on the island's last shed row only.
+
+*How it was verified:*
+- **Pure functions** on the kept `ACTIVSg500_flow_shed_spartanb/result_2026_11_21_23_45_08.json`, round 1: two island rows, dead buses 6 inside and 10 outside (6 + 79 = the zone's 85 buses), indicators at 383, 382, 28 and 469, 252, 251, sheds at 383 (0.389 at bus 28) and 469 (0.391 at bus 252). Hand-made rounds for two live islands on a side, a failed power flow and no target.
+- **`dev/check_results_tables.py`** (its voltage part rewritten for the new columns, and now checking the dead and failed islands against the console) on a fresh `send_jobs.py --full` log of the two voltage jobs of `jobs_results_check.json`: 426 checks, 0 failed.
+- **Dialog** on a test instance on 8090, the ACTIVSg500 run loaded from History: as above, round by round.
+
+*Left as it is:* the console and the strip's notes still say "Island at bus 23". They come from `voltage.jl`, inside the PowerModels module, and the checker reads those lines.

@@ -40,7 +40,7 @@ COLUMNS = [
     {"key": "status", "label": "Status"},
     {"key": "report", "label": "Report"},
 ]
-SOLVER_LABELS = {               # solver status -> what the Solver column says; any other is shown in lower case
+SOLVER_LABELS = {  # solver status -> what the Solver column says; any other is shown in lower case
     "LOCALLY_SOLVED": "solved",
     "OPTIMAL": "solved",
     "ALMOST_LOCALLY_SOLVED": "almost solved",
@@ -204,7 +204,7 @@ def describe_settings_row(row):
     elif gui_settings:
         notes.append(
             "Started from the GUI: Load into Run gives the form these settings as they were. The run kept no results "
-            "to show: it did not finish, or it ran before the GUI kept them."
+            "to show."
         )
     else:
         notes.append(
@@ -308,13 +308,13 @@ class HistoryPage:
                     on_select=self._select,
                 )
                 with ui.element("div").classes("history-side"):
-                    theme.eyebrow("Run")
-                    self.details = ui.element("div").classes("history-details")
+                    # no ring: it shows the Run page at once, whose form says what it waits for
+                    self.load_button = theme.button("Load into Run", kind="primary", on_click=self._load_into_run)
                     with theme.line():
                         self.report_button = theme.button("Open report", kind="ghost", on_click=self._open_report)
                         self.folder_button = theme.button("Open folder", kind="ghost", on_click=self._open_folder)
-                    # no ring: it shows the Run page at once, whose form says what it waits for
-                    self.load_button = theme.button("Load into Run", kind="primary", on_click=self._load_into_run)
+                    theme.eyebrow("Run")  # with a line above it, under the buttons
+                    self.details = ui.element("div").classes("history-details")
         self.refresh()
 
     # -------------------- reading the folders --------------------
