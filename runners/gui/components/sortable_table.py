@@ -28,8 +28,9 @@ class SortableTable(ui.element, component="sortable_table.js"):
 
     def show(self, rows, selected=None):
         """
-        Show rows: [{"id", "tone", <column key>: text, "sort": {<column key>: value}}], with the
-        row `selected` (an id, or None) marked. The sorting the user chose stays.
+        Show rows: [{"id", "tone", "tones": {<column key>: class}, <column key>: text, "sort":
+        {<column key>: value}}], with the row `selected` (an id, or None) marked. `tone` is a class
+        for the whole row, `tones` (optional) one for single cells. The sorting the user chose stays.
         """
         self._props["rows"] = rows
         self._props["selected"] = selected

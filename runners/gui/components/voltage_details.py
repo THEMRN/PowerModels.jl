@@ -20,16 +20,49 @@ ISLAND_STATUS = {               # island status -> what the table says
 }
 
 
+# ==================== Island names ====================
+def name_islands(target, islands):
+    """
+    Names of islands, in their order. `islands` are (bus, n_buses): a bus of each island and its
+    size. With a target zone or area (the summary's `target`) an island is named by its side:
+    "zone SECOND" or "outside zone SECOND", with its bus when that side has more than one island
+    ("zone SECOND at bus 201"). Every island lies wholly on one side, since the target's boundary
+    lines are open. Without a target (bus pairs, or a run kept before the summary had one):
+    "island at bus 153".
+    """
+    if not target:
+        return [f"island at bus {bus}" for bus, _ in islands]
+    inside = set(target["buses"])
+    group = f"{target['kind']} {target['name']}"
+    sides = [group if bus in inside else f"outside {group}" for bus, _ in islands]
+    return [side if sides.count(side) == 1 else f"{side} at bus {bus}" for (bus, _), side in zip(islands, sides)]
+
+
+def describe_size(n_buses):
+    """An island's size: "7 buses", "1 bus"."""
+    return f"{n_buses} bus" + ("" if n_buses == 1 else "es")
+
+
+def find_island_names(voltage_round, target=None):
+    """The name of each island of a round, by its bus."""
+    islands = [(island["bus"], island["n_buses"]) for island in voltage_round["islands"]]
+    return dict(zip([bus for bus, _ in islands], name_islands(target, islands)))
+
+
 # ==================== What a round says ====================
 def find_checked_islands(voltage_round):
     """The islands of a round whose state was computed."""
     return [island for island in voltage_round["islands"] if island["status"] == "checked"]
 
 
-def find_island_table(voltage_round):
-    """(columns, rows, footers) of every island: its size, what holds its voltage, its slack and its worst indicator."""
+def find_island_table(voltage_round, target=None):
+    """
+    (columns, rows, footers) of every island: its name (by the run's `target`, name_islands), its
+    size, what holds its voltage, its slack and its worst indicator.
+    """
+    names = find_island_names(voltage_round, target)
     columns = [
-        ("Island at bus", "bus", None),
+        ("Island", "name", None),
         ("Buses", "n_buses", 0),
         ("With generation", "n_with_generation", 0),
         ("Holding voltage", "n_holding_voltage", 0),
@@ -39,37 +72,43 @@ def find_island_table(voltage_round):
         ("Worst indicator", "worst_indicator", 3),
         ("State", "state", None),
     ]
-    rows = [dict(island, state=ISLAND_STATUS.get(island["status"], island["status"])) for island in voltage_round["islands"]]
+    rows = []
+    for island in voltage_round["islands"]:
+        rows.append(dict(island, name=names[island["bus"]], state=ISLAND_STATUS.get(island["status"], island["status"])))
     return columns, rows, []
 
 
-def find_indicator_table(voltage_round):
-    """(columns, rows, footers) of each checked island's largest indicators, with the bus voltage and load."""
-    columns = [("Island at bus", "island", None), ("Indicator", "value", 3), ("Bus", "bus", None), ("V (pu)", "vm", 3), ("Load (MW)", "pd_mw", 2)]
+def find_indicator_table(voltage_round, target=None):
+    """(columns, rows, footers) of each checked island's largest indicators, with the bus voltage and load; `island` is the island's bus."""
+    names = find_island_names(voltage_round, target)
+    columns = [("Island", "island_name", None), ("Indicator", "value", 3), ("Bus", "bus", None), ("V (pu)", "vm", 3), ("Load (MW)", "pd_mw", 2)]
     rows = []
     for island in find_checked_islands(voltage_round):
         for indicator in island["largest_indicators"]:
-            rows.append(dict(indicator, island=island["bus"]))
+            rows.append(dict(indicator, island=island["bus"], island_name=names[island["bus"]]))
     return columns, rows, []
 
 
-def find_limit_table(voltage_round):
-    """(columns, rows, footers) of each checked island's generators at a reactive limit, as lists of bus numbers."""
-    columns = [("Island at bus", "island", None), ("At upper limit", "upper", None), ("At lower limit", "lower", None)]
+def find_limit_table(voltage_round, target=None):
+    """(columns, rows, footers) of each checked island's generators at a reactive limit, as lists of bus numbers; `island` is the island's bus."""
+    names = find_island_names(voltage_round, target)
+    columns = [("Island", "island_name", None), ("At upper limit", "upper", None), ("At lower limit", "lower", None)]
     rows = []
     for island in find_checked_islands(voltage_round):
         rows.append({
             "island": island["bus"],
+            "island_name": names[island["bus"]],
             "upper": ", ".join(str(bus) for bus in island["at_upper_limit"]) or "none",
             "lower": ", ".join(str(bus) for bus in island["at_lower_limit"]) or "none",
         })
     return columns, rows, []
 
 
-def find_shed_table(voltage_round):
-    """(columns, rows, footers) of the sheds sized in a round, with the indicator predicted after each island's sheds."""
+def find_shed_table(voltage_round, target=None):
+    """(columns, rows, footers) of the sheds sized in a round, with the indicator predicted after each island's sheds; `island` is the island's bus."""
+    names = find_island_names(voltage_round, target)
     columns = [
-        ("Island at bus", "island", None),
+        ("Island", "island_name", None),
         ("Shed at bus", "bus", None),
         ("Shed (MW)", "shed_mw", 2),
         ("Of load (MW)", "of_mw", 2),
@@ -82,7 +121,10 @@ def find_shed_table(voltage_round):
         if shed is None:
             continue
         for sized in shed["sheds"]:
-            rows.append(dict(sized, island=island["bus"], indicator_after=shed["indicator_after"], indicator_after_bus=shed["indicator_after_bus"]))
+            rows.append(dict(
+                sized, island=island["bus"], island_name=names[island["bus"]],
+                indicator_after=shed["indicator_after"], indicator_after_bus=shed["indicator_after_bus"],
+            ))
     return columns, rows, []
 
 
@@ -104,32 +146,33 @@ class VoltageDetailsDialog:
                 theme.button(icon="close", kind="ghost", on_click=self.dialog.close).tooltip("Close")
             self.body = ui.element("div").classes("dialog-body")
 
-    def open(self, record):
-        """Show the rounds of the run's voltage security check."""
+    def open(self, record, name):
+        """Show the rounds of the run's voltage security check; `name` is how the title names the run ("run 3")."""
         voltage = record["summary"]["voltage"]
         rounds = voltage["rounds"]
-        self.title.text = f"Voltage security of run {record['number']}"
+        self.title.text = f"Voltage security of {name}"
         self.result.text = (
             ("verified" if voltage["verified"] else "not verified")
             + f" in {rounds} round" + ("" if rounds == 1 else "s")
             + f", worst indicator {theme.format_number(voltage['worst_indicator'], 3)}"
         )
+        target = record["summary"].get("target")       # names the islands; runs kept before it have none
         self.body.clear()
         with self.body:
             for voltage_round in voltage["details"]:
-                self._build_round(voltage_round)
+                self._build_round(voltage_round, target)
         self.dialog.open()
 
-    def _build_round(self, voltage_round):
+    def _build_round(self, voltage_round, target):
         with ui.element("div").classes("round"):
             with theme.line():
                 ui.label(f"Round {voltage_round['round']}").classes("round-title")
                 theme.hint(describe_round(voltage_round))
-            self._build_block("Islands", find_island_table(voltage_round))
+            self._build_block("Islands", find_island_table(voltage_round, target))
             with ui.element("div").classes("tables"):
-                self._build_block("Largest indicators", find_indicator_table(voltage_round))
-                self._build_block("Sheds sized", find_shed_table(voltage_round), empty="No shed was sized in this round.")
-            self._build_block("Generators at a reactive limit", find_limit_table(voltage_round), wrap=True)
+                self._build_block("Largest indicators", find_indicator_table(voltage_round, target))
+                self._build_block("Sheds sized", find_shed_table(voltage_round, target), empty="No shed was sized in this round.")
+            self._build_block("Generators at a reactive limit", find_limit_table(voltage_round, target), wrap=True)
 
     @staticmethod
     def _build_block(title, table, empty="None.", wrap=False):

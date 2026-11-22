@@ -68,6 +68,7 @@ class NetworkPage:
                 self.message = theme.toolbar_text()
                 self.fit_button = theme.button("Fit", kind="ghost", on_click=lambda: self.canvas.fit()).tooltip("Show the whole network")
                 theme.button(icon="refresh", kind="ghost", on_click=self.reload, busy=True).tooltip("Read this case's network from Julia again")
+                theme.help_mark(HOW_TO)
             with ui.element("div").classes("network-body"):
                 self.canvas = NetworkCanvas(on_pick=self._picked, on_box=self._boxed, on_ready=self._first_shown)
                 self.cover = theme.Cover()
@@ -76,10 +77,6 @@ class NetworkPage:
                         self._build_selection()
                     theme.eyebrow("Legend")
                     self.legend = ui.element("div").classes("network-legend")
-                    theme.eyebrow("How to use")
-                    with theme.stack():
-                        for text in HOW_TO:
-                            theme.hint(text)
         with theme.offstage():
             self.timer = ui.timer(0.5, self._load_cases, active=False)
         # what greys out while the page waits: the choices of what to show, and the selection ("How to use" stays readable)
@@ -102,12 +99,15 @@ class NetworkPage:
         self.target_hint = theme.hint()
         with theme.line():
             self.target_button = theme.button("Use as target", kind="primary", on_click=self._use_as_target, busy=True)
+            with self.target_button:
+                self.target_tooltip = ui.tooltip()      # what the button does with this selection
             self.zoom_button = theme.button("Zoom to it", kind="ghost", on_click=self._zoom_to_selection)
             self.clear_button = theme.button("Clear", kind="ghost", on_click=self._clear_selection)
         with theme.line():
             self.penalty_value = ui.number(placeholder="× λ", min=0).classes("field-penalty")
             self.penalty_button = theme.button("Set penalty", on_click=self._set_penalty, busy=True)
-        self.penalty_hint = theme.hint()
+            with self.penalty_button:
+                self.penalty_tooltip = ui.tooltip()
 
     # -------------------- reading from Julia --------------------
     def _first_shown(self):
@@ -432,23 +432,29 @@ class NetworkPage:
         can_penalize = self.mode != "lines" and bool(buses)
         self.penalty_value.set_enabled(can_penalize)
         self.penalty_button.set_enabled(can_penalize)
+        # what the two buttons would do goes in their tooltips; only the empty selection gets a line of its own
+        hint, target_tip, penalty_tip = "", "", ""
         if self.network is None:
-            self.target_hint.text = ""
-            self.penalty_hint.text = ""
+            pass
         elif not has_selection:
             what = {"group": f"a circle or a bus for its {self.kind}", "buses": "buses", "lines": "lines"}[self.mode]
-            self.target_hint.text = f"Nothing is selected. Click {what}, or type them above." if self.mode != "group" else f"Nothing is selected. Click {what}, or choose it above."
-            self.penalty_hint.text = ""
+            hint = f"Nothing is selected. Click {what}, or type them above." if self.mode != "group" else f"Nothing is selected. Click {what}, or choose it above."
+            target_tip = "Select a zone or an area, buses or lines first"
+            penalty_tip = "Select a zone or an area, or buses, first"
         elif self.mode == "group":
             name = self.network.find_group_name(self.kind, self.group)
-            self.target_hint.text = f"Use as target: the Run form gets {self.kind} {name} as its boundary, the lines drawn in red."
-            self.penalty_hint.text = f"Set penalty: a load shedding penalty for {self.kind} {name}, in multiples of λ."
+            target_tip = f"The Run form gets {self.kind} {name} as its boundary, the lines drawn in red"
+            penalty_tip = f"A load shedding penalty for {self.kind} {name}, in multiples of λ"
         elif self.mode == "buses":
-            self.target_hint.text = f"Use as target: the Run form gets the {len(boundary)} bus pairs around these buses as its boundary."
-            self.penalty_hint.text = "Set penalty: a load shedding penalty for each of these buses that has a load, in multiples of λ."
+            target_tip = f"The Run form gets the {len(boundary)} bus pairs around these buses as its boundary"
+            penalty_tip = "A load shedding penalty for each of these buses that has a load, in multiples of λ"
         else:
-            self.target_hint.text = f"Use as target: the Run form gets these {len(boundary)} bus pairs as its boundary."
-            self.penalty_hint.text = ""
+            target_tip = f"The Run form gets these {len(boundary)} bus pairs as its boundary"
+            penalty_tip = "A penalty is for loads: select a zone or an area, or buses"
+        self.target_hint.text = hint
+        for tooltip, text in ((self.target_tooltip, target_tip), (self.penalty_tooltip, penalty_tip)):
+            tooltip.text = text
+            tooltip.set_visibility(bool(text))
 
     # -------------------- selecting --------------------
     def _set_problem(self, text=""):

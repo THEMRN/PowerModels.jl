@@ -1,7 +1,7 @@
 """
 History page: the runs in results/psse, from the GUI and from the scripts, with filters, a table
 sorted by any column, and the details of the run selected. Its report and its folder open from
-there, and its settings go back into the Run form.
+there, and its settings go back into the Run form, with its results when the run kept them.
 
 The rows come from `results_index.py`, which reads the per-run settings files (and the reports
 of older runs) and draws nothing. The folder is read when the page is built, on Refresh, and
@@ -10,6 +10,7 @@ hand.
 """
 
 import copy
+import re
 from datetime import datetime
 
 from nicegui import ui
@@ -17,7 +18,7 @@ from nicegui import ui
 import advanced
 import results_index
 import theme
-from components.results_view import open_folder, open_report
+from components.results_view import build_loaded_record, find_session_record, open_folder, open_report
 from components.sortable_table import SortableTable
 from settings import OBJECTIVES, format_bus_pairs
 
@@ -35,20 +36,81 @@ COLUMNS = [
     {"key": "shed", "label": "Shed (MW)", "numeric": True},
     {"key": "simulator", "label": "Simulation"},
     {"key": "security", "label": "Security"},
+    {"key": "solver", "label": "Solver"},
     {"key": "status", "label": "Status"},
     {"key": "report", "label": "Report"},
 ]
-STATUS_CHOICES = {"": "Any status", "finished": "finished", "started": "incomplete", "running": "running", "older": "no settings"}
+SOLVER_LABELS = {               # solver status -> what the Solver column says; any other is shown in lower case
+    "LOCALLY_SOLVED": "solved",
+    "OPTIMAL": "solved",
+    "ALMOST_LOCALLY_SOLVED": "almost solved",
+    "ALMOST_OPTIMAL": "almost solved",
+    "LOCALLY_INFEASIBLE": "infeasible",
+    "INFEASIBLE": "infeasible",
+    "ITERATION_LIMIT": "iteration limit",
+}
+SOLVED = ("LOCALLY_SOLVED", "OPTIMAL")
+ALMOST_SOLVED = ("ALMOST_LOCALLY_SOLVED", "ALMOST_OPTIMAL")
+DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+STATUS_CHOICES = {
+    "": "Any status",
+    "finished": "finished",
+    "started": "incomplete",
+    "running": "running",
+    "older": "no settings",
+}
 TONES = {"started": "warn", "older": "muted"}
-STATE_DOTS = {"finished": "finished", "started": "failed", "running": "running", "older": "stopped"}      # colour of the status dot
+STATE_DOTS = {
+    "finished": "finished",
+    "started": "failed",
+    "running": "running",
+    "older": "stopped",
+}  # colour of the status dot
 
 
 # ==================== What the table and the details say ====================
+def describe_solver(status):
+    """(text, tone) of the Solver column: "solved"; "infeasible" in red; "–" for a run that did not get that far."""
+    if not status:
+        return NO_VALUE, ""
+    text = SOLVER_LABELS.get(status, status.lower().replace("_", " "))
+    if status in SOLVED:
+        return text, ""
+    if status in ALMOST_SOLVED:
+        return text, "cell-warn"
+    return text, "cell-bad"
+
+
+def read_date(text):
+    """A date typed as yyyy-mm-dd, or "" while it is not a whole day of the calendar (it is being typed)."""
+    text = (text or "").strip()
+    if not DATE.fullmatch(text):
+        return ""
+    try:
+        datetime.strptime(text, "%Y-%m-%d")
+    except ValueError:
+        return ""
+    return text
+
+
+def build_date_field(on_change):
+    """A date typed as yyyy-mm-dd whatever the browser's language (a date input shows the system's form), or picked in a calendar from its icon."""
+    field = ui.input(placeholder="yyyy-mm-dd", on_change=on_change).props('mask="####-##-##"').classes("field-date")
+    with field:
+        with ui.menu().props("no-parent-event").classes("date-menu") as menu:
+            ui.date(on_change=menu.close).props("minimal flat").bind_value(field)
+    with field.add_slot("append"):
+        ui.icon(theme.ICONS["calendar"]).classes("date-icon").on("click", menu.open)
+    return field
+
+
 def build_table_row(row):
     """A row of the table for a row of results_index: texts to show, and values to sort by."""
+    solver, solver_tone = describe_solver(row["solver"])
     return {
         "id": row["id"],
         "tone": TONES.get(row["status"], ""),
+        "tones": {"solver": solver_tone},
         "time": row["time_text"],
         "case": row["case"] or NO_VALUE,
         "objective": row["objective"] or NO_VALUE,
@@ -59,6 +121,7 @@ def build_table_row(row):
         "shed": results_index.format_number(row["shed_mw"]),
         "simulator": row["simulator"],
         "security": row["security"].replace("frequency", "freq").replace("voltage", "volt"),
+        "solver": solver,
         "status": results_index.STATUS_LABELS[row["status"]],
         "report": "report" if row["report"] else NO_VALUE,
         "sort": {"time": row["time"], "lambda": row["lambda"], "shed": row["shed_mw"]},
@@ -66,7 +129,7 @@ def build_table_row(row):
 
 
 def describe_seconds(seconds):
-    """"solve 19.1 s, simulation 52.0 s, total 80.3 s" from a record's `seconds`."""
+    """ "solve 19.1 s, simulation 52.0 s, total 80.3 s" from a record's `seconds`."""
     if not seconds:
         return NO_VALUE
     parts = []
@@ -80,9 +143,11 @@ def describe_result(summary):
     """The facts of a record's summary: [(name, text)]."""
     if not summary:
         return [("Result", "none: the run did not finish")]
-    facts = [("Solver", summary.get("termination_status") or NO_VALUE),
-             ("Objective value", NO_VALUE if summary.get("objective") is None else str(summary["objective"])),
-             ("Load shed", f"{results_index.format_number(summary.get('preemptive_shed_mw'))} MW")]
+    facts = [
+        ("Solver", summary.get("termination_status") or NO_VALUE),
+        ("Objective value", NO_VALUE if summary.get("objective") is None else str(summary["objective"])),
+        ("Load shed", f"{results_index.format_number(summary.get('preemptive_shed_mw'))} MW"),
+    ]
     voltage = summary.get("voltage_security")
     if voltage:
         verified = "verified" if voltage.get("verified") else "not verified"
@@ -123,6 +188,8 @@ def describe_settings_row(row):
     facts.extend(describe_result(record.get("summary")))
     files = record.get("files") or {}
     names = [row["file"]] + [files[key] for key in ("excel", "report") if files.get(key)]
+    if row["result"]:
+        names.append(row["result"])
     facts.append(("Files", "\n".join(names)))
 
     notes = []
@@ -130,11 +197,20 @@ def describe_settings_row(row):
         notes.append("This run never finished: it failed, was stopped, or is running outside this GUI.")
     elif row["status"] == "running":
         notes.append("This run is running now in this GUI.")
-    if gui_settings:
-        notes.append("Started from the GUI: Load into Run gives the form these settings as they were.")
+    if gui_settings and row["result"]:
+        notes.append(
+            "Started from the GUI: Load into Run gives the form these settings as they were, and shows the run's results."
+        )
+    elif gui_settings:
+        notes.append(
+            "Started from the GUI: Load into Run gives the form these settings as they were. The run kept no results "
+            "to show: it did not finish, or it ran before the GUI kept them."
+        )
     else:
-        notes.append("Started from a script (islanding.jl or batch_islanding.jl): Load into Run fills the form with what "
-                     "the run recorded. Changes the script made to the network, such as load scaling, are not recorded.")
+        notes.append(
+            "Started from a script (islanding.jl or batch_islanding.jl): Load into Run fills the form with what "
+            "the run recorded. Changes the script made to the network, such as load scaling, are not recorded."
+        )
     if files.get("raw"):
         notes.append(f"The RAW file {files['raw']} is the folder's, and a later run of this folder writes over it.")
     return facts, notes
@@ -151,23 +227,29 @@ def describe_report_row(row):
         ("Simulation", row["simulator"]),
         ("Files", row["file"]),
     ]
-    notes = ["This run is from before runs kept a settings file, so its settings are not known and it cannot be loaded into the Run form."]
+    notes = [
+        "This run is from before runs kept a settings file, so its settings are not known and it cannot be loaded into the Run form."
+    ]
     info = row["run_info"]
     if info:
-        facts.extend([
-            ("Boundary", row["boundary"]),
-            ("Penalties", row["penalties"]),
-            ("Load shed", f"{results_index.format_number(row['shed_mw'])} MW"),
-            ("Flow penalty", info.get("flow_model") or NO_VALUE),
-            ("Security", row["security"]),
-        ])
-        notes.append("Boundary, penalties, shed and security come from the folder's run_info.json, which this run wrote "
-                     "(it was the folder's last run).")
+        facts.extend(
+            [
+                ("Boundary", row["boundary"]),
+                ("Penalties", row["penalties"]),
+                ("Load shed", f"{results_index.format_number(row['shed_mw'])} MW"),
+                ("Flow penalty", info.get("flow_model") or NO_VALUE),
+                ("Security", row["security"]),
+            ]
+        )
+        notes.append(
+            "Boundary, penalties, shed and security come from the folder's run_info.json, which this run wrote "
+            "(it was the folder's last run)."
+        )
     return facts, notes
 
 
 def format_iso(iso):
-    """"2026-11-21 02:15:52" from an ISO time."""
+    """ "2026-11-21 02:15:52" from an ISO time."""
     return iso.replace("T", " ") if iso else NO_VALUE
 
 
@@ -177,14 +259,16 @@ class HistoryPage:
 
     def __init__(self, ctx, client_state):
         self.ctx = ctx
-        self.client_state = client_state    # of this browser tab: the Run form, the functions that load it and show a page
-        self.rows = []                      # every run, from results_index
-        self.shown = []                     # the runs that pass the filters
-        self.selected = None                # id of the selected run
-        self.shown_details = None           # the run whose details are on show, as it was then
-        self.read_at = ""                   # clock time the folders were last read
-        self.running = set()                # (number, stages reached) of this session's runs that are running
-        self.load_request = 0               # counts Load into Run clicks: a newer one replaces one still waiting for Julia
+        self.client_state = (
+            client_state  # of this browser tab: the Run form, the functions that load it and show a page
+        )
+        self.rows = []  # every run, from results_index
+        self.shown = []  # the runs that pass the filters
+        self.selected = None  # id of the selected run
+        self.shown_details = None  # the run whose details are on show, as it was then
+        self.read_at = ""  # clock time the folders were last read
+        self.running = set()  # (number, stages reached) of this session's runs that are running
+        self.load_request = 0  # counts Load into Run clicks: a newer one replaces one still waiting for Julia
 
     # -------------------- layout --------------------
     def build(self):
@@ -193,26 +277,36 @@ class HistoryPage:
                 theme.eyebrow("Runs in results/psse")
                 self.count = theme.toolbar_text()
                 with self.count:
-                    self.count_tooltip = ui.tooltip()       # the settings files that could not be read, and why
+                    self.count_tooltip = ui.tooltip()  # the settings files that could not be read, and why
                 theme.button("Refresh", icon="refresh", kind="ghost", on_click=self.refresh, busy=True).tooltip(
                     "Read the results folders again"
                 )
             with ui.element("div").classes("history-filters"):
                 self.text = ui.input(placeholder="folder or tag", on_change=self._filter).classes("field-text")
                 self.case = ui.select({"": "All cases"}, value="", on_change=self._filter).classes("field-choice")
-                self.objective = ui.select({"": "All objectives"}, value="", on_change=self._filter).classes("field-choice")
-                self.group = ui.select({"": "Any zone or area"}, value="", with_input=True, on_change=self._filter).classes("field-group")
-                self.simulator = ui.select({"": "Any simulation"}, value="", on_change=self._filter).classes("field-choice")
+                self.objective = ui.select({"": "All objectives"}, value="", on_change=self._filter).classes(
+                    "field-choice"
+                )
+                self.group = ui.select(
+                    {"": "Any zone or area"}, value="", with_input=True, on_change=self._filter
+                ).classes("field-group")
+                self.simulator = ui.select({"": "Any simulation"}, value="", on_change=self._filter).classes(
+                    "field-choice"
+                )
                 self.status = ui.select(dict(STATUS_CHOICES), value="", on_change=self._filter).classes("field-choice")
                 theme.label("From")
-                self.date_from = ui.input(on_change=self._filter).props("type=date").classes("field-date")
+                self.date_from = build_date_field(self._filter)
                 theme.label("to")
-                self.date_to = ui.input(on_change=self._filter).props("type=date").classes("field-date")
+                self.date_to = build_date_field(self._filter)
                 self.with_report = ui.checkbox("Only with a report", on_change=self._filter)
                 theme.button("Clear", kind="ghost", on_click=self._clear_filters).tooltip("Show every run")
             with ui.element("div").classes("history-body"):
-                self.table = SortableTable(COLUMNS, order={"key": "time", "descending": True},
-                                           empty="No run passes these filters.", on_select=self._select)
+                self.table = SortableTable(
+                    COLUMNS,
+                    order={"key": "time", "descending": True},
+                    empty="No run passes these filters.",
+                    on_select=self._select,
+                )
                 with ui.element("div").classes("history-side"):
                     theme.eyebrow("Run")
                     self.details = ui.element("div").classes("history-details")
@@ -243,7 +337,11 @@ class HistoryPage:
         shows as it is (its settings file is written when it starts to solve). Other changes, such
         as a new log line, do not read them.
         """
-        running = {(record["number"], len(record["stages"])) for record in self.ctx.runs.records if record["status"] == "running"}
+        running = {
+            (record["number"], len(record["stages"]))
+            for record in self.ctx.runs.records
+            if record["status"] == "running"
+        }
         if running != self.running:
             self.running = running
             self.refresh()
@@ -265,16 +363,27 @@ class HistoryPage:
     # -------------------- filters --------------------
     def _filter(self, _event=None):
         self.shown = results_index.filter_rows(
-            self.rows, text=self.text.value, case=self.case.value, objective=self.objective.value, group=self.group.value,
-            simulator=self.simulator.value, date_from=self.date_from.value or "", date_to=self.date_to.value or "",
-            status=self.status.value, with_report=self.with_report.value,
+            self.rows,
+            text=self.text.value,
+            case=self.case.value,
+            objective=self.objective.value,
+            group=self.group.value,
+            simulator=self.simulator.value,
+            date_from=read_date(self.date_from.value),
+            date_to=read_date(self.date_to.value),
+            status=self.status.value,
+            with_report=self.with_report.value,
         )
         if self.selected not in {row["id"] for row in self.shown}:
             self.selected = None
-        text = f"{len(self.rows)} runs" if len(self.shown) == len(self.rows) else f"{len(self.shown)} of {len(self.rows)} runs"
+        text = (
+            f"{len(self.rows)} runs"
+            if len(self.shown) == len(self.rows)
+            else f"{len(self.shown)} of {len(self.rows)} runs"
+        )
         if self.unreadable:
             unreadable = len(self.unreadable)
-            text += f"; {unreadable} settings file{'s' if unreadable > 1 else ''} could not be read (a run stopped while writing it?)"
+            text += f"; {unreadable} settings file{'s' if unreadable > 1 else ''} could not be read"
         self.count.text = f"{text} · read at {self.read_at}"
         self.count_tooltip.text = "; ".join(f"{name}: {reason}" for name, reason in self.unreadable)
         self.count_tooltip.set_visibility(bool(self.unreadable))
@@ -303,7 +412,7 @@ class HistoryPage:
     def _show_details(self):
         row = self._find_selected()
         if row == self.shown_details and row is not None:
-            return                          # the folders were read again and this run did not change: no flicker
+            return  # the folders were read again and this run did not change: no flicker
         self.shown_details = row
         self.details.clear()
         with self.details:
@@ -333,8 +442,22 @@ class HistoryPage:
         if row is not None:
             open_folder({"output_path": row["path"]})
 
+    def _find_result(self, row, run_settings):
+        """
+        The run whose results go into the Run page's results panel with the row's settings: this
+        session's own run when it ran here, otherwise the results the run kept in its folder; and
+        "", or a sentence saying why there are none.
+        """
+        session_record = find_session_record(self.ctx.runs.records, row["folder"], row["file"])
+        if session_record is not None:
+            return session_record, ""
+        summary, missing = results_index.read_result(row)
+        if summary is None:
+            return None, missing
+        return build_loaded_record(row["id"], copy.deepcopy(run_settings), summary, row["time_text"]), ""
+
     async def _load_into_run(self):
-        """Put the selected run's settings into the Run form of this browser tab, and show the Run page."""
+        """Put the selected run's settings into the Run form of this browser tab, show its results, and show the Run page."""
         row = self._find_selected()
         if row is None or row["kind"] != "settings":
             return
@@ -344,7 +467,11 @@ class HistoryPage:
             return
         case = row["case_path"]
         if case not in (self.ctx.state.get("cases") or []):
-            ui.notify(f"The case {case or row['case']} is not in cases/psse, so this run cannot be loaded.", position="top", type="warning")
+            ui.notify(
+                f"The case {case or row['case']} is not in cases/psse, so this run cannot be loaded.",
+                position="top",
+                type="warning",
+            )
             return
         record = row["record"]
         notes = []
@@ -356,15 +483,23 @@ class HistoryPage:
             run_settings = copy.deepcopy(record["gui_settings"])
         else:
             case_info, error = await form.find_case_info(case)
-            if request != self.load_request:        # another run was loaded meanwhile
+            if request != self.load_request:  # another run was loaded meanwhile
                 return
             if error:
-                ui.notify(f"The settings were not loaded, because the case could not be read: {error}", position="top", type="warning")
+                ui.notify(
+                    f"The settings were not loaded, because the case could not be read: {error}",
+                    position="top",
+                    type="warning",
+                )
                 return
             load_buses = {load["bus"] for load in case_info.get("loads", []) if load["status"] != 0}
             run_settings, notes = results_index.build_settings_from_record(record, case, load_buses)
+        result, missing = self._find_result(
+            row, run_settings
+        )  # after the check above: the results of the run clicked last
         message = f"The settings of the run of {row['time_text']} ({row['folder']}) are in the form."
-        await self.client_state["load_settings"](run_settings, " ".join([message] + notes))
+        notes = [message] + notes + ([missing] if missing else [])
+        await self.client_state["load_settings"](run_settings, " ".join(notes), result)
 
 
 def build(ctx):

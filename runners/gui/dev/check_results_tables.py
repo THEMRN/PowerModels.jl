@@ -58,7 +58,7 @@ lines = LOG.read_text(encoding="utf-8", errors="replace").split("\n")
 starts = [i for i, line in enumerate(lines) if "@@start" in line] + [len(lines)]
 for job, (first, last) in enumerate(zip(starts, starts[1:]), start=1):
     segment = lines[first:last]
-    result_line = next((line for line in segment if "@@result" in line), None)
+    result_line = next((line for line in reversed(segment) if "@@result" in line), None)     # the final one: a run with the simulation sends one before it too
     if result_line is None:
         continue
     summary = json.loads(result_line[result_line.index("{"):])["summary"]
@@ -135,8 +135,9 @@ for job, (first, last) in enumerate(zip(starts, starts[1:]), start=1):
             rf"\s+scheduled import: ({NUMBER}) MW", text)
         check(len(printed_islands) == len(table[1]), f"{tag}: {len(printed_islands)} frequency islands printed, {len(table[1])} rows")
         for printed, row in zip(printed_islands, table[1]):
-            titles = ("Island at bus", "Buses", "Generators", "With governor", "H (s)", "K (pu)", "D (pu)", "RoCoF limit (MW)", "QSS limit (MW)", "Nadir limit (MW)")
-            for title, value in zip(titles, printed[:10]):
+            check(row["island_bus"] == int(printed[0]), f"{tag}: frequency island at bus {row['island_bus']} vs {printed[0]}")     # the panel names it, by the target
+            titles = ("Buses", "Generators", "With governor", "H (s)", "K (pu)", "D (pu)", "RoCoF limit (MW)", "QSS limit (MW)", "Nadir limit (MW)")
+            for title, value in zip(titles, printed[1:10]):
                 check(float(shown(table, row, title)) == float(value), f"{tag}: frequency {title}: {shown(table, row, title)} vs {value}")
             check(shown(table, row, "Binding").lower() == printed[10].lower(), f"{tag}: binding {shown(table, row, 'Binding')} vs {printed[10]}")
             check(float(shown(table, row, "Scheduled import (MW)")) == float(printed[11]), f"{tag}: import {shown(table, row, 'Scheduled import (MW)')} vs {printed[11]}")

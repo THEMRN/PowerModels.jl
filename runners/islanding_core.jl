@@ -214,7 +214,9 @@ quasi-steady-state and nadir bounds (see frequency.jl); it needs the case .dyr.
 voltage collapse indicator of each island (see voltage.jl); it needs the AC model.
 
 `simulator` picks the dynamic simulation run after the export: "psse"
-(psse_scripts/dynamic.py) or "andes" (andes_scripts/dynamic.py).
+(psse_scripts/dynamic.py) or "andes" (andes_scripts/dynamic.py). `open_report=false`
+passes `--no-open` to the script, so the ANDES report is written but not opened in the
+browser; the PSS®E script ignores it and always opens its report.
 
 `target_zone` or `target_area` names the group the boundary encloses; `selected_buses`
 are its buses (flows are reported into them). An area goes to run_info as
@@ -233,6 +235,9 @@ in it as `gui_settings`.
 `activity`, when given, is called with a note on what the solve stage is doing, as each of its
 steps starts: building the optimization model, Ipopt's iterations (`build_ipopt_reporter`), and
 the parts of each voltage round ("voltage round 2: checking the islands' voltage").
+`on_solved`, when given, is called as `on_solved(result, solve_seconds)` once the solve and its
+console reports are done, before the Excel report and the dynamic simulation (the GUI shows the
+results from there).
 
 Returns the solve `result`.
 """
@@ -255,8 +260,10 @@ function run_islanding(network_data;
     frequency_security::Bool=false,
     voltage_security::Bool=false,
     simulator::AbstractString="psse",
+    open_report::Bool=true,
     progress=nothing,
     activity=nothing,
+    on_solved=nothing,
     run_settings=nothing,
 )
     simulator in ("psse", "andes") || error("unknown simulator \"$simulator\", use \"psse\" or \"andes\"")
@@ -307,6 +314,7 @@ function run_islanding(network_data;
         voltage_security=voltage_security,
         run_dynamic_sim=run_dynamic_sim,
         simulator=simulator,
+        open_report=open_report,
         output_tag=output_tag,
         gui_settings=run_settings,
         files=nothing,
@@ -367,6 +375,7 @@ function run_islanding(network_data;
         print_frequency_security(network_data, result)
     end
     println("---------------------------")
+    on_solved === nothing || on_solved(result, solve_seconds)
 
     # write run information for the python report header
     report_stage("excel")
@@ -469,7 +478,9 @@ function run_islanding(network_data;
         report_stage("dynamic_sim")
         println("Running $simulator simulation script...")
         python_script = joinpath(@__DIR__, "$(simulator)_scripts", "dynamic.py")
-        simulation_seconds = @elapsed run(`python $python_script $raw_file $dyr_file $excel_file`)
+        simulation_command = `python $python_script $raw_file $dyr_file $excel_file`
+        open_report || (simulation_command = `$simulation_command --no-open`)     # the report is written, not opened
+        simulation_seconds = @elapsed run(simulation_command)
         println("$simulator simulation script finished in $(round(simulation_seconds, digits=1)) s")
         report_file = find_new_report(output_path, run_started)
     end

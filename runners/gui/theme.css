@@ -81,6 +81,25 @@ body {
   gap: 6px;
   margin-left: auto;
 }
+/* what the page says once Quit has stopped the app (it replaces the whole page) */
+.quit-note {
+  max-width: 460px;
+  margin: 18vh auto 0;
+  padding: 22px 24px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--ink-2);
+  font-family: var(--font);
+  font-size: 13px;
+  line-height: 1.55;
+}
+.quit-note strong {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--ink);
+  font-size: 14px;
+}
 
 /* ==================== Building blocks ==================== */
 /* a white block with a hairline border */
@@ -226,6 +245,13 @@ body {
 .data-table tfoot td {
   font-weight: 600;
 }
+/* totals on top (theme.data_table with totals_on_top): a firmer line under them */
+.data-table tbody.totals td {
+  font-weight: 600;
+}
+.data-table tbody.totals tr:last-child td {
+  border-bottom-color: var(--line-strong);
+}
 /* a long table in a box of its own, its column titles staying in view */
 .table-scroll {
   max-height: 440px;
@@ -354,6 +380,36 @@ body {
   pointer-events: none;
   transition: opacity 0.15s 0.2s;
 }
+/* settings the current choice does not use (theme.dim_unused): dimmed, still editable */
+.unused {
+  opacity: 0.42;
+  transition: opacity 0.15s;
+}
+.unused:hover,
+.unused:focus-within {
+  opacity: 0.8;
+}
+/* a "?" that shows how to use a page in its tooltip (theme.help_mark) */
+.help-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  color: var(--ink-2);
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: help;
+  user-select: none;
+}
+.help-mark:hover {
+  border-color: var(--ink-3);
+  color: var(--ink);
+}
 /* the app was closed or is restarting: NiceGUI shows its "Connection lost" note, and the page
    greys out, since nothing on it answers until the app is back */
 body:has(#popup[aria-hidden="false"]) .q-header,
@@ -459,12 +515,28 @@ body:has(#popup[aria-hidden="false"]) .q-page-container {
   white-space: nowrap;
 }
 
-/* load shedding penalties: where, value, remove */
+/* load shedding penalties: where, value, move up and down, remove */
 .penalty-row {
   display: grid;
-  grid-template-columns: 108px minmax(0, 1fr) 64px 24px;     /* the kind takes "All but zone" whole */
+  grid-template-columns: 108px minmax(0, 1fr) 64px 16px 24px;     /* the kind takes "All but zone" whole */
   column-gap: 6px;
   align-items: center;
+}
+/* two small arrows on top of each other, in the height of one field */
+.move-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.move-buttons .q-btn.btn-small.btn-icon {
+  width: 16px;
+  min-width: 16px;
+  height: 13px;
+  min-height: 13px;
+  border-radius: 3px;
+}
+.move-buttons .q-btn .q-icon {
+  font-size: 13px;
 }
 .penalty-row > .wide {
   grid-column: span 2;
@@ -553,6 +625,22 @@ body:has(#popup[aria-hidden="false"]) .q-page-container {
 /* -------------------- results panel: the report numbers of one run -------------------- */
 .results-run {
   width: min(560px, 62vw);
+}
+/* the results panel's Clear: a soft yellow, faded like any button while it is off */
+.btn-ghost.btn-clear {
+  background: #fdf3d3;
+  color: #7a5a00;
+  box-shadow: inset 0 0 0 1px #efd99a;
+}
+.btn-ghost.btn-clear:not(.disabled):hover {
+  background: #f9e7b0;
+  color: #5c4300;
+}
+/* a line over the tabs: the results are those of the solve, the simulation's come later */
+.results-note {
+  padding: 8px 14px;
+  border-top: 1px solid var(--line);
+  background: var(--well);
 }
 .results-tabs,
 .dialog-tabs {
@@ -1131,6 +1219,31 @@ input[type="number"]::-webkit-outer-spin-button {
   font-size: 12px;
   line-height: 1.4;
 }
+/* a tooltip of a few sentences: narrower lines, a little room between its paragraphs */
+.q-tooltip.wide-tooltip {
+  max-width: 340px;
+  padding: 7px 10px;
+}
+.q-tooltip.wide-tooltip > * + * {
+  margin-top: 5px;
+}
+/* a date picked in a calendar (History's From and To): the month only, no Material banner */
+.q-menu.date-menu {
+  padding: 0;
+  overflow: hidden;
+}
+.q-date {
+  border-radius: 8px;
+  box-shadow: none;
+  font-size: 12.5px;
+}
+.q-date__calendar-item > .q-btn,
+.q-date__view .q-btn {
+  font-size: 12.5px;
+}
+.q-date__navigation .q-btn {
+  font-weight: 600;
+}
 .q-notification {
   border-radius: 8px;
   background: #1f2430;
@@ -1356,9 +1469,17 @@ input[type="number"]::-webkit-outer-spin-button {
 .history-filters .field-choice { width: 134px; }
 .history-filters .field-group { width: 156px; }
 .history-filters .field-date { width: 128px; }
+.history-filters .date-icon {
+  color: var(--ink-3);
+  font-size: 16px;
+  cursor: pointer;
+}
+.history-filters .date-icon:hover {
+  color: var(--ink);
+}
 .history-body {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 330px;
+  grid-template-columns: minmax(0, 1fr) 310px;
   flex: 1;
   min-height: 0;
   border-top: 1px solid var(--line);
@@ -1400,7 +1521,7 @@ input[type="number"]::-webkit-outer-spin-button {
   padding-left: 6px;
 }
 .sortable-table .data-table td.wide {
-  max-width: 150px;
+  max-width: 135px;                /* with the Solver column, the table fits beside the details at about 1500 px */
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -1414,6 +1535,15 @@ input[type="number"]::-webkit-outer-spin-button {
   color: var(--ink-3);
 }
 .sortable-table tr.warn td.col-status {
+  color: var(--warn);
+  font-weight: 600;
+}
+/* a cell with a tone of its own (a solver that did not solve) */
+.sortable-table td.cell-bad {
+  color: var(--bad);
+  font-weight: 600;
+}
+.sortable-table td.cell-warn {
   color: var(--warn);
   font-weight: 600;
 }

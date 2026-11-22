@@ -5,7 +5,9 @@ checked without a browser.
 A run is one row:
 - a **settings file** (`settings_<timestamp>.json`, written by run_islanding since phase 3, by
   the GUI and by islanding.jl alike) is a row with everything the run recorded. A file still
-  "started" is a run that never finished: it failed, was stopped, or is running now;
+  "started" is a run that never finished: it failed, was stopped, or is running now. A GUI run
+  that finished also keeps its results (`result_<timestamp>.json`, the worker's @@result
+  summary), which Load into Run shows;
 - a **report** (`dynamic_channels_<timestamp>.html`) that no settings file of its folder names
   is an older run, from before the settings files. Its case, objective and tag come from the
   folder's name, its simulator from the files written beside it. A folder's `run_info.json`
@@ -84,6 +86,11 @@ def split_folder_name(folder_name, case_names):
         if objective:
             return "_".join(parts[:place]), objective, tag
     return "", "", ""
+
+
+def calc_result_file_name(settings_file):
+    """The name of the results a GUI run kept beside its settings file: settings_<ts>.json -> result_<ts>.json."""
+    return "result_" + settings_file.removeprefix("settings_")
 
 
 def calc_folder_name(run_settings):
@@ -212,6 +219,9 @@ def build_settings_row(folder, path, record, repo_root):
     report = files.get("report")
     if report and not (folder / report).exists():
         report = None
+    result = calc_result_file_name(path.name)
+    if not (folder / result).exists():
+        result = None
     return {
         "id": f"{folder.name}/{path.name}",
         "kind": "settings",
@@ -229,10 +239,12 @@ def build_settings_row(folder, path, record, repo_root):
         "lambda": record.get("lambda"),
         "penalties": describe_penalties(record),
         "shed_mw": summary.get("preemptive_shed_mw"),
+        "solver": summary.get("termination_status") or "",      # "" for a run that did not finish
         "simulator": describe_simulator(record.get("simulator"), record.get("run_dynamic_sim")),
         "security": describe_security(record.get("frequency_security"), record.get("voltage_security")),
         "status": "finished" if record.get("status") == "finished" else "started",
         "report": report,
+        "result": result,
         "from_gui": bool(record.get("gui_settings")),
         "record": record,
         "run_info": None,
@@ -273,10 +285,12 @@ def build_report_row(folder, path, case_names):
         "lambda": None,
         "penalties": NO_VALUE,
         "shed_mw": None,
+        "solver": "",
         "simulator": describe_simulator(find_simulator_of_report(folder, stamp), True),
         "security": NO_VALUE,
         "status": "older",
         "report": path.name,
+        "result": None,
         "from_gui": False,
         "record": None,
         "run_info": None,
@@ -453,6 +467,7 @@ def build_settings_from_record(record, case, load_buses):
         "voltage_security": bool(record.get("voltage_security")),
         "run_dynamic_sim": bool(record.get("run_dynamic_sim")),
         "simulator": record.get("simulator") or run_settings["simulator"],
+        "open_report": record.get("open_report", True),         # recorded since 2026-11-21
         "output_tag": record.get("output_tag") or "",
         "modifications": {},
     })
@@ -478,3 +493,27 @@ def build_settings_from_record(record, case, load_buses):
     run_settings["penalties"] = penalties
     notes.append("This run came from a script, so changes it made to the network (load scaling, generator limits) are not known and not in the form.")
     return run_settings, notes
+
+
+def read_result(row):
+    """
+    The results a GUI run kept beside its settings file (result_<timestamp>.json, the worker's
+    @@result summary in MW), with `files.output_path` set to where the folder is now; and "".
+    When there are none: None and a sentence saying why. Read only on Load into Run, never when
+    the folders are scanned.
+    """
+    path = Path(row["path"]) / calc_result_file_name(row["file"])
+    if not path.exists():
+        if not row["from_gui"]:
+            return None, "A run from a script keeps no results for the GUI: its Excel and simulation reports have them."
+        if row["status"] == "running":
+            return None, "It is still running, so it has no results yet."
+        if row["status"] != "finished":
+            return None, "It did not finish, so it has no results."
+        return None, "Its results were not kept: it ran before the GUI kept them."
+    try:
+        summary = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        return None, f"Its results could not be read: {error}"
+    summary["files"]["output_path"] = row["path"]
+    return summary, ""

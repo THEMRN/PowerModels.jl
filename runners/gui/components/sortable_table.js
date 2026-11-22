@@ -4,7 +4,8 @@
 //
 // Props:
 //   columns   [{key, label, numeric, wide}]: `numeric` aligns right; `wide` lets the column take the room left
-//   rows      [{id, tone, <key>: text, sort: {<key>: value}}]: `tone` is a class for the row ("muted", "warn");
+//   rows      [{id, tone, tones: {<key>: class}, <key>: text, sort: {<key>: value}}]: `tone` is a class for the row
+//             ("muted", "warn"), `tones` a class for single cells ("cell-bad", "cell-warn");
 //             a column sorts by `sort[key]` when it is there, else by its text; no value sorts last
 //   selected  the id of the selected row, or null
 //   order     {key, descending}: the first sorting
@@ -25,7 +26,8 @@ export default {
         <tbody>
           <tr v-for="row in sortedRows" :key="row.id" :ref="'row-' + row.id" @click="choose(row.id)"
               :class="[row.tone || '', {selected: row.id === chosen}]">
-            <td v-for="column in columns" :key="column.key" :class="['col-' + column.key, {num: column.numeric, wide: column.wide}]"
+            <td v-for="column in columns" :key="column.key"
+                :class="['col-' + column.key, (row.tones || {})[column.key] || '', {num: column.numeric, wide: column.wide}]"
                 :title="column.wide ? row[column.key] : null">{{ row[column.key] }}</td>
           </tr>
         </tbody>

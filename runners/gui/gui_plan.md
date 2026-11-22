@@ -130,7 +130,7 @@ runners/gui/
   - `build(study, rows, on_change)`, the tab's content. A tab of rows builds them with `components/row_list.RowList` and a grid class of its own in `theme.css`.
 
   `study` (`advanced.Study`) holds the case, its `case_info` and the study's kind of group. A tab whose rows name a zone, an area or a list of buses takes that part from `advanced/where.py`, and its Julia function takes the buses from `find_entry_buses`.
-- **Pages pass values to each other** through `ctx.client_state()`, the dict of the browser tab. The Run page puts its form there (`"run_form"`), `app.py` the function that shows a page (`"show_page"`), and the Network page's "Use as target" calls `RunForm.take` and shows the Run page. The Run page also puts there `"load_settings"`, which writes settings into its form, unfolds the sheet and says so; History's "Load into Run" calls it and shows the Run page. `ctx.state` is shared by every open browser tab, so it only holds what was read from Julia.
+- **Pages pass values to each other** through `ctx.client_state()`, the dict of the browser tab. The Run page puts its form there (`"run_form"`), `app.py` the function that shows a page (`"show_page"`), and the Network page's "Use as target" calls `RunForm.take` and shows the Run page. The Run page also puts there `"load_settings"`, which writes settings into its form, unfolds the sheet and says so, and shows the results of the run they came from in the results panel when it has them; History's "Load into Run" calls it and shows the Run page. `ctx.state` is shared by every open browser tab, so it only holds what was read from Julia.
 - **What `ctx` holds** (since phase 6):
   - `ctx.worker`, the `JuliaWorker`;
   - `ctx.presets`, the `PresetStore`: the presets of the app, read from `presets/`, whose listeners keep every open tab's list the same;
@@ -146,10 +146,10 @@ Decision 14. The look lives in `theme.py` and `theme.css` and nowhere else, so e
 - **One accent colour** (blue) for the main action, the chosen option and the focus ring. Green, amber and red only show a state.
 - **Compact.** Text is 13 px in the system font (Segoe UI). Fields and buttons are 28 px high. A label stands left of its control, not above it and not floating inside it.
 - **Nothing leaves the machine.** No web font, no CDN.
-- **One bar on top:** the mark, the title, the page tabs, the Julia state pill and Restart Julia.
+- **One bar on top:** the mark, the title, the page tabs, the Julia state pill, Restart Julia and Quit.
 
 **Rules for a page:**
-- **Build with the blocks of `theme.py`:** `panel`, `toolbar`, `sheet` and `Section`, `fields` with `label`, `stack`, `line`, `hint`, `eyebrow`, `button`, `State`, `FoldButton`, `dialog` (a dialog and its white box), `offstage` (a holder for timers, so they take no room), `data_table` (a table of numbers, as one element), `facts` with `fact` (a name and its value), and for waiting `Cover`, `grey_out` and `show_hint(..., waiting=True)`. Plain `ui.select`, `ui.number`, `ui.input`, `ui.textarea`, `ui.checkbox` and `ui.toggle` get the look from the defaults set in `theme.setup()`. Give them no label argument; put a `theme.label` beside them.
+- **Build with the blocks of `theme.py`:** `panel`, `toolbar`, `sheet` and `Section`, `fields` with `label`, `stack`, `line`, `hint`, `eyebrow`, `button`, `State`, `FoldButton`, `dialog` (a dialog and its white box), `offstage` (a holder for timers, so they take no room), `data_table` (a table of numbers, as one element), `facts` with `fact` (a name and its value), `help_mark` (a "?" whose tooltip says how to use a page), `dim_unused` (settings the current choice does not read: dimmed, still editable), and for waiting `Cover`, `grey_out` and `show_hint(..., waiting=True)`. Plain `ui.select`, `ui.number`, `ui.input`, `ui.textarea`, `ui.checkbox` and `ui.toggle` get the look from the defaults set in `theme.setup()`. Give them no label argument; put a `theme.label` beside them.
 - **Buttons** come from `theme.button`: `primary` for the one main action of a page, `default`, `ghost` for secondary actions, `danger`.
 - **No Quasar colours or spacing classes** (`color=...`, `text-grey`, `q-mt-md`, `bg-primary`): they are Material's palette and they carry `!important`. Use the variables and classes of `theme.css`, and add to that file when something is missing.
 - **Not used:** `ui.card`, `ui.expansion`, `ui.switch`, `ui.badge`, `ui.table` (Quasar's Material table; use `theme.data_table`), Material icon names. Use a panel, a `FoldButton`, a checkbox, a `State`, and the icons in `theme.ICONS` (add a path there for a new icon).
@@ -185,7 +185,7 @@ The GUI writes **one JSON object per line** to the worker's stdin:
 | `ping` | none | `@@data {"id", "pong": true, "julia": "<version>"}` |
 | `list_cases` | none | `@@data {"id", "cases": ["cases/psse/savnw", ...]}` (folders with a `.raw`) |
 | `case_info` | `"case"` | `@@data {"id", "zones": [...], "areas": [...], "loads": [...], "gens": [...], "has_dyr"}` |
-| `run` | `"settings"` | `@@stage` and `@@activity` lines, then `@@result`, then `@@done` |
+| `run` | `"settings"` | `@@stage` and `@@activity` lines, then `@@result`, then `@@done`; a run with the dynamic simulation also sends a first `@@result` with `"partial": true` once it is solved, before the Excel report and the simulation |
 | `network` | `"case"` | `@@data {"id", "case", "buses": [...], "lines": [...], "zones", "areas", "group_names", "layouts"}`, see "Network reply" |
 
 The worker writes ordinary log lines (its own prints, Ipopt and `dynamic.py`) plus **control lines** that start with `@@`. Each control line has a kind and one-line JSON:
@@ -197,7 +197,7 @@ The worker writes ordinary log lines (its own prints, Ipopt and `dynamic.py`) pl
 | `stage` | `{"id", "stage", "label"}`, see the stage table |
 | `activity` | `{"id", "text"}`, a note on what the run is doing inside the solve stage, see "Stages" |
 | `data` | `{"id", ...}`, the reply of `ping`, `list_cases`, `case_info` and `network` |
-| `result` | `{"id", "summary": {...}}`, see the result summary |
+| `result` | `{"id", "summary": {...}}`, see the result summary; `"partial": true` on the first of two, sent before the dynamic simulation |
 | `error` | `{"id", "message"}`; the stack trace goes to the log just before it |
 | `done` | `{"id", "ok": true/false, "seconds"}` |
 
@@ -280,6 +280,7 @@ Version 2 since 2026-11-21 (the heading keeps its name, as the phases refer to i
   "voltage_security": false,
   "run_dynamic_sim": true,
   "simulator": "andes",
+  "open_report": true,
   "output_tag": "spartanb_2.5",
   "modifications": {}
 }
@@ -292,6 +293,7 @@ Version 2 since 2026-11-21 (the heading keeps its name, as the phases refer to i
 | `flow_model` | `squared`, `abs_sum`, `combined` |
 | `boundary.kind` | `zone` or `area`: the lines are that group's boundary lines and its buses orient the flows. `bus_pairs`: the lines come from `find_branches_by_bus_pairs` and nothing is oriented |
 | `penalties` | All values are multiples of λ. `uniform` (if not null) applies to every load and ignores the rest. Otherwise the `rows` apply in their order, a later row over an earlier one where they reach the same bus, and `others` goes to the loads no row reaches; `others: null` keeps today's default of 1e4 absolute for them (`add_load_shedding_penalty!`). A row is a `zone` or an `area` (of the study's kind only) or a `bus` (`name` its number); `except: true` on a zone or area row means every bus outside it. Two rows for the same place are allowed: the lower one counts |
+| `open_report` | since 2026-11-21, optional (missing means `true`): `false` makes `run_islanding` pass `--no-open` to the simulation script, so the ANDES report is written but not opened in the browser. The PSS®E script ignores it and always opens its report, so the form greys the box for PSS®E |
 | `output_tag` | suffix of the results folder; empty means none |
 | `modifications` | changes to the network made before the boundary and the penalties, filled by the advanced dialog; `{}` means none. See below |
 
@@ -343,7 +345,7 @@ A run that throws leaves `"started"`, and History shows that as incomplete.
   "load_shedding_penalties": {"3005": 1250.0},
   "uniform_shedding": false, "uniform_penalty": 0.0,
   "frequency_security": false, "voltage_security": false,
-  "run_dynamic_sim": true, "simulator": "andes", "output_tag": "spartanb_2.5",
+  "run_dynamic_sim": true, "simulator": "andes", "open_report": true, "output_tag": "spartanb_2.5",
   "gui_settings": null,
   "files": {"excel": "pm_res_flow_shed_<ts>.xlsx", "raw": "...", "report": "dynamic_channels_<ts>.html"},
   "summary": {"termination_status": "LOCALLY_SOLVED", "objective": 0.0, "preemptive_shed_mw": 0.0, "voltage_security": null},
@@ -365,7 +367,14 @@ The name is what the Run page lists; the file name is made from it (`savnw_islan
 
 ### Result summary (`@@result`)
 
-The worker sends it at the end of a run, after the stage `summary`. A run that fails sends `@@error` and no `@@result`.
+The worker sends it at the end of a run, after the stage `summary`. A run that fails sends `@@error` and no final `@@result`.
+
+**The results before the simulation (since 2026-11-21).** A run with the dynamic simulation also sends a first summary with `"partial": true`, as soon as it is solved and its console reports are printed. `run_islanding` calls its `on_solved(result, solve_seconds)` there, before the Excel report and the export. In that first summary:
+- `ufls` and `frequency_simulation` are `{"status": "pending"}`;
+- `seconds` has only `solve`;
+- `files` has only `output_path`.
+
+Everything else is final. The final `@@result` replaces it, and only the final one is kept in the results folder. A first summary that cannot be made leaves a warning in the log, and the run goes on.
 
 **Units and rounding.** The summary is in MW and Mvar, rounded as the console prints:
 - MW, Mvar and % to 2 decimals;
@@ -384,6 +393,7 @@ A group's name is its record name, or its number when it has no record, as in `c
 
 - `termination_status`, `objective`
 - `seconds` (`solve`, `dynamic_sim`, `total`), from the per-run settings file
+- `target`, since 2026-11-21: the target zone or area, `kind`, `name` and its `buses` (sorted), by which the GUI names the islands of the frequency and voltage parts ("zone SECOND", "outside zone SECOND"; `voltage_details.name_islands`); `null` for a bus-pair boundary, and missing in results kept before, whose islands stay "island at bus N"
 - `generation`:
   - `group_kind`
   - `groups`, one per zone or area record (none when the case has no such records): `index`, `name`, `pg_mw`, `pmax_mw`, `qg_mvar`, `qmax_mvar`, `p_used_pct`, `q_used_pct`
@@ -393,6 +403,7 @@ A group's name is its record name, or its number when it has no record, as in `c
   - `groups`, one per group with load: `index`, `name`, `load_mw`, `shed_mw`, `shed_pct`
   - `buses`, every load bus, with the loads at that bus added up: `bus`, `pd_mw`, `shed_mw`, `shed_pct`. Solver noise rounds to 0, so "only buses with shed" means `shed_mw > 0`.
 - `ufls`, the UFLS relays' shed in the dynamic simulation; `null` when the simulation was off. `status` is one of:
+  - `pending`: the first summary, sent before the simulation;
   - `not_reported`: the simulator was PSS®E, whose script writes no record (its report has the shed);
   - `no_record`: ANDES left no `ufls_shed.json` in the results folder at or after the run's start;
   - `no_relays`: the `.dyr` has no LDSHBL records;
@@ -407,6 +418,13 @@ A group's name is its record name, or its number when it has no record, as in `c
   - `H` (s), and `K` and `D` (pu on the system base)
   - `limits_mw` (`rocof`, `qss`, `nadir`), `binding`
   - `scheduled_import_mw`, positive into the island, which is the opposite sign of the boundary flows. The limits hold in both directions, so an island is within them when the import's magnitude is at most the binding limit (for example −342.15 MW against 592.4 MW).
+  - since 2026-11-21, the frequency once the lines open, in Hz to 3 decimals:
+    - `extreme`: `nadir` for an island that imports (it loses power and its frequency falls), or `peak` for one that exports;
+    - `limit_hz`: what the nadir limit keeps it from passing (`MIN_NADIR_FREQUENCY`, 59.5 Hz, or as far above f0 for a peak);
+    - `predicted_hz`: `simulate_frequency_nadir` of `frequency.jl` at the scheduled import (for a peak, mirrored about f0);
+    - `simulated_hz`, `simulated_bus` and `simulated_time_s` (absolute, s): the lowest (for a peak, the highest) bus frequency of the island's buses after the trip, from `frequency_stats.json`. All `null` without that record.
+- `frequency_simulation`, since 2026-11-21, where the simulated frequency stands: `null` when the simulation was off, otherwise `status` `pending` (the first summary), `not_reported` (PSS®E), `no_record`, or `simulated` with `event_time_s`, `end_time_s` and `stopped_early`.
+  - The worker reads `frequency_stats.json`, which `andes_scripts/dynamic.py` writes into the results folder: `event_time`, `end_time`, `stopped_early`, and `buses` (bus number as a string, each with `min_hz`, `min_time`, `max_hz`, `max_time`). The extremes are taken after the trip only, because a case not quite at steady state can swing before it.
 - `voltage`, from `result["voltage_security"]`:
   - `verified`, `rounds`, `worst_indicator`;
   - `details`, one entry per round:
@@ -422,12 +440,18 @@ A group's name is its record name, or its number when it has no record, as in `c
 - `network`, for the Network page: `buses` (`bus`, `vm`, `pd_mw`, `qd_mvar`, `pg_mw`, `qg_mvar`, `pmax_mw`, `qmax_mvar`, `gens`) and `lines` (`from`, `to`, `p_mw`, `q_mvar`, `p_to_mw`, `q_to_mvar`), as in the `network` reply but with the run's solution: its voltages, its dispatch and its flows, on the run's network (after its modifications, before its shed). A value the solution does not have (a voltage or a reactive flow of a DC run) is `null`. The shed per bus is in `load_shed.buses`.
 - `files`, from the per-run settings file:
   - `output_path`, the absolute results folder;
-  - the file names in that folder: `settings`, `excel`, `raw`, `report` (`null` when not written).
+  - the file names in that folder: `settings`, `excel`, `raw`, `report`, `result` (`null` when not written).
+
+### Kept results (`result_<timestamp>.json`)
+
+Since 2026-11-21 the worker keeps the summary of every run that finishes, beside the run's settings file and with its timestamp: `settings_2026_11_21_10_15_02.json` gets `result_2026_11_21_10_15_02.json` (`write_result_file!`, just before `@@result`). The file is the `@@result` summary as sent, with `files.result` naming itself. A run without a settings file keeps nothing, and a file that cannot be written leaves `files.result` at `null` and a warning in the log.
+
+History's Load into Run reads it (`results_index.read_result`, never while scanning) and shows it in the results panel, with `files.output_path` set to where the folder is now. Script runs, runs that did not finish and runs from before 2026-11-21 have no such file; the Load note says why there are no results. Nothing else reads the file.
 
 ### Run page layout (since phase 9)
 
 ```
-┌ ◉ Islanding GUI   Run | Network | History          [● Julia ready]  ↻ Restart Julia ┐
+┌ ◉ Islanding GUI   Run | Network | History   [● Julia ready]  ↻ Restart Julia  ⏻ Quit ┐
 ├────────────────────────────────────────────────────────────────────────────────────┤
 │ ▾ Settings  Preset [savnw – island on top ▾] Save as Delete  (note) Advanced (2) [■ Stop] [▶ Run] │
 │ NETWORK MODIFICATIONS   loads of zone SPARTANB × 0.7 · load 6 at bus 3005: P 400 MW   Reset │
@@ -437,7 +461,7 @@ A group's name is its record name, or its number when it has no record, as in `c
 │ Summary | Generation | Load shedding | Boundary flows | Frequency | Voltage | Files │
 │   facts and tables of that run                                                     │
 ├────────────────────────────────────────────────────────────────────────────────────┤
-│ RUNS IN THIS SESSION   run, started, case, ...   Report  Folder  Log  Load settings │
+│ RUNS IN THIS SESSION   run, started, case, ...   Report  Folder  Log  Load          │
 ├────────────────────────────────────────────────────────────────────────────────────┤
 │ Run 3 ● finished   ✓ Load case — ✓ Prepare — ✓ Solve — ... — ✓ Summary              │
 │ now: Julia's note or the stage's sentence, or the error   total 1:42  2 warnings  [Full log] │
@@ -1839,3 +1863,143 @@ Test folders added: `ACTIVSg500_flow_shed_gui_test_ref_except` (the `islanding.j
 - **Pure functions:** the sentences were checked on hand-made summaries for every status. PSS®E, no record, no relays and the stopped-early line were not seen drawn in the GUI.
 
 Test folders added: `savnw_opf_shed_gui_test_ufls_area`, `savnw_flow_gui_test_ufls_flow`, `savnw_opf_shed_gui_test_ufls_nosim`, `savnw_flow_gui_test_ufls_area` (the GUI's flow run), `savnw_flow_shed_gui_test_ufls_both` and `savnw_opf_shed_gui_test_ufls_low`.
+
+**Results kept and loaded with a run (2026-11-21), at the user's request:** "when we are loading into run (from run list in run page or from history) I want the results to be loaded as well ... we should keep the results as well and load them when loading a run".
+
+*What changed:*
+- **`worker.jl`:** `write_result_file!` keeps the `@@result` summary as `result_<timestamp>.json` beside the run's settings file, before sending it, and names it in `files.result` (see **Contracts: Kept results**).
+- **`results_index.py`:** a settings row has `result` (the file's name when it is there), and `read_result` reads it on Load into Run only, or says in a sentence why there is none (a script run, a run that did not finish or is running, a run from before).
+- **Results panel (`results_view.py`):**
+  - `show(record)` shows a run's results. A run loaded from History is a record shaped like a session run (`build_loaded_record`: no `number`, its key `history:<row id>`), kept in the browser tab's `loaded` list, once each.
+  - "Results of" lists the session's runs, then the loaded ones ("History · savnw · flow_shed · ... · 2026-11-21 17:31").
+  - A session run that delivers results still takes over the panel. The panel shows as soon as there is any run to show, so a fresh app can show a History run.
+  - The Files tab lists "Kept results". The voltage Details dialog takes the run's name ("the run of 2026-11-21 17:31").
+- **Run page (`pages/run.py`):** the session list's "Load settings" is now "Load", which also shows the run's results. `load_settings` takes the run whose results go with the settings and shows them at once, without waiting for Julia.
+- **History (`pages/history.py`):** Load into Run passes the results along, read after the check for a newer click. A run of this session is shown as its session record, not added twice (`find_session_record`). The details list the file and say whether Load into Run shows results.
+
+*How it was verified* (savnw, four bus pairs, frequency and voltage security):
+- **Worker:** a `send_jobs.py` run with ANDES (`gui_test_kept`) wrote `result_2026_11_21_17_31_16.json` (10 KB), with frequency, voltage, UFLS and network parts and `files.result` set.
+- **Test instance (port 8090), fresh app with no session run:**
+  - History → Load into Run of that run filled the form and showed its results: Summary, the Voltage Details dialog titled for that run, and Files with the folder where it is now.
+  - A GUI run (`gui_test_kept_gui`, no simulation) kept its own file and took over the panel, with the History run still in the list.
+  - The row's Load switched back to run 1. History's Load into Run of run 1's own row selected run 1, with no second entry.
+  - An older run (`gui_test_ufls_both`) filled the form with the note that its results were not kept, and the panel stayed on run 1.
+- **Pure:** of the 181 settings rows on disk before, none has a file; 155 get "ran before the GUI kept them", 19 "a run from a script", 7 "did not finish".
+
+*Not exercised:* ACTIVSg500; Load into Run of a script run (its sentence was checked through `read_result` only); a results file that cannot be read, and one that cannot be written.
+
+*Not done:* the Network page's "Values of" still offers only the session's runs, not those loaded from History. Script runs keep no results.
+
+Test folders added: `savnw_flow_shed_gui_test_kept`, `savnw_flow_shed_gui_test_kept_gui`.
+
+**UI/UX round (2026-11-21), at the user's request,** from a review of the GUI. The user chose these nine items; each is ticked once it is built and seen working.
+
+- [x] 1. History: a Solver column with each run's solver status.
+- [x] 2. History: the From and To dates typed and shown as yyyy-mm-dd.
+- [x] 3. Run form: an "open the report when done" box, passed to the ANDES script (a workflow change: `run_islanding` and `andes_scripts/dynamic.py`).
+- [x] 4. Header: a Quit button that stops the app and Julia.
+- [x] 5. The browser tab's title shows the latest run ("Run 3 finished").
+- [x] 6. Penalty rows move up and down.
+- [x] 7. Network page: "How to use" behind a "?", and the two hints that repeat its buttons moved into the buttons' tooltips.
+- [x] 8. The Run form follows the objective: what the objective does not read is greyed, and one formula line stands under Objective.
+- [x] 9. Islands named by the target zone or area, with their size (Summary, Frequency, the voltage details).
+
+*What changed:*
+- **Solver column (History).** `results_index` gives each row its `solver` (the record's `termination_status`). History shows it short ("solved", "infeasible", "almost solved", other statuses in lower case), red when the solver did not solve and amber when almost. `sortable_table.js` takes a class per cell (`tones`) for that. To keep the table beside the details at about 1500 px, the wide columns are now 135 px at most (were 150) and the details 310 px (were 330).
+- **Dates (History).** A date input shows the system's date form (mm/dd/yyyy here), so From and To are text fields with the mask `####-##-##` and a calendar (`ui.date`, minimal) behind an icon. A date counts once it is a whole day of the calendar (`read_date`), so a half-typed one filters nothing. The calendar is Quasar's: `theme.css` takes off its banner and its shadow.
+- **Open the report when done (workflow, asked for).**
+  - `run_islanding` has `open_report::Bool=true` and records it in the settings file. With `false` it adds `--no-open` to the `dynamic.py` command.
+  - `andes_scripts/dynamic.py` takes `--no-open` after its three paths, writes the report and does not open it, and says so in the log.
+  - The PSS®E script is not changed (decision 13): it reads only its three paths and always opens its report.
+  - In the GUI the box is `open_report` in the settings, optional with `true` as the default, so older settings, presets and script records still open it. It is under Simulator ("Report: open when done"), greyed for PSS®E and without a simulation, with the reason in its tooltip. While it is greyed the form sends `true`, so a PSS®E run never records a report it did not open.
+  - `islanding.jl` and `batch_islanding.jl` keep the default.
+- **Quit (header).** A question first: it names a run in progress, which stops without results. Then every open page is replaced by a note ("The Islanding GUI has stopped ... double-click runners/gui/start_gui.bat"), and `app.shutdown()` stops the server, whose `on_shutdown` stops Julia with its children. The app exits with code 0, so `start_gui.bat` closes its window. A page left open reloads itself into the app when it is started again.
+- **Tab title.** `app.py` follows the runs in each browser tab: "▶ Run 3 · Solve · Islanding GUI" during a run, then "✓ Run 3 finished", "✕ Run 3 failed" or "■ Run 3 stopped".
+- **Penalty rows.** Two small arrows beside each row move it up or down. They are off at the ends, and the order is the order the rows apply in.
+- **Network page.** "How to use" is a "?" at the end of the toolbar (`theme.help_mark`). What Use as target and Set penalty would do is in their tooltips. Only "Nothing is selected ..." stays a line, because it guides rather than repeats.
+- **The form follows the objective.** A formula line stands under Objective, and its tooltip says what the symbols are. It changes with the flow penalty and the model: DC has no q. The formulas are:
+  - `opf`: min generation cost;
+  - `flow`: min Σp² + Σq²;
+  - `flow_shed`: min λ·(Σp² + Σq²) + Σ c·Pd·(1 − z);
+  - `opf_shed`: min generation cost + Σ c·Pd·(1 − z).
+
+  What the objective does not read is dimmed (`OBJECTIVE_READS` in `run.py`, from `objective.jl`):
+  - `opf`: λ, the flow penalty and the penalties;
+  - `flow`: λ and the penalties;
+  - `opf_shed`: the flow penalty. λ stays bright there, as the unit of the penalties.
+
+  Dimmed fields stay editable and keep their values (`theme.dim_unused`, a class of its own, so the waiting grey does not undo it). They are still validated, because the worker still reads the penalties of every run.
+- **Island names.** The worker adds `target` (kind, name, buses) to the result summary. `voltage_details.name_islands` names each island by its side: "zone SECOND", "outside zone SECOND", or with its bus when a side has more than one island. This shows in the Summary (with "(7 buses)"), the Frequency table (column "Island") and the four tables of the voltage details. A bus-pair run, and results kept before, keep "island at bus N". The rows keep the island's bus (`island_bus`, `island`), which `dev/check_results_tables.py` now compares directly.
+
+*How it was verified* (a test instance on port 8090; the user's GUI on 8080 untouched):
+- **Pure functions:** the formulas for each objective, flow penalty and model; names for one and two islands on a side and without a target; solver labels and tones; whole and half-typed dates; `open_report` missing from older settings.
+- **One run:** savnw, `flow_shed`, zone SECOND, frequency and voltage security, ANDES, the box off, tag `gui_test_uiux`.
+  - The log says "Interactive Plotly page written (not opened, --no-open)", and no report opened.
+  - The settings file has `open_report: false` and the two penalty rows in the order they were moved to.
+  - The kept result has `target` with the zone's seven buses.
+  - The Summary, the Frequency table and every voltage table show "zone SECOND" and "outside zone SECOND".
+  - The tab's title went "▶ Run 1 · starting", "▶ Run 1 · Load case", then "✓ Run 1 finished".
+- **Form:** each objective dims what it should, and the formula follows the flow penalty and DC. The box greys for PSS®E with its tooltip. The arrows are off at the ends, and a row moves with its values.
+- **History:** "solved" on every run, and "infeasible" in red on `ACTIVSg500_opf_gui_test_results_opf`. The table no longer scrolls sideways at about 1490 px, the one width measured (it overflowed by 45 px with the new column, and 50 px were freed). "20261121" typed becomes 2026-11-21 and filters to that day. A day picked in the calendar fills the field and closes it.
+- **Network:** the "?" tooltip, and both button tooltips for zone SECOND.
+- **Quit:** with two tabs open, both showed the note and "Islanding GUI (stopped)". The app exited with code 0, and its Julia worker was gone.
+
+- **Console:** the test instances' output had no traceback; listeners and handlers that fail print there and not on the page.
+
+*Not exercised:*
+- `dev/check_results_tables.py` on a fresh `send_jobs.py --full` log (only its frequency part changed, and it was read, not run).
+- ACTIVSg500, an area target, and a bus-pair run with frequency security.
+- An island side with two islands, seen only in the pure check.
+- Quit while a run is in progress (the question says the run stops too).
+- A script run through `islanding.jl` on the default `open_report`.
+
+*Left as it is:* the strip's notes during voltage rounds and the console reports still say "the island at bus 3001". They come from `voltage.jl` and `frequency.jl`, so naming them by the target would need the target passed in and a recompile; that was not asked.
+
+*Seen once and not explained:* right after `flow` and DC were chosen, λ's field looked undimmed while its label was dimmed. On the next look both were dimmed. It may have been the 0.15 s fade.
+
+**Results panel round (2026-11-21), at the user's request.** Each item is ticked once it is built and seen working.
+
+- [x] 1. Results panel: a Clear button after the "Results of" list.
+- [x] 2. Results panel: cleared when a new run starts.
+- [x] 3. Results shown as soon as they are ready, before the dynamic simulation (the worker sends a first `@@result` before it).
+- [x] 4. Boundary flows tab: the total rows at the top of the table.
+- [x] 5. Frequency tab: the predicted nadir, and the actual nadir after the dynamic simulation (the ANDES script writes it).
+
+*What changed:*
+- **Clear.** A small button after the list. It empties the panel ("Cleared. Choose a run in the list to see its results again.") and is off while the panel is empty. The runs stay in the list. Choosing one, Load (runs table or History) or a new run brings the panel back.
+- **A new run takes the panel.** The list now has every run of the session, not only those with results. A run that starts is put on show at once, so the results on show go. Until it is solved the panel says "Run N is running …". A run that ended without results says why ("failed before it was solved", with the error, or "was stopped"). The list names a run's status when it did not finish.
+- **Results before the simulation.**
+  - `run_islanding` has `on_solved(result, solve_seconds)`, called after the console reports. The worker (`run_from_settings`' `solved`, `send_partial_summary`) sends the summary from there with `"partial": true` (see "Result summary").
+  - `session_runs` keeps `partial`. The panel draws a run again when its summary or its status changes (`find_version`), and keeps the tab on show.
+  - While the run is in its simulation, a line over the tabs says the simulation's parts come when it ends. "Dynamic simulation" reads "running...", the UFLS shed "after the dynamic simulation", the Report "written when the simulation ends", and the UFLS side and the nadir table say the same with a turning ring.
+  - A run that fails or is stopped during the simulation keeps the results of its solve, with a red line saying so.
+- **Totals on top.** `theme.data_table(..., totals_on_top=True)` puts the totals under the column titles, with a firmer line under them. Only the boundary flows use it, as asked.
+- **Nadir.** The Frequency tab has a second table, "Frequency when the lines open". It has a row per island: nadir or peak, the limit, the predicted and the simulated frequency, and the bus and time of the simulated one. Above it stands a line when there is no simulated value (off, running, PSS®E, no record, or a run kept before) or when the simulation stopped early. Under it, a hint says what each value is.
+  - The prediction is the SFR model of the frequency limits (`simulate_frequency_nadir`) at the solved scheduled import.
+  - The simulated value is the island's lowest (or highest) bus frequency after the trip. It comes from `frequency_stats.json`, a new file of the ANDES script (one minimum and one maximum per bus). The worker takes the extreme over the island's buses.
+  - The PSS®E script is not changed (decision 13), so its runs show "not reported".
+
+*How it was verified* (test instance on 8090; savnw, `flow_shed`, zone SECOND, frequency and voltage security, ANDES, report box off, tag `gui_test_results_panel`):
+- **Clear:** after a History run was loaded, Clear emptied the panel and turned itself off, and choosing the run in the list brought it back.
+- **New run:** on Run, the panel switched from the History run to "Run 1 is running …".
+- **Before the simulation:** on the second, warm run, screenshots 4 and 8 s in showed the solve's results with the line over the tabs, "running...", "after the dynamic simulation" and "written when the simulation ends", while the strip was at Dynamic simulation. About 8 s later the final results replaced them on the same tab. The kept result file is the final one (`frequency_simulation` simulated).
+- **Boundary flows:** "Net flow" and "Sum of absolute flows" stand above lines 3, 4, 9 and 10.
+- **Nadir:** zone SECOND, nadir, limit 59.500, predicted 59.794, simulated 59.159 Hz at bus 211, t = 7.76 s; outside zone SECOND, peak, limit 60.500, predicted 60.049, simulated 61.841 Hz at bus 3001, t = 11.59 s. The simulation stopped early at 11.59 s, and the red line said so. A run kept earlier says "kept before the GUI predicted the nadir".
+- **Found and fixed:** the first record took each bus's extremes over the whole run, and bus 211's highest frequency (60.73 Hz) came at t = 3.73 s, before the trip. The case is not quite at steady state then (the run's two warnings). The extremes are now taken after the trip only, from the first sample after t = 5 s, and the next run's earliest extreme was at 5.0001 s.
+- **Console:** no traceback from the app. One asyncio `ConnectionResetError` came when the test tab was closed: Windows reporting the page's connection reset, in Python's own code.
+
+- **Without the simulation** (tag `gui_test_results_nosim`): no first summary. The panel waited, then showed the final results. The Frequency tab had the predicted values, "–" for the simulated ones, and "The dynamic simulation was off …". The waiting sentence mentioned the simulation, and now it does so only when the run has one.
+- **A failure before the solve** (bus pair 101-3008, which has no line): the run took the panel with "Run 2 failed before it was solved, so it has no results: no boundary line found …", and run 1 and the History run could still be chosen.
+
+*Not exercised:* a run that fails or is stopped during its simulation (the red line was checked as a pure function only); PSS®E; ACTIVSg500.
+
+*Behaviour to know:*
+- The nadir table exists only with frequency security, since the islands and their model come from it.
+- Clear is off during a run (since 2026-11-21, at the user's request), so a run's results always come to the panel. Its tooltip says which run is in progress.
+- When the final results replace the first ones, the panel is drawn again: the tab stays, but a scrolled bus table goes back to its top.
+
+*Worth knowing about this test's numbers:* the simulated nadir of zone SECOND (59.159 Hz) is well under the predicted one (59.794 Hz) and under the first UFLS stage, and the relays shed 183.92 MW. But this case is not at rest before the trip: its bus frequencies already range from 60.000 to 60.734 Hz before t = 5 s, and the run warns about it. So the simulated values start from a system already swinging. The prediction assumes it at rest at f0, and the simulation's value is the lowest bus frequency, with local swings. The "peak" of 61.841 Hz outside the zone is the last sample before the simulation broke off at 11.59 s, not a settled peak.
+
+Test folder added: `savnw_flow_shed_gui_test_results_panel` (four runs).
+
+Test folder added: `savnw_flow_shed_gui_test_uiux`.

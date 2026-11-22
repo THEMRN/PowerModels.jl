@@ -2,12 +2,15 @@
 ANDES dynamic simulation of a solved islanding case, the open-source counterpart of
 psse_scripts/dynamic.py with the same command line and outputs:
 
-    python dynamic.py <raw> <dyr> <excel>
+    python dynamic.py <raw> <dyr> <excel> [--no-open]
+
+`--no-open` writes the report without opening it in the browser (the GUI's "open when done" box).
 
 Loads the case exported by PowerModels, solves the power flow, trips the lines listed in
 line_outage.json at EVENT_TIME, runs to SIM_END_TIME and writes into the case folder the power
 flow report (andes_res_*.xlsx), the channels (output_andes_*.csv.gz), voltage_stats.json, the
-UFLS shed record (ufls_shed.json, read by the GUI worker), the Plotly HTML report and the ANDES
+UFLS shed record (ufls_shed.json) and each bus's frequency extremes (frequency_stats.json), both
+read by the GUI worker, the Plotly HTML report and the ANDES
 log. An area study (run_info.json "group_kind") reports the UFLS shed by area, any other study by
 zone.
 
@@ -48,6 +51,8 @@ EVENT_TIME = 5.0  # s, the outage lines trip
 SIM_END_TIME = 25.0  # s
 TIME_STEP = 1 / 120  # s, half a cycle as in PSS®E (the ANDES default of 1/30 s is too coarse for relays)
 TIME_COL = "Time(s)"
+NO_OPEN_FLAG = "--no-open"  # on the command line: write the report, do not open it in the browser
+NOMINAL_FREQUENCY = 60.0  # Hz, the FREQ channels are deviations from it in pu (report.py's base_freq)
 
 
 def correct_hygov(ss):
@@ -157,6 +162,37 @@ def write_ufls_shed_json(output_dir, shed_events, load_mw_by_pq, n_relays, end_t
         json.dump(record, file, indent=2)
 
 
+def write_frequency_stats_json(output_dir, frequency_deviation, end_time, stopped_early):
+    """
+    Write frequency_stats.json for the GUI worker, which takes each island's nadir (or peak) from
+    it: every bus's lowest and highest frequency (Hz) from the moment the lines trip, and when they
+    came (s), from the bus frequency channels (`frequency_deviation`, pu, one column per bus, the
+    report's FREQ channels), with the time the lines tripped, the time the simulation reached and
+    whether it stopped early. Before the trip a case not quite at steady state can swing too, and
+    that is not the islanding's nadir.
+    """
+    after_trip = frequency_deviation[frequency_deviation.index > EVENT_TIME]  # the sample at EVENT_TIME is pre-trip
+    buses = {}
+    for bus in after_trip.columns:
+        frequency = (NOMINAL_FREQUENCY * (1.0 + after_trip[bus])).dropna()
+        if frequency.empty:
+            continue
+        buses[str(int(bus))] = {
+            "min_hz": float(frequency.min()),
+            "min_time": float(frequency.idxmin()),
+            "max_hz": float(frequency.max()),
+            "max_time": float(frequency.idxmax()),
+        }
+    record = {
+        "event_time": float(EVENT_TIME),
+        "end_time": float(end_time),
+        "stopped_early": bool(stopped_early),
+        "buses": buses,
+    }
+    with open(output_dir / "frequency_stats.json", "w") as file:
+        json.dump(record, file, indent=2)
+
+
 def find_dead_island_buses(ss, tripped_lines):
     """
     Buses of the islands left without an in-service generator once `tripped_lines` open,
@@ -204,11 +240,13 @@ def calc_bus_mismatches(ss):
 print("-- Starting ANDES dynamic simulation script...")
 print(f"-- Python version: {sys.version.split()[0]}  executable: {sys.executable}  ANDES: {andes.__version__}")
 
-# case file paths
+# case file paths, then the flag (the dyr path may be an empty argument: no dynamic data)
+file_arguments = [argument for argument in sys.argv[1:] if argument != NO_OPEN_FLAG]
+open_report = NO_OPEN_FLAG not in sys.argv[1:]
 try:
-    raw_file_pth = sys.argv[1]
-    dyr_file_pth = sys.argv[2]
-    excel_file_pth = sys.argv[3]
+    raw_file_pth = file_arguments[0]
+    dyr_file_pth = file_arguments[1]
+    excel_file_pth = file_arguments[2]
     output_dir = Path(raw_file_pth).parent
 except IndexError:
     print("-- Files not provided via command line.")
@@ -517,6 +555,7 @@ frequency_deviation.columns = ss.BusFreq.bus.v  # one BusFreq per bus
 after_trip = bus_voltage.index > EVENT_TIME
 bus_voltage.loc[after_trip, dead_buses] = 0.0
 frequency_deviation.loc[after_trip, dead_buses] = 0.0
+write_frequency_stats_json(output_dir, frequency_deviation, ss.dae.t, ss.TDS.busted)
 
 channels = {TIME_COL: bus_voltage.index.to_numpy()}
 
@@ -570,8 +609,11 @@ plots_path = write_html_report(
     ufls_by_group=ufls_by_group,
 )
 output_time = time.perf_counter() - output_start  # s, channels, CSV, voltage stats and HTML report
-webbrowser.open(plots_path.resolve().as_uri())
-print(f"-- Interactive Plotly page opened: {plots_path}")
+if open_report:
+    webbrowser.open(plots_path.resolve().as_uri())
+    print(f"-- Interactive Plotly page opened: {plots_path}")
+else:
+    print(f"-- Interactive Plotly page written (not opened, {NO_OPEN_FLAG}): {plots_path}")
 
 print_frequency_extremes(df)
 

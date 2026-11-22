@@ -39,8 +39,11 @@ ICONS = {
     "plus": f"M12 5.5v13M5.5 12h13@@{LINES}",
     "close": f"M6.5 6.5l11 11M17.5 6.5l-11 11@@{LINES}",
     "chevron_down": f"M6.5 9.5l5.5 5.5 5.5-5.5@@{LINES}",
+    "chevron_up": f"M6.5 14.5l5.5-5.5 5.5 5.5@@{LINES}",
     "chevron_right": f"M9.5 6.5l5.5 5.5-5.5 5.5@@{LINES}",
     "sliders": f"M4 7.5h9M17 7.5h3M4 16.5h3M11 16.5h9M15 5.2v4.6M9 14.2v4.6@@{LINES}",
+    "calendar": f"M5.5 6.5h13a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1h-13a1 1 0 0 1-1-1v-11a1 1 0 0 1 1-1zM4.5 10.5h15M8.5 4.5v4M15.5 4.5v4@@{LINES}",
+    "power": f"M12 4v7.5M7.2 7.2a6.8 6.8 0 1 0 9.6 0@@{LINES}",
 }
 BUTTON_KINDS = {"primary": "btn-primary", "default": "btn", "ghost": "btn-ghost", "danger": "btn btn-danger"}
 NO_VALUE = "–"                  # shown for a number that is not there
@@ -121,6 +124,27 @@ def grey_out(elements, waiting):
             element.classes(add="greyed")
         else:
             element.classes(remove="greyed")
+
+
+def dim_unused(elements, unused):
+    """
+    Dim elements a setting does not use (the objective does not read them), or bring them back.
+    Unlike `grey_out` they stay editable: their values are kept for another choice.
+    """
+    for element in elements:
+        if unused:
+            element.classes(add="unused")
+        else:
+            element.classes(remove="unused")
+
+
+def help_mark(lines):
+    """A small "?" that shows `lines` (how to use a page) as a tooltip, one paragraph per line."""
+    mark = ui.label("?").classes("help-mark")
+    with mark, ui.tooltip().classes("wide-tooltip"):
+        for text in lines:
+            ui.label(text)
+    return mark
 
 
 class Cover(ui.element):
@@ -204,11 +228,12 @@ def format_number(value, digits):
     return f"{value:.{digits}f}"
 
 
-def data_table(columns, rows, footers=()):
+def data_table(columns, rows, footers=(), totals_on_top=False):
     """
     A table of numbers as one element. `columns` is a list of (title, key, digits): `key` is the
     row's key and `digits` the decimals of a number column (right aligned), or None for a text
-    column (left aligned). `rows` and `footers` are lists of dicts; footers (totals) stand out.
+    column (left aligned). `rows` and `footers` are lists of dicts; footers (totals) stand out,
+    at the bottom, or with `totals_on_top` right under the column titles.
     The values go in as text: names from a case file cannot bring markup with them.
     """
 
@@ -228,8 +253,11 @@ def data_table(columns, rows, footers=()):
     )
     body = "".join(build_row(row, "td") for row in rows)
     foot = "".join(build_row(row, "td") for row in footers)
-    html = f'<table class="data-table"><thead><tr>{head}</tr></thead><tbody>{body}</tbody>'
-    if foot:
+    html = f'<table class="data-table"><thead><tr>{head}</tr></thead>'
+    if foot and totals_on_top:
+        html += f'<tbody class="totals">{foot}</tbody>'
+    html += f"<tbody>{body}</tbody>"
+    if foot and not totals_on_top:
         html += f"<tfoot>{foot}</tfoot>"
     return ui.html(html + "</table>")
 

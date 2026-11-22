@@ -33,10 +33,22 @@ from settings import (
 
 # ==================== Settings ====================
 TITLE = "Run"
-ERROR_PREVIEW = 140             # characters of an error message shown in a row (the tooltip has all of it)
+ERROR_PREVIEW = 140  # characters of an error message shown in a row (the tooltip has all of it)
 KIND_LABELS = {"zone": "Zone", "area": "Area", "bus_pairs": "Bus pairs", "bus": "Bus"}
-EXCEPT_MARK = "!"               # a penalty row's kind in the form's list: "zone", "!zone" (all but the zone) or "bus"
+EXCEPT_MARK = "!"  # a penalty row's kind in the form's list: "zone", "!zone" (all but the zone) or "bus"
 SIMULATOR_LABELS = {"andes": "ANDES", "psse": "PSS®E"}
+OBJECTIVE_READS = {  # objective -> the parts of the form it reads (src/core/objective.jl); the others are dimmed
+    "opf": set(),
+    "flow": {"flow_model"},
+    "flow_shed": {"flow_model", "lambda", "penalties"},
+    "opf_shed": {"lambda", "penalties"},  # λ as the unit of the penalties
+}
+FLOW_PENALTIES = {  # flow model -> the flow penalty over the boundary lines: (AC, DC, which has no q)
+    "squared": ("Σp² + Σq²", "Σp²"),
+    "abs_sum": ("|Σp| + |Σq|", "|Σp|"),
+    "combined": ("|Σp| + Σq²", "|Σp|"),
+}
+SHED_PENALTY = "Σ c·Pd·(1 − z)"
 
 
 def match_option(options, value):
@@ -88,7 +100,16 @@ def find_runs_signature(ctx):
     signature = []
     for record in ctx.runs.records:
         files = (record["summary"] or {}).get("files") or {}
-        signature.append((record["number"], record["status"], record["error"], record["seconds"], files.get("report"), files.get("output_path")))
+        signature.append(
+            (
+                record["number"],
+                record["status"],
+                record["error"],
+                record["seconds"],
+                files.get("report"),
+                files.get("output_path"),
+            )
+        )
     return signature
 
 
@@ -119,19 +140,21 @@ class RunForm:
         self.ctx = ctx
         self.cases_loaded = False
         self.loading_cases = False
-        self.case_list_error = ""       # why there is no case list
-        self.loaded_case = None         # case whose zones, areas and loads the form offers
-        self.case_info = {}             # its case_info ({} while unknown or unreadable)
-        self.case_error = ""            # why the case could not be read
-        self.reading = None             # case whose case_info is being asked from Julia
-        self.retry = None               # a read Julia did not answer, to make again once it is ready (an async function)
-        self.on_wait = None             # called when the form starts or stops waiting (the Run button follows it)
-        self.penalty_signature = None   # what the penalty rows were last built from
-        self.penalty_rows = []          # [{"kind": "zone" | "area" | "bus", "name", "except", "times_lambda"}], in the order they apply
-        self.modifications = {}         # network modifications, as in the settings; the advanced dialog edits them
-        self.on_modifications = None    # called when the modifications, or the study they are for, may have changed
-        self.writing = False            # write() is filling the form: change handlers stay quiet
-        self.updating = False           # update_view() is running
+        self.case_list_error = ""  # why there is no case list
+        self.loaded_case = None  # case whose zones, areas and loads the form offers
+        self.case_info = {}  # its case_info ({} while unknown or unreadable)
+        self.case_error = ""  # why the case could not be read
+        self.reading = None  # case whose case_info is being asked from Julia
+        self.retry = None  # a read Julia did not answer, to make again once it is ready (an async function)
+        self.on_wait = None  # called when the form starts or stops waiting (the Run button follows it)
+        self.penalty_signature = None  # what the penalty rows were last built from
+        self.penalty_rows = (
+            []
+        )  # [{"kind": "zone" | "area" | "bus", "name", "except", "times_lambda"}], in the order they apply
+        self.modifications = {}  # network modifications, as in the settings; the advanced dialog edits them
+        self.on_modifications = None  # called when the modifications, or the study they are for, may have changed
+        self.writing = False  # write() is filling the form: change handlers stay quiet
+        self.updating = False  # update_view() is running
 
     # -------------------- layout --------------------
     def build(self):
@@ -141,23 +164,24 @@ class RunForm:
                 with theme.stack():
                     with theme.line():
                         self.case = ui.select({}, on_change=self._case_changed).classes("grow")
-                        theme.button(icon="refresh", kind="ghost", on_click=self.reload_cases, busy=True).tooltip(
-                            "Read the case list and the case again"
-                        )
+                        theme.button(icon="refresh", kind="ghost", on_click=self.reload_cases, busy=True)
                     self.case_message = theme.hint()
                 theme.label("Objective")
-                self.objective = ui.select(OBJECTIVES, value="flow_shed")
+                with theme.stack():
+                    self.objective = ui.select(OBJECTIVES, value="flow_shed", on_change=self._changed)
                 theme.label("OPF model")
                 self.opf_model = ui.toggle(OPF_MODELS, value="AC", on_change=self._changed)
-                theme.label("Flow penalty")
-                self.flow_model = ui.select(FLOW_MODELS, value="squared")
-                theme.label("Flow weight λ")
+                self.flow_model_label = theme.label("Flow penalty")
+                self.flow_model = ui.select(FLOW_MODELS, value="squared", on_change=self._changed)
+                self.lam_label = theme.label("Flow weight λ")
                 self.lam = ui.number(value=500, min=0)
 
             with theme.Section("Boundary") as boundary_section:
                 with theme.fields():
                     theme.label("Select by")
-                    self.boundary_kind = ui.toggle({"bus_pairs": KIND_LABELS["bus_pairs"]}, value="bus_pairs", on_change=self._changed)
+                    self.boundary_kind = ui.toggle(
+                        {"bus_pairs": KIND_LABELS["bus_pairs"]}, value="bus_pairs", on_change=self._changed
+                    )
                     self.boundary_label = theme.label(KIND_LABELS["bus_pairs"])
                     with theme.stack():
                         self.boundary_name = ui.select({}, with_input=True)
@@ -165,6 +189,7 @@ class RunForm:
                 self.boundary_hint = theme.hint()
 
             with theme.Section("Load shedding penalties") as penalties:
+                self.penalties_section = penalties
                 with penalties.head:
                     self.uniform = ui.checkbox("uniform", on_change=self._changed).tooltip("One penalty for every load")
                 with theme.fields() as self.uniform_box:
@@ -181,46 +206,94 @@ class RunForm:
 
                     self.penalty_list = penalty_list
                     penalty_list()
+                    with theme.line():
+                        theme.button("Add row", icon="plus", kind="ghost", small=True, on_click=self._add_penalty_row)
                     with ui.element("div").classes("penalty-row"):
                         theme.label("All other loads").classes("wide")
                         self.others = ui.number(min=0, placeholder="default").tooltip(
                             "Empty: the default, 1e4 as it is, not a multiple of λ"
                         )
-                    with theme.line():
-                        theme.button("Add row", icon="plus", kind="ghost", small=True, on_click=self._add_penalty_row)
-                    theme.hint("Rows count from the top down: where rows reach the same load, the lower row counts. "
-                               "All other loads are those no row reaches.")
+                    theme.hint(
+                        "Rows count from the top down: where rows reach the same load, the lower row counts. "
+                        "All other loads are those no row reaches."
+                    )
 
             with theme.Section("Security and simulation") as security_section:
                 with theme.stack():
                     self.frequency_security = ui.checkbox("Frequency security")
-                    self.voltage_security = ui.checkbox("Voltage security").tooltip("Needs the AC model")
+                    self.voltage_security = ui.checkbox("Voltage security")
                     self.run_dynamic_sim = ui.checkbox("Dynamic simulation", value=True, on_change=self._changed)
                 with theme.fields():
                     theme.label("Simulator")
-                    self.simulator = ui.toggle({name: SIMULATOR_LABELS[name] for name in SIMULATORS}, value="andes")
+                    self.simulator = ui.toggle(
+                        {name: SIMULATOR_LABELS[name] for name in SIMULATORS}, value="andes", on_change=self._changed
+                    )
+                    theme.label("Report")
+                    self.open_report = ui.checkbox("open when done", value=True)
+                    with self.open_report:
+                        self.open_report_tooltip = ui.tooltip()
                     theme.label("Output tag")
                     self.output_tag = ui.input(placeholder="none").tooltip("Added to the name of the results folder")
                 self.dyr_message = theme.hint()
         # what greys out while the form waits for Julia: all but the case itself, which may still be changed
-        self.waiting_parts = [self.objective, self.opf_model, self.flow_model, self.lam, boundary_section, penalties, security_section]
-        self.update_view()          # before any case is read: only what needs no case is shown
+        self.waiting_parts = [
+            self.objective,
+            self.opf_model,
+            self.flow_model,
+            self.lam,
+            boundary_section,
+            penalties,
+            security_section,
+        ]
+        self.update_view()  # before any case is read: only what needs no case is shown
         self._show_wait()
 
     def _build_penalty_rows(self):
-        """One line per penalty row: kind, zone, area or bus, the penalty in multiples of λ, and a remove button."""
+        """
+        One line per penalty row: kind, zone, area or bus, the penalty in multiples of λ, the arrows
+        that move it up and down (the order is the order the rows apply in), and a remove button.
+        """
         kinds = self._find_penalty_kinds()
         self.penalty_signature = self._find_penalty_signature()
-        for row in self.penalty_rows:
+        last = len(self.penalty_rows) - 1
+        for position, row in enumerate(self.penalty_rows):
             names = self._find_bus_options() if row["kind"] == "bus" else self._find_group_options(row["kind"])
             row["name"] = match_option(names, row["name"]) if row["name"] is not None else None
             with ui.element("div").classes("penalty-row"):
-                ui.select(kinds, value=find_row_key(row), on_change=lambda event, row=row: self._penalty_kind_changed(row, event.value))
-                ui.select(names, value=row["name"], with_input=True, on_change=lambda event, row=row: row.update(name=event.value))
-                ui.number(value=row["times_lambda"], min=0, on_change=lambda event, row=row: row.update(times_lambda=event.value))
-                theme.button(icon="close", kind="ghost", small=True, on_click=lambda row=row: self._remove_penalty_row(row)).tooltip(
-                    "Remove this row"
+                ui.select(
+                    kinds,
+                    value=find_row_key(row),
+                    on_change=lambda event, row=row: self._penalty_kind_changed(row, event.value),
                 )
+                ui.select(
+                    names,
+                    value=row["name"],
+                    with_input=True,
+                    on_change=lambda event, row=row: row.update(name=event.value),
+                )
+                ui.number(
+                    value=row["times_lambda"],
+                    min=0,
+                    on_change=lambda event, row=row: row.update(times_lambda=event.value),
+                )
+                with ui.element("div").classes("move-buttons"):
+                    up = theme.button(
+                        icon="chevron_up",
+                        kind="ghost",
+                        small=True,
+                        on_click=lambda row=row: self._move_penalty_row(row, -1),
+                    )
+                    up.set_enabled(position > 0)
+                    down = theme.button(
+                        icon="chevron_down",
+                        kind="ghost",
+                        small=True,
+                        on_click=lambda row=row: self._move_penalty_row(row, 1),
+                    )
+                    down.set_enabled(position < last)
+                theme.button(
+                    icon="close", kind="ghost", small=True, on_click=lambda row=row: self._remove_penalty_row(row)
+                ).tooltip("Remove this row")
 
     # -------------------- what the case offers --------------------
     def _find_groups(self, kind):
@@ -228,7 +301,10 @@ class RunForm:
         return self.case_info.get(f"{kind}s", [])
 
     def _find_group_options(self, kind):
-        return {group["name"]: f"{group['name']}  ({group['buses']} buses, {group['load_mw']:g} MW)" for group in self._find_groups(kind)}
+        return {
+            group["name"]: f"{group['name']}  ({group['buses']} buses, {group['load_mw']:g} MW)"
+            for group in self._find_groups(kind)
+        }
 
     def _find_bus_options(self):
         """Load buses of the case with their in-service load: {bus: "bus  (MW)"}."""
@@ -295,11 +371,25 @@ class RunForm:
 
     def _add_penalty_row(self):
         """A new row at the bottom, where it counts over the rows above it."""
-        self.penalty_rows.append({"kind": next(iter(self._find_penalty_kinds())), "name": None, "except": False, "times_lambda": None})
+        self.penalty_rows.append(
+            {"kind": next(iter(self._find_penalty_kinds())), "name": None, "except": False, "times_lambda": None}
+        )
         self.penalty_list.refresh()
 
     def _remove_penalty_row(self, row):
         self.penalty_rows.remove(row)
+        self.penalty_list.refresh()
+
+    def _move_penalty_row(self, row, step):
+        """Move a penalty row one place up (step -1) or down (+1), which changes the row that counts where two reach the same load."""
+        position = next(
+            place for place, other in enumerate(self.penalty_rows) if other is row
+        )  # by identity: two rows may hold the same values
+        new_position = position + step
+        if not 0 <= new_position < len(self.penalty_rows):
+            return
+        rows = self.penalty_rows
+        rows[position], rows[new_position] = rows[new_position], rows[position]
         self.penalty_list.refresh()
 
     # -------------------- cases --------------------
@@ -323,7 +413,7 @@ class RunForm:
 
         cases = self.ctx.state["cases"]
         self.case.set_options({case: Path(case).name for case in cases})
-        self.cases_loaded = True        # the form waits on, for its first case (write)
+        self.cases_loaded = True  # the form waits on, for its first case (write)
         first_settings = default_settings()
         if self.ctx.runs.records:
             first_settings = self.ctx.runs.records[-1]["settings"]
@@ -365,12 +455,12 @@ class RunForm:
         self._show_wait()
         try:
             cache[case] = (await self.ctx.worker.request({"type": "case_info", "case": case}), "")
-        except JobError as error:           # Julia could not read the case: that stays true until the file changes
+        except JobError as error:  # Julia could not read the case: that stays true until the file changes
             cache[case] = ({}, str(error))
-        except WorkerError as error:        # Julia is not running: ask again next time
+        except WorkerError as error:  # Julia is not running: ask again next time
             return {}, f"Julia did not answer: {error}"
         finally:
-            if self.reading == case:        # a newer read shows its own wait
+            if self.reading == case:  # a newer read shows its own wait
                 self.reading = None
             self._show_wait()
         return cache[case]
@@ -380,9 +470,9 @@ class RunForm:
         self.loaded_case = case
         self.retry = None
         case_info, case_error = await self.find_case_info(case)
-        if case != self.loaded_case:        # another case was chosen meanwhile
+        if case != self.loaded_case:  # another case was chosen meanwhile
             return
-        if self.is_unanswered(case):        # read it again once Julia is back
+        if self.is_unanswered(case):  # read it again once Julia is back
             self.retry = lambda: self._switch_case(case)
         self.case_info, self.case_error = case_info, case_error
         self.writing = True
@@ -392,7 +482,7 @@ class RunForm:
             self.penalty_rows = []
         finally:
             self.writing = False
-        if self.modifications:              # they named the loads and groups of the other case
+        if self.modifications:  # they named the loads and groups of the other case
             self.modifications = {}
             with self.case:
                 ui.notify("The network modifications were for the other case and were removed.", position="top")
@@ -413,7 +503,7 @@ class RunForm:
         """
         worker = self.ctx.worker
         if worker.state in ("stopped", "crashed"):
-            return ""                       # nothing comes until Julia is restarted: the error says so
+            return ""  # nothing comes until Julia is restarted: the error says so
         if not self.cases_loaded:
             if self.case_list_error and worker.state != "starting":
                 return ""
@@ -463,13 +553,16 @@ class RunForm:
             "voltage_security": self.voltage_security.value,
             "run_dynamic_sim": self.run_dynamic_sim.value,
             "simulator": self.simulator.value,
+            "open_report": (
+                self.open_report.value if self.open_report.enabled else True
+            ),  # greyed: PSS®E opens it anyway, or no report
             "output_tag": self.output_tag.value,
             "modifications": self.modifications,
         }
         run_settings, problems = build_settings(form)
         if self.case_error:
             problems.append(f"the case could not be read: {self.case_error}")
-        if not problems:                    # a form that could not be read would only add follow-on problems
+        if not problems:  # a form that could not be read would only add follow-on problems
             problems.extend(validate(run_settings))
             for problem in advanced.find_problems(run_settings["modifications"], self.find_study()):
                 problems.append(f"Advanced, {problem}")
@@ -485,16 +578,16 @@ class RunForm:
         case = values["case"]
         self.loaded_case = case
         self.retry = None
-        self.writing = True                 # the case shows at once, while Julia reads it
+        self.writing = True  # the case shows at once, while Julia reads it
         try:
             self.case.set_value(case if case in self.case.options else None)
         finally:
             self.writing = False
         case_info, case_error = await self.find_case_info(case)
-        if case != self.loaded_case:        # another case was chosen meanwhile
+        if case != self.loaded_case:  # another case was chosen meanwhile
             return False
         self.case_info, self.case_error = case_info, case_error
-        if self.is_unanswered(case):        # fill the form once Julia is back and has read the case
+        if self.is_unanswered(case):  # fill the form once Julia is back and has read the case
             self.retry = lambda: self.write(run_settings)
             self._show_wait()
             return False
@@ -509,7 +602,9 @@ class RunForm:
 
             # the kind first, then the names it offers
             kind = values["boundary_kind"]
-            self.boundary_kind.set_options(self._find_boundary_kinds(), value=kind if kind in self._find_boundary_kinds() else None)
+            self.boundary_kind.set_options(
+                self._find_boundary_kinds(), value=kind if kind in self._find_boundary_kinds() else None
+            )
             names = self._find_group_options(kind) if kind in GROUP_KINDS else {}
             self.boundary_name.set_options(names, value=match_option(names, values["boundary_name"]))
             self.bus_pairs.set_value(values["bus_pairs_text"])
@@ -523,6 +618,7 @@ class RunForm:
             self.voltage_security.set_value(values["voltage_security"])
             self.run_dynamic_sim.set_value(values["run_dynamic_sim"])
             self.simulator.set_value(values["simulator"])
+            self.open_report.set_value(values["open_report"])
             self.output_tag.set_value(values["output_tag"])
             self.modifications = values["modifications"]
         finally:
@@ -564,9 +660,17 @@ class RunForm:
         penalties = run_settings["penalties"]
         for row in penalty_rows:
             if row["kind"] != "bus" and row["kind"] != study_kind:
-                return f"The study in the Run form is by {study_kind}, so a penalty for {row['kind']} {row['name']} does not fit it. Use it as the target first, or select its buses.", []
+                return (
+                    f"The study in the Run form is by {study_kind}, so a penalty for {row['kind']} {row['name']} does not fit it. Use it as the target first, or select its buses.",
+                    [],
+                )
             is_bus = row["kind"] == "bus"
-            new_row = {"kind": row["kind"], "name": int(row["name"]) if is_bus else str(row["name"]), "except": False, "times_lambda": row["times_lambda"]}
+            new_row = {
+                "kind": row["kind"],
+                "name": int(row["name"]) if is_bus else str(row["name"]),
+                "except": False,
+                "times_lambda": row["times_lambda"],
+            }
             penalties["rows"] = [old for old in penalties["rows"] if not is_same_target(old, new_row)]
             penalties["rows"].append(new_row)
         if penalty_rows and penalties["uniform"] is not None:
@@ -575,7 +679,9 @@ class RunForm:
         dropped = [row for row in penalties["rows"] if row["kind"] in GROUP_KINDS and row["kind"] != study_kind]
         if dropped:
             penalties["rows"] = [row for row in penalties["rows"] if row not in dropped]
-            notes.append(f"{len(dropped)} penalty row{'s' if len(dropped) > 1 else ''} of the other kind of group went, because the study is now by {study_kind}.")
+            notes.append(
+                f"{len(dropped)} penalty row{'s' if len(dropped) > 1 else ''} of the other kind of group went, because the study is now by {study_kind}."
+            )
 
         await self.write(run_settings)
         return "", notes
@@ -598,10 +704,11 @@ class RunForm:
         self.updating = True
         try:
             self._show_wait()
+            self._update_objective()
             self._update_boundary()
             self._update_penalties()
             self._update_security()
-            self._show_modifications()      # the boundary's kind decides which groups they may name
+            self._show_modifications()  # the boundary's kind decides which groups they may name
         finally:
             self.updating = False
 
@@ -618,10 +725,21 @@ class RunForm:
             self._show_case_message(self.case_error, error=True)
         elif self.case_info:
             groups = [f"{len(self._find_groups(kind))} {kind}s" for kind in GROUP_KINDS if self._find_groups(kind)]
-            counts = [f"{len(self.case_info.get('loads', []))} loads", f"{len(self.case_info.get('gens', []))} generators"]
+            counts = [
+                f"{len(self.case_info.get('loads', []))} loads",
+                f"{len(self.case_info.get('gens', []))} generators",
+            ]
             self._show_case_message(", ".join(groups + counts))
         else:
             self._show_case_message("")
+
+    def _update_objective(self):
+        """The objective's formula under it, and what it does not read dimmed (still editable: it is kept for another objective)."""
+        objective = self.objective.value
+        reads = OBJECTIVE_READS.get(objective, set())
+        theme.dim_unused([self.flow_model_label, self.flow_model], "flow_model" not in reads)
+        theme.dim_unused([self.lam_label, self.lam], "lambda" not in reads)
+        theme.dim_unused([self.penalties_section], "penalties" not in reads)
 
     def _update_boundary(self):
         kinds = self._find_boundary_kinds()
@@ -676,12 +794,17 @@ class RunForm:
             self.dyr_message.text = ""
         self.simulator.set_enabled(bool(self.run_dynamic_sim.value))
 
+        # only the ANDES script can leave its report closed
+        if not self.run_dynamic_sim.value:
+            self.open_report_tooltip.text = "No dynamic simulation, so no report"
+        self.open_report.set_enabled(bool(self.run_dynamic_sim.value) and self.simulator.value == "andes")
+
 
 # ==================== The page ====================
 def build(ctx):
     """The Run page of one browser tab: the toolbar, the settings sheet, the results, the session's runs and the status strip."""
     form = RunForm(ctx)
-    ctx.client_state()["run_form"] = form          # the Network page of this browser tab fills it (RunForm.take)
+    ctx.client_state()["run_form"] = form  # the Network page of this browser tab fills it (RunForm.take)
 
     def show_summary(opened=None):
         """The toolbar's text: the chosen preset's note while the sheet is open, what the settings are while it is folded."""
@@ -696,14 +819,10 @@ def build(ctx):
             preset_bar = PresetBar(ctx, form, on_loaded=lambda: settings_fold.open(), on_choice=lambda: show_summary())
             summary = theme.toolbar_text()
             with summary:
-                summary_tooltip = ui.tooltip()          # all of it, when the line is cut
-            advanced_button = theme.button("Advanced", icon="sliders", kind="ghost").tooltip(
-                "Changes to the network before a run: " + ", ".join(tab.TITLE.lower() for tab in advanced.ADVANCED_TABS)
-            )
+                summary_tooltip = ui.tooltip()  # all of it, when the line is cut
+            advanced_button = theme.button("Advanced", icon="sliders", kind="ghost")
             stop_button = theme.button("Stop", icon="stop", kind="danger")
             run_button = theme.button("Run", icon="play", kind="primary")
-            with run_button:
-                run_tooltip = ui.tooltip()
         problems_label = ui.label("").classes("problems")
         with ui.element("div").classes("modifications") as modifications_line:
             theme.eyebrow("Network modifications")
@@ -718,7 +837,9 @@ def build(ctx):
             modifications_line.set_visibility(count > 0)
             modifications_text.text = "  ·  ".join(advanced.describe(form.modifications))
             unfit = advanced.find_problems(form.modifications, form.find_study()) if form.case_info else []
-            theme.show_hint(modifications_note, "some do not fit these settings: open Advanced" if unfit else "", bad=True)
+            theme.show_hint(
+                modifications_note, "some do not fit these settings: open Advanced" if unfit else "", bad=True
+            )
 
         def open_advanced():
             if not form.case_info:
@@ -749,14 +870,14 @@ def build(ctx):
             theme.eyebrow("Runs in this session")
 
         runs_box = ui.element("div")
-    strip = StatusStrip(ctx, LogDialog())       # last: it leaves room for itself at the end of the page
+    strip = StatusStrip(ctx, LogDialog())  # last: it leaves room for itself at the end of the page
 
-    shown_runs = [None]                 # the runs table's signature when it was last built
+    shown_runs = [None]  # the runs table's signature when it was last built
 
     @ui.refreshable
     def runs_view():
         shown_runs[0] = find_runs_signature(ctx)
-        build_runs_view(ctx, form, settings_fold, strip)
+        build_runs_view(ctx, form, settings_fold, strip, results)
 
     with runs_box:
         runs_view()
@@ -765,39 +886,47 @@ def build(ctx):
     def update_buttons():
         block = find_run_block(ctx, form)
         run_button.set_enabled(not block)
-        run_tooltip.text = block or "Start a run with these settings"
         stop_button.set_enabled(ctx.runs.find_running() is not None)
-        preset_bar.update_buttons()         # Save as waits with the form
+        preset_bar.update_buttons()  # Save as waits with the form
 
     form.on_wait = update_buttons
 
     def run_clicked():
-        if find_run_block(ctx, form):       # a click that came before the button was turned off
+        if find_run_block(ctx, form):  # a click that came before the button was turned off
             return
         run_settings, problems = form.read()
         show_problems(problems)
         if problems:
-            settings_fold.open()            # the problems are about the settings: show them
+            settings_fold.open()  # the problems are about the settings: show them
             return
         try:
-            ctx.runs.start(run_settings)        # the runs table and the status strip show it
+            ctx.runs.start(run_settings)  # the runs table and the status strip show it
         except WorkerError as error:
             problems_label.text = f"• Julia is not running: {error}"
 
     async def stop_clicked():
         if ctx.runs.find_running() is not None:
-            await ctx.worker.restart()      # kills Julia with its dynamic.py, then starts a fresh one
+            await ctx.worker.restart()  # kills Julia with its dynamic.py, then starts a fresh one
 
     run_button.on_click(run_clicked)
     stop_button.on_click(theme.busy_handler(stop_button, stop_clicked))
 
-    async def load_into_form(run_settings, note):
-        """Settings from another page (History's Load into Run) into the form, the sheet unfolded, and a note saying so."""
+    async def load_into_form(run_settings, note, result=None):
+        """
+        Settings from another page (History's Load into Run) into the form, the sheet unfolded, and
+        a note saying so. `result`, the run whose results go with them (a session run, or one
+        built by `build_loaded_record`), shows at once: it needs nothing from Julia.
+        """
         settings_fold.open()
+        if result is not None:
+            results.show(result)
         if await form.write(run_settings):
             ui.notify(note, position="top")
         elif form.retry is not None:
-            ui.notify("Julia stopped before it read the case: the settings go into the form once Julia is back.", position="top")
+            ui.notify(
+                "Julia stopped before it read the case: the settings go into the form once Julia is back.",
+                position="top",
+            )
 
     ctx.client_state()["load_settings"] = load_into_form
 
@@ -808,17 +937,17 @@ def build(ctx):
 
     def state_changed(state, message=""):
         update_buttons()
-        if state == "ready" and not form.cases_loaded:      # Julia came back after the page was built
+        if state == "ready" and not form.cases_loaded:  # Julia came back after the page was built
             background_tasks.create(load_cases(), name="load cases")
         else:
             form.julia_changed()
 
     def runs_changed():
         results.refresh()
-        if find_runs_signature(ctx) != shown_runs[0]:      # a click on the table is not lost to a rebuild at each stage
+        if find_runs_signature(ctx) != shown_runs[0]:  # a click on the table is not lost to a rebuild at each stage
             runs_view.refresh()
         strip.refresh()
-        form.julia_changed()                # a read that waited for the run says so
+        form.julia_changed()  # a read that waited for the run says so
         update_buttons()
 
     removers = [
@@ -830,18 +959,27 @@ def build(ctx):
     ui.timer(0.1, load_cases, once=True)
 
 
-def build_runs_view(ctx, form, settings_fold, strip):
-    """The runs of this session, newest first: what ran, its status, and its report, folder, log and settings."""
+def build_runs_view(ctx, form, settings_fold, strip, results):
+    """The runs of this session, newest first: what ran, its status, and its report, folder, log, and Load (settings and results)."""
     if not ctx.runs.records:
         ui.label("No run yet. Choose the settings above and press Run.").classes("empty")
         return
 
-    async def load_settings(record):
+    async def load_run(record):
+        """The run's settings into the form, and its results into the results panel when it has them."""
         settings_fold.open()
+        if record["summary"]:
+            results.show(record)
         if await form.write(record["settings"]):
-            ui.notify(f"The settings of run {record['number']} are in the form.", position="top")
+            note = f"The settings of run {record['number']} are in the form."
+            if not record["summary"]:
+                note += " It has no results to show."
+            ui.notify(note, position="top")
         elif form.retry is not None:
-            ui.notify("Julia stopped before it read the case: the settings go into the form once Julia is back.", position="top")
+            ui.notify(
+                "Julia stopped before it read the case: the settings go into the form once Julia is back.",
+                position="top",
+            )
 
     with ui.element("div").classes("runs-row runs-head"):
         for heading in ("Run", "Started", "Case", "Objective", "Boundary", "Tag", "Status", "", ""):
@@ -872,9 +1010,15 @@ def build_runs_view(ctx, form, settings_fold, strip):
                 detail_label.tooltip(record["error"])
 
             with ui.element("div").classes("runs-actions"):
-                report_button = theme.button("Report", kind="ghost", small=True, on_click=lambda files=files: open_report(files))
+                report_button = theme.button(
+                    "Report", kind="ghost", small=True, on_click=lambda files=files: open_report(files)
+                )
                 report_button.set_enabled(bool(files.get("report")))
-                folder_button = theme.button("Folder", kind="ghost", small=True, on_click=lambda files=files: open_folder(files))
+                folder_button = theme.button(
+                    "Folder", kind="ghost", small=True, on_click=lambda files=files: open_folder(files)
+                )
                 folder_button.set_enabled(bool(files.get("output_path")))
                 theme.button("Log", kind="ghost", small=True, on_click=lambda record=record: strip.open_log(record))
-                theme.button("Load settings", kind="ghost", small=True, on_click=lambda record=record: load_settings(record), busy=True)
+                theme.button(
+                    "Load", kind="ghost", small=True, on_click=lambda record=record: load_run(record), busy=True
+                ).tooltip("Put its settings in the form and show its results")

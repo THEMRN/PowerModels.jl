@@ -38,8 +38,9 @@ class SessionRuns:
     - `activity` and `activity_at` (the latest @@activity note of the current stage and when it
       came; None at the start of each stage);
     - `warnings` (the log lines that warn);
-    - `summary` (the @@result summary, None without one) and `error` (the @@error message, or
-      why Julia stopped).
+    - `summary` (the @@result summary, None without one) and `partial` (True while it is the
+      summary sent before the dynamic simulation, which the final one replaces);
+    - `error` (the @@error message, or why Julia stopped).
 
     The records follow the worker's control lines and log lines. A run that Julia never finishes
     (Stop, Restart Julia, a crash) gets no @@done, so its status comes from the worker's state
@@ -87,6 +88,7 @@ class SessionRuns:
             "activity_at": None,
             "warnings": [],
             "summary": None,
+            "partial": False,
             "error": None,
         }
         self.records.append(record)
@@ -123,6 +125,7 @@ class SessionRuns:
             record["activity_at"] = None
         elif kind == "result":
             record["summary"] = payload.get("summary")
+            record["partial"] = bool(payload.get("partial"))     # the results of the solve, before the simulation's
         elif kind == "error":
             record["error"] = payload.get("message", "error in Julia")
         elif kind == "done":

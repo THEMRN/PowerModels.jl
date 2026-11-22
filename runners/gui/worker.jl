@@ -6,8 +6,9 @@
 #   {"id": 7, "type": "run", "settings": {...}}
 # prints its log as the runners always do, and marks job events with control lines
 # that start with "@@" (@@ready, @@start, @@stage, @@activity, @@data, @@result, @@error, @@done).
-# A run ends with @@result, the report information in MW. The protocol, the settings schema and the
-# result summary are in runners/gui/gui_plan.md ("Contracts").
+# A run ends with @@result, the report information in MW, which is also kept in the results folder
+# as result_<timestamp>.json. The protocol, the settings schema and the result summary are in
+# runners/gui/gui_plan.md ("Contracts").
 #
 # Packages load once; the runner files are re-included before every run, so edits to
 # them apply without a restart. Edits to src/, frequency.jl or voltage.jl need a restart.
@@ -41,6 +42,8 @@ const MW_DIGITS = 2                               # MW, Mvar and % in @@result, 
 const LAYOUT_DIGITS = 3                           # positions and radii of the network layout (line lengths)
 const PU_DIGITS = 3                               # H, K, D, voltages (pu) and voltage indicators in @@result, as the console prints them
 const UFLS_FILE = "ufls_shed.json"                # the UFLS relays' sheds, written by andes_scripts/dynamic.py into the results folder
+const FREQUENCY_FILE = "frequency_stats.json"     # each bus's lowest and highest frequency in the simulation, written there too
+const HZ_DIGITS = 3                               # frequencies (Hz) in @@result
 const STAGE_LABELS = Dict(                        # stage => label shown by the GUI (gui_plan.md, "Stages")
     "load_case" => "Load case",
     "prepare" => "Prepare",
@@ -230,6 +233,7 @@ function find_settings_problems(settings)
     settings["simulator"] in SIMULATORS || push!(problems, "simulator must be psse or andes")
     settings["lambda"] isa Real && settings["lambda"] > 0 || push!(problems, "lambda must be a positive number")
     settings["output_tag"] isa AbstractString || push!(problems, "output_tag must be text (empty for none)")
+    get(settings, "open_report", true) isa Bool || push!(problems, "open_report must be true or false")
     if settings["voltage_security"] == true && settings["opf_model"] != "AC"
         push!(problems, "voltage security needs the AC model")
     end
@@ -504,8 +508,10 @@ Run one islanding scenario from settings (schema 2, or 1), the way islanding.jl'
 inside the solve stage (`run_islanding`). Returns what the result summary needs: the solve
 `result`, the network data as the console reports read it (with the embedded
 `frequency_islands`), the settings, the target, the results folder and the start time (Unix).
+`solved`, when given, gets the same once the solve is done, before the Excel report and the
+dynamic simulation, with `solve_seconds` as well.
 """
-function run_from_settings(settings; progress=stage -> nothing, activity=nothing)
+function run_from_settings(settings; progress=stage -> nothing, activity=nothing, solved=nothing)
     problems = find_settings_problems(settings)
     isempty(problems) || error("invalid settings:\n  " * join(problems, "\n  "))
 
@@ -542,7 +548,19 @@ function run_from_settings(settings; progress=stage -> nothing, activity=nothing
     # run the shared pipeline (solve, reports, export, dynamic simulation)
     output_tag = isempty(strip(settings["output_tag"])) ? nothing : strip(settings["output_tag"])
     case_name = case_name_of(case_path)
+    output_path = calc_output_path(case_name, settings["objective"], output_tag)
     run_started = time()
+
+    # the run as far as the solve, for `solved`
+    function report_solved(result, solve_seconds)
+        solved === nothing && return
+        if haskey(network_data, "frequency_islands")
+            report_data["frequency_islands"] = network_data["frequency_islands"]     # embedded by run_islanding
+        end
+        solved((result=result, network_data=report_data, settings=settings, target=target,
+            output_path=output_path, started=run_started, solve_seconds=solve_seconds))
+    end
+
     result = run_islanding(
         network_data;
         case_name=case_name,
@@ -563,8 +581,10 @@ function run_from_settings(settings; progress=stage -> nothing, activity=nothing
         frequency_security=settings["frequency_security"] == true,
         voltage_security=settings["voltage_security"] == true,
         simulator=settings["simulator"],
+        open_report=get(settings, "open_report", true),     # optional: settings from before the box open the report
         progress=progress,
         activity=activity,
+        on_solved=report_solved,
         run_settings=settings,
     )
     if haskey(network_data, "frequency_islands")
@@ -576,7 +596,7 @@ function run_from_settings(settings; progress=stage -> nothing, activity=nothing
         network_data=report_data,
         settings=settings,
         target=target,
-        output_path=calc_output_path(case_name, settings["objective"], output_tag),
+        output_path=output_path,
         started=run_started,
     )
 end
@@ -703,12 +723,12 @@ function calc_load_shed_summary(network_data, result, group_kind::AbstractString
 end
 
 """
-The UFLS shed record (`UFLS_FILE`) the ANDES script wrote into `output_path` at or after `since`
-(Unix time), or `nothing` when there is none. The folder is reused by later runs of the same case,
-objective and tag, so an older record is not this run's.
+The record `file_name` (`UFLS_FILE`, `FREQUENCY_FILE`) the ANDES script wrote into `output_path`
+at or after `since` (Unix time), or `nothing` when there is none. The folder is reused by later
+runs of the same case, objective and tag, so an older record is not this run's.
 """
-function find_ufls_record(output_path::AbstractString, since::Real)
-    file = joinpath(output_path, UFLS_FILE)
+function find_simulation_record(output_path::AbstractString, file_name::AbstractString, since::Real)
+    file = joinpath(output_path, file_name)
     isfile(file) || return nothing
     mtime(file) >= since || return nothing
     return JSON3.read(read(file, String), Dict{String,Any}; allow_inf=true)
@@ -727,7 +747,7 @@ function calc_ufls_summary(finished_run, group_kind::AbstractString)
     settings = finished_run.settings
     settings["run_dynamic_sim"] == true || return nothing
     settings["simulator"] == "andes" || return Dict{String,Any}("status" => "not_reported")
-    record = find_ufls_record(finished_run.output_path, finished_run.started)
+    record = find_simulation_record(finished_run.output_path, UFLS_FILE, finished_run.started)
     record === nothing && return Dict{String,Any}("status" => "no_record")
     record["relays"] > 0 || return Dict{String,Any}("status" => "no_relays")
 
@@ -857,10 +877,47 @@ function calc_flow_summary(network_data, result, target)
 end
 
 """
-Each island's frequency response (H in s, K and D in pu on the system base), its import limits
-(MW) with the binding one, and its solved scheduled import (MW, positive into the island).
+The frequency extreme the SFR model of the frequency limits (frequency.jl) predicts when the
+island loses its scheduled import (pu): an island that imports loses power and its frequency
+falls to a `nadir`; one that exports gains power and its frequency rises to a `peak` (the model is
+symmetric). `hz` is that frequency and `limit_hz` the one the nadir limit keeps it from passing
+(the first UFLS stage, or as far above f0 for a peak).
 """
-function calc_frequency_summary(network_data, result)
+function calc_predicted_frequency(island, scheduled_import::Real)
+    f0 = PowerModels.NOMINAL_FREQUENCY
+    floor_hz = PowerModels.MIN_NADIR_FREQUENCY
+    if scheduled_import >= 0
+        return (extreme="nadir", hz=PowerModels.simulate_frequency_nadir(island, scheduled_import), limit_hz=floor_hz)
+    end
+    peak_hz = 2 * f0 - PowerModels.simulate_frequency_nadir(island, -scheduled_import)
+    return (extreme="peak", hz=peak_hz, limit_hz=2 * f0 - floor_hz)
+end
+
+"""
+The island's lowest (`extreme` "nadir") or highest ("peak") bus frequency in the dynamic
+simulation, from each bus's extremes in `FREQUENCY_FILE` (`bus_extremes`, bus number as a string
+=> min_hz, min_time, max_hz, max_time): (hz, bus, time in s), or `nothing` when none of its buses
+has a record.
+"""
+function find_simulated_frequency(island_buses, extreme::AbstractString, bus_extremes)
+    found = nothing
+    for bus in island_buses
+        record = get(bus_extremes, string(bus), nothing)
+        record === nothing && continue
+        hz, at = extreme == "nadir" ? (record["min_hz"], record["min_time"]) : (record["max_hz"], record["max_time"])
+        is_further = found === nothing || (extreme == "nadir" ? hz < found.hz : hz > found.hz)
+        is_further && (found = (hz=hz, bus=Int(bus), time=at))
+    end
+    return found
+end
+
+"""
+Each island's frequency response (H in s, K and D in pu on the system base), its import limits
+(MW) with the binding one, its solved scheduled import (MW, positive into the island), and the
+frequency extreme after the lines open: predicted (`calc_predicted_frequency`) and, when the
+simulation's `bus_extremes` are given, simulated (`find_simulated_frequency`), in Hz.
+"""
+function calc_frequency_summary(network_data, result, bus_extremes=nothing)
     base_mva = network_data["baseMVA"]
     islands = Dict{String,Any}[]
     for island in network_data["frequency_islands"]
@@ -870,6 +927,8 @@ function calc_frequency_summary(network_data, result)
             limits_mw[name] = to_mw(limit, base_mva)
         end
         scheduled_import = calc_scheduled_import(network_data, result, island)
+        predicted = calc_predicted_frequency(island, scheduled_import)
+        simulated = bus_extremes === nothing ? nothing : find_simulated_frequency(island["buses"], predicted.extreme, bus_extremes)
 
         push!(islands, Dict{String,Any}(
             "island_bus" => first(island["buses"]),
@@ -882,9 +941,37 @@ function calc_frequency_summary(network_data, result)
             "limits_mw" => limits_mw,
             "binding" => argmin(limits),
             "scheduled_import_mw" => to_mw(scheduled_import, base_mva),
+            "extreme" => predicted.extreme,
+            "limit_hz" => round_value(predicted.limit_hz, HZ_DIGITS),
+            "predicted_hz" => round_value(predicted.hz, HZ_DIGITS),
+            "simulated_hz" => simulated === nothing ? nothing : round_value(simulated.hz, HZ_DIGITS),
+            "simulated_bus" => simulated === nothing ? nothing : simulated.bus,
+            "simulated_time_s" => simulated === nothing ? nothing : round_value(simulated.time, MW_DIGITS),
         ))
     end
     return islands
+end
+
+"""
+What the dynamic simulation gives the frequency part: `nothing` when it was off, otherwise
+`status` "pending" (the summary sent before it ends), "not_reported" (PSS®E, whose script writes
+no record), "no_record", or "simulated" with `event_time_s`, `end_time_s` and `stopped_early`.
+Also the simulation's per-bus extremes (`nothing` unless simulated), for `calc_frequency_summary`.
+"""
+function calc_frequency_simulation(finished_run; partial::Bool=false)
+    settings = finished_run.settings
+    settings["run_dynamic_sim"] == true || return nothing, nothing
+    partial && return Dict{String,Any}("status" => "pending"), nothing
+    settings["simulator"] == "andes" || return Dict{String,Any}("status" => "not_reported"), nothing
+    record = find_simulation_record(finished_run.output_path, FREQUENCY_FILE, finished_run.started)
+    record === nothing && return Dict{String,Any}("status" => "no_record"), nothing
+    status = Dict{String,Any}(
+        "status" => "simulated",
+        "event_time_s" => round_value(record["event_time"], MW_DIGITS),
+        "end_time_s" => round_value(record["end_time"], MW_DIGITS),
+        "stopped_early" => record["stopped_early"],
+    )
+    return status, record["buses"]
 end
 
 "A shed sized in a voltage round: each bus's shed and the load it was taken from (MW), and the worst indicator it leaves."
@@ -967,7 +1054,25 @@ function calc_voltage_summary(voltage_security, base_mva::Real)
     )
 end
 
-"The results folder (absolute) and the names of the files the run wrote, from its settings record."
+"""
+The target zone or area of the run, by which the GUI names the islands: `kind`, `name` and its
+`buses` (sorted). Every island lies wholly inside or wholly outside it, since its boundary lines
+are open. `nothing` for a bus-pair boundary, which has no target group.
+"""
+function calc_target_summary(target)
+    target.buses === nothing && return nothing
+    kind = target.zone !== nothing ? "zone" : "area"
+    return Dict{String,Any}(
+        "kind" => kind,
+        "name" => something(target.zone, target.area),
+        "buses" => sort([Int(bus) for bus in target.buses]),
+    )
+end
+
+"""
+The results folder (absolute) and the names of the files the run wrote, from its settings record.
+`result` is filled when the summary is kept (`write_result_file!`).
+"""
 function calc_files_summary(output_path::AbstractString, run_record)
     files = Dict{String,Any}(
         "output_path" => abspath(output_path),
@@ -975,6 +1080,7 @@ function calc_files_summary(output_path::AbstractString, run_record)
         "excel" => nothing,
         "raw" => nothing,
         "report" => nothing,
+        "result" => nothing,
     )
     run_record === nothing && return files
 
@@ -986,32 +1092,41 @@ function calc_files_summary(output_path::AbstractString, run_record)
 end
 
 """
-The report information of a finished run, sent as @@result (gui_plan.md, "Result summary"), in
-MW and Mvar. Grouped like the console reports (`find_group_kind`); parts whose feature was off
-are `nothing`.
+The report information of a run, sent as @@result (gui_plan.md, "Result summary"), in MW and
+Mvar. Grouped like the console reports (`find_group_kind`); parts whose feature was off are
+`nothing`. With `partial`, the run as far as its solve (`run_from_settings`' `solved`, before
+the Excel report and the dynamic simulation): the simulation's parts are "pending", the times
+other than the solve's and the files other than the folder are `nothing`.
 """
-function calc_result_summary(finished_run)
+function calc_result_summary(finished_run; partial::Bool=false)
     result = finished_run.result
     network_data = finished_run.network_data
     settings = finished_run.settings
     target = finished_run.target
     base_mva = network_data["baseMVA"]
     group_kind = find_group_kind(network_data, target.zone, target.area)
-    run_record = find_run_record(finished_run.output_path, finished_run.started)
+    run_record = partial ? nothing : find_run_record(finished_run.output_path, finished_run.started)
 
     objective = result["objective"]
     isfinite(objective) || (objective = nothing)
     seconds = nothing
-    if run_record !== nothing
+    if partial
+        seconds = Dict{String,Any}("solve" => round_value(finished_run.solve_seconds, MW_DIGITS), "dynamic_sim" => nothing, "total" => nothing)
+    elseif run_record !== nothing
         seconds = run_record.record["seconds"]
     end
     load_shed = nothing
     if occursin("shed", settings["objective"])
         load_shed = calc_load_shed_summary(network_data, result, group_kind)
     end
+    ufls = calc_ufls_summary(finished_run, group_kind)
+    if partial && ufls !== nothing
+        ufls = Dict{String,Any}("status" => "pending")
+    end
+    frequency_simulation, bus_extremes = calc_frequency_simulation(finished_run; partial=partial)
     frequency = nothing
     if haskey(network_data, "frequency_islands")
-        frequency = calc_frequency_summary(network_data, result)
+        frequency = calc_frequency_summary(network_data, result, bus_extremes)
     end
     voltage = nothing
     if haskey(result, "voltage_security")
@@ -1022,15 +1137,40 @@ function calc_result_summary(finished_run)
         "termination_status" => string(result["termination_status"]),
         "objective" => objective,
         "seconds" => seconds,
+        "target" => calc_target_summary(target),
         "generation" => calc_generation_summary(network_data, result, group_kind),
         "load_shed" => load_shed,
-        "ufls" => calc_ufls_summary(finished_run, group_kind),
+        "ufls" => ufls,
         "boundary_flows" => calc_flow_summary(network_data, result, target),
         "frequency" => frequency,
+        "frequency_simulation" => frequency_simulation,
         "voltage" => voltage,
         "network" => calc_network_summary(network_data, result),
         "files" => calc_files_summary(finished_run.output_path, run_record),
     )
+end
+
+"""
+Keep the summary as `result_<timestamp>.json` beside the run's `settings_<timestamp>.json`
+(same timestamp), so History can show the run's results again, and name it in
+`summary["files"]["result"]`. Nothing is kept for a run without a settings file. A file that
+cannot be written leaves `result` at `nothing` and a warning in the log; the run still ends well.
+"""
+function write_result_file!(summary)
+    files = summary["files"]
+    files["settings"] === nothing && return nothing
+
+    result_file = replace(files["settings"], r"^settings_" => "result_")
+    files["result"] = result_file
+    try
+        open(joinpath(files["output_path"], result_file), "w") do io
+            JSON3.write(io, summary; allow_inf=true)
+        end
+    catch err
+        files["result"] = nothing
+        println("Warning: the results were not kept in $result_file: ", sprint(showerror, err))
+    end
+    return nothing
 end
 
 
@@ -1269,18 +1409,39 @@ function handle_network(job)
 end
 
 """
+Send the results of a run as far as its solve (`@@result` with `"partial": true`), so the GUI
+shows them during the dynamic simulation. A summary that cannot be made leaves a warning in the
+log and the run goes on; the final @@result comes anyway.
+"""
+function send_partial_summary(job, solved_run)
+    try
+        summary = calc_result_summary(solved_run; partial=true)
+        send_control("result", Dict("id" => get(job, "id", nothing), "summary" => summary, "partial" => true))
+    catch err
+        println("Warning: the results before the dynamic simulation could not be sent: ", sprint(showerror, err))
+    end
+    return nothing
+end
+
+"""
 Run a scenario: re-include the runner files so edits apply, run the settings reporting each
-stage, then send the report information as @@result. Both calls go through invokelatest, so they
-see the re-included runner functions.
+stage, then keep the report information in the results folder and send it as @@result. Both
+calls go through invokelatest, so they see the re-included runner functions. A run with the
+dynamic simulation also sends its results as far as the solve, before the simulation.
 """
 function handle_run(job)
     include_runner_files()
     progress = stage -> send_stage(job, stage)
     activity = text -> send_activity(job, text)
-    finished_run = Base.invokelatest(run_from_settings, job["settings"]; progress=progress, activity=activity)
+    solved = nothing
+    if get(job["settings"], "run_dynamic_sim", false) == true
+        solved = solved_run -> send_partial_summary(job, solved_run)
+    end
+    finished_run = Base.invokelatest(run_from_settings, job["settings"]; progress=progress, activity=activity, solved=solved)
 
     send_stage(job, "summary")
     summary = Base.invokelatest(calc_result_summary, finished_run)
+    write_result_file!(summary)
     send_control("result", Dict("id" => get(job, "id", nothing), "summary" => summary))
     return nothing
 end

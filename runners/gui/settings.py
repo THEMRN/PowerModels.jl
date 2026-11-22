@@ -34,6 +34,7 @@ DEFAULT_SETTINGS = {
     "voltage_security": False,
     "run_dynamic_sim": True,
     "simulator": "andes",
+    "open_report": True,                        # the ANDES script opens its report in the browser when done
     "output_tag": "",
     "modifications": {},
 }
@@ -118,12 +119,12 @@ def format_value(value):
 
 def build_settings(form):
     """
-    The settings (schema v1) for the form's values, with the problems found while reading them
+    The settings (schema 2) for the form's values, with the problems found while reading them
     (malformed bus pairs, penalty rows left half filled). `form` holds: case, objective,
     opf_model, flow_model, lambda, boundary_kind, boundary_name, bus_pairs_text, uniform (bool),
     uniform_value, penalty_rows ([{kind: "zone" | "area" | "bus", name, except, times_lambda}], in
     the form's order, which is the order they apply in), others,
-    frequency_security, voltage_security, run_dynamic_sim, simulator, output_tag, and
+    frequency_security, voltage_security, run_dynamic_sim, simulator, open_report, output_tag, and
     modifications (as in the settings: the advanced dialog keeps them in that shape).
 
     With uniform shedding the penalty rows and `others` are left out, because the run ignores them.
@@ -176,6 +177,7 @@ def build_settings(form):
         "voltage_security": bool(form["voltage_security"]),
         "run_dynamic_sim": bool(form["run_dynamic_sim"]),
         "simulator": form["simulator"],
+        "open_report": bool(form["open_report"]),
         "output_tag": str(form["output_tag"] or "").strip(),
         "modifications": clean_modifications(form.get("modifications")),
     }
@@ -214,6 +216,7 @@ def form_values(settings):
         "voltage_security": settings["voltage_security"],
         "run_dynamic_sim": settings["run_dynamic_sim"],
         "simulator": settings["simulator"],
+        "open_report": settings.get("open_report", True),       # settings from before the box opened the report
         "output_tag": settings.get("output_tag", ""),
         "modifications": clean_modifications(settings.get("modifications")),
     }
