@@ -1,6 +1,6 @@
 // A table of rows to choose from: sorted by a click on a column title (again for the other way),
-// one row selected by a click or the arrow keys. One element for the whole table, so that a few
-// hundred rows stay quick; sortable_table.py is its Python side.
+// one row selected by a click or the arrow keys, and opened by a double-click or Enter. One element
+// for the whole table, so that a few hundred rows stay quick; sortable_table.py is its Python side.
 //
 // Props:
 //   columns   [{key, label, numeric, wide}]: `numeric` aligns right; `wide` lets the column take the room left
@@ -9,7 +9,8 @@
 //             a column sorts by `sort[key]` when it is there, else by its text; no value sorts last
 //   selected  the id of the selected row, or null
 //   order     {key, descending}: the first sorting
-// It emits "select" with the id of the row clicked or reached with the arrow keys.
+// It emits "select" with the id of the row clicked or reached with the arrow keys, and "open" with
+// the id of the row double-clicked, or of the selected row when Enter is pressed.
 
 export default {
   template: `
@@ -24,7 +25,7 @@ export default {
           </tr>
         </thead>
         <tbody>
-          <tr v-for="row in sortedRows" :key="row.id" :ref="'row-' + row.id" @click="choose(row.id)"
+          <tr v-for="row in sortedRows" :key="row.id" :ref="'row-' + row.id" @click="choose(row.id)" @dblclick="open(row.id)"
               :class="[row.tone || '', {selected: row.id === chosen}]">
             <td v-for="column in columns" :key="column.key"
                 :class="['col-' + column.key, (row.tones || {})[column.key] || '', {num: column.numeric, wide: column.wide}]"
@@ -83,7 +84,19 @@ export default {
       this.$emit("select", id);
     },
 
+    open(id) {
+      window.getSelection().removeAllRanges(); // the word a double-click selects
+      this.chosen = id;
+      this.$emit("open", id);
+    },
+
     onKey(event) {
+      if (event.key === "Enter") {
+        if (this.chosen === null) return;
+        event.preventDefault();
+        this.open(this.chosen);
+        return;
+      }
       if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
       event.preventDefault();
       const rows = this.sortedRows;

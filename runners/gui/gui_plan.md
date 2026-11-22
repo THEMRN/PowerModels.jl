@@ -2018,3 +2018,9 @@ Test folder added: `savnw_flow_shed_gui_test_uiux`.
 - **Dialog** on a test instance on 8090, the ACTIVSg500 run loaded from History: as above, round by round.
 
 *Left as it is:* the console and the strip's notes still say "Island at bus 23". They come from `voltage.jl`, inside the PowerModels module, and the checker reads those lines.
+
+**Load into Run by double-click or Enter (2026-11-22), at the user's request:** "load a history record into run with double click or enter".
+
+*What changed:* `components/sortable_table.js` emits `open` with a row's id on a double-click, and with the selected row's id on Enter while the table has the focus (the arrow keys already needed it); the word a double-click selects is cleared. `SortableTable` takes `on_open`. History's `_open_run` selects the run and does what Load into Run does; a run from before settings files gets a note instead, as the button is off for it. The Load into Run button's tooltip and the hint of an empty selection say so.
+
+*How it was verified* (test instance on 8090): a double-click on the ACTIVSg500 run of 2026-11-21 23:45 showed the Run page with its settings and results; a click on the savnw run of 2026-11-22 14:17 then Enter did the same for it; a double-click on the oldest run (savnw, 2026-03-13, no settings file) stayed on History with the note.

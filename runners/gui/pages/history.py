@@ -306,10 +306,12 @@ class HistoryPage:
                     order={"key": "time", "descending": True},
                     empty="No run passes these filters.",
                     on_select=self._select,
+                    on_open=self._open_run,
                 )
                 with ui.element("div").classes("history-side"):
                     # no ring: it shows the Run page at once, whose form says what it waits for
                     self.load_button = theme.button("Load into Run", kind="primary", on_click=self._load_into_run)
+                    self.load_button.tooltip("Or double-click the run, or press Enter")
                     with theme.line():
                         self.report_button = theme.button("Open report", kind="ghost", on_click=self._open_report)
                         self.folder_button = theme.button("Open folder", kind="ghost", on_click=self._open_folder)
@@ -417,7 +419,10 @@ class HistoryPage:
         self.details.clear()
         with self.details:
             if row is None:
-                theme.hint("Click a run in the table to see its settings and results. The arrow keys move up and down.")
+                theme.hint(
+                    "Click a run in the table to see its settings and results. The arrow keys move up and down, "
+                    "and a double-click or Enter loads the run into Run."
+                )
             else:
                 facts, notes = describe_settings_row(row) if row["kind"] == "settings" else describe_report_row(row)
                 with theme.facts():
@@ -455,6 +460,17 @@ class HistoryPage:
         if summary is None:
             return None, missing
         return build_loaded_record(row["id"], copy.deepcopy(run_settings), summary, row["time_text"]), ""
+
+    async def _open_run(self, row_id):
+        """A run double-clicked, or Enter on the selected one: load it into Run, as the Load into Run button does."""
+        self._select(row_id)
+        row = self._find_selected()
+        if row is None:
+            return
+        if row["kind"] != "settings":
+            ui.notify("This run is from before runs kept a settings file, so it cannot be loaded into Run.", position="top")
+            return
+        await self._load_into_run()
 
     async def _load_into_run(self):
         """Put the selected run's settings into the Run form of this browser tab, show its results, and show the Run page."""
