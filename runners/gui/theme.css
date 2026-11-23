@@ -1549,6 +1549,9 @@ input[type="number"]::-webkit-outer-spin-button {
   white-space: normal;
 }
 .network-side .field-penalty { width: 84px; }
+.network-side .fields {
+  grid-template-columns: 62px minmax(0, 1fr);
+}
 .network-legend {
   display: flex;
   flex-direction: column;

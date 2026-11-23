@@ -13,11 +13,12 @@ from nicegui import ui
 class NetworkCanvas(ui.element, component="network_canvas.js"):
     """
     The canvas. `on_pick(kind, index, shift, ctrl)` is called for a click on a bus ("node"), a line
-    ("link"), a circle ("circle") or nothing ("none"); `on_box(nodes, links, ctrl)` for a selection
-    box drawn with shift, with the indices of the buses and the lines inside it.
+    ("link"), a circle ("circle") or nothing ("none"); `on_context(kind, index)` for a right click
+    on a bus or a line; `on_box(nodes, links, ctrl)` for a selection box drawn with shift, with the
+    indices of the buses and the lines inside it.
     """
 
-    def __init__(self, *, on_pick=None, on_box=None, on_ready=None):
+    def __init__(self, *, on_pick=None, on_context=None, on_box=None, on_ready=None):
         """`on_ready()` is called once, when the canvas is first shown in the browser."""
         super().__init__()
         if on_ready is not None:
@@ -26,6 +27,8 @@ class NetworkCanvas(ui.element, component="network_canvas.js"):
         self._props["look"] = {}
         if on_pick is not None:
             self.on("pick", lambda event: on_pick(event.args["kind"], event.args["index"], event.args["shift"], event.args["ctrl"]))
+        if on_context is not None:
+            self.on("context", lambda event: on_context(event.args["kind"], event.args["index"]))
         if on_box is not None:
             self.on("box", lambda event: on_box(event.args["nodes"], event.args["links"], event.args["ctrl"]))
 

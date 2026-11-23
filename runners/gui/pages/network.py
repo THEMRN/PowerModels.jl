@@ -9,6 +9,7 @@ The network comes from Julia (the `network` job) with its layout, when the page 
 `network_view.py`, which draws nothing; `components/network_canvas` draws it.
 """
 
+import re
 from pathlib import Path
 
 from nicegui import background_tasks, ui
@@ -30,6 +31,7 @@ HOW_TO = (
     "Click to select: a circle or a bus for its zone or area, single buses, or lines.",
     "Shift and drag selects the buses or the lines in a box (with Ctrl it removes them).",
     "A square is a bus with a generator. Zoom in for the bus numbers.",
+    "Right click a line or a bus to add its bus pair or its number under Picked, ready to copy into the Run form.",
 )
 
 
@@ -70,11 +72,12 @@ class NetworkPage:
                 theme.button(icon="refresh", kind="ghost", on_click=self.reload, busy=True).tooltip("Read this case's network from Julia again")
                 theme.help_mark(HOW_TO)
             with ui.element("div").classes("network-body"):
-                self.canvas = NetworkCanvas(on_pick=self._picked, on_box=self._boxed, on_ready=self._first_shown)
+                self.canvas = NetworkCanvas(on_pick=self._picked, on_context=self._right_clicked, on_box=self._boxed, on_ready=self._first_shown)
                 self.cover = theme.Cover()
                 with ui.element("div").classes("network-side"):
                     with ui.element("div").classes("network-selection") as self.selection_box:
                         self._build_selection()
+                    self._build_picked()
                     theme.eyebrow("Legend")
                     self.legend = ui.element("div").classes("network-legend")
         with theme.offstage():
@@ -108,6 +111,21 @@ class NetworkPage:
             self.penalty_button = theme.button("Set penalty", on_click=self._set_penalty, busy=True)
             with self.penalty_button:
                 self.penalty_tooltip = ui.tooltip()
+
+    def _build_picked(self):
+        """Bus pairs and bus numbers gathered by right clicks, as the Run form and the bus lists read them."""
+        theme.eyebrow("Picked")
+        with theme.fields():
+            theme.label("Bus pairs")
+            with theme.line():
+                self.picked_pairs = ui.textarea(placeholder="right click a line").classes("grow")
+                theme.button("Copy", kind="ghost", on_click=lambda: self._copy_picked(self.picked_pairs))
+            theme.label("Buses")
+            with theme.line():
+                self.picked_buses = ui.textarea(placeholder="right click a bus").classes("grow")
+                theme.button("Copy", kind="ghost", on_click=lambda: self._copy_picked(self.picked_buses))
+        with theme.line():
+            theme.button("Clear", kind="ghost", on_click=self._clear_picked)
 
     # -------------------- reading from Julia --------------------
     def _first_shown(self):
@@ -243,6 +261,7 @@ class NetworkPage:
     def _case_changed(self, event):
         if self.updating or event.value is None:
             return
+        self._clear_picked()                # its bus numbers are another case's
         background_tasks.create(self._show_case(event.value), name="network")
 
     def _kind_changed(self, event):
@@ -565,6 +584,37 @@ class NetworkPage:
         for index in self._find_boundary():
             buses |= {self.network.lines[index]["from"], self.network.lines[index]["to"]}
         self.canvas.zoom_to([self.network.index_of_bus[bus] for bus in buses])
+
+    # -------------------- picked by right clicks --------------------
+    def _right_clicked(self, kind, index):
+        """A right click on a line adds its bus pair to the picked bus pairs, one on a bus its number to the picked buses."""
+        if self.network is None:
+            return
+        if kind == "link":
+            line = self.network.lines[index]
+            self._add_picked(self.picked_pairs, format_bus_pairs([[line["from"], line["to"]]]))
+        elif kind == "node":
+            self._add_picked(self.picked_buses, format_buses([self.network.buses[index]["bus"]]))
+
+    def _add_picked(self, field, item):
+        """Add "154-3008" or "3005" at the end of a picked field, after a comma, unless the field has it already."""
+        text = (field.value or "").strip().rstrip(",;").rstrip()
+        items = [re.sub(r"\s+", "", part) for part in re.split(r"[,;\n]", text)]
+        if item in items:
+            return
+        field.set_value(f"{text}, {item}" if text else item)
+
+    def _copy_picked(self, field):
+        text = (field.value or "").strip()
+        if not text:
+            ui.notify("Nothing to copy yet: right click a line or a bus.", position="top")
+            return
+        ui.clipboard.write(text)
+        ui.notify(f"Copied: {text}" if len(text) <= 80 else "Copied.", position="top")
+
+    def _clear_picked(self):
+        self.picked_pairs.set_value("")
+        self.picked_buses.set_value("")
 
     # -------------------- to the Run form --------------------
     async def _send_to_run(self, boundary=None, penalty_rows=()):

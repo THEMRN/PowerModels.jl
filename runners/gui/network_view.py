@@ -14,27 +14,43 @@ from settings import GROUP_KINDS
 # for colour-blind readers on a white surface. A ninth group and later ones share OTHER_GROUP_COLOR.
 GROUP_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"]
 OTHER_GROUP_COLOR = "#898781"
-PLAIN_BUS_COLOR = "#6f7b8f"         # a bus when no colour says anything (a case without groups)
-NO_VALUE_COLOR = "#c6cbd3"          # a bus or a line with no value, or with zero
-LINE_COLOR = "#b3bac5"              # a line within a group
-TIE_COLOR = "#7d8696"               # a line between two groups
-OUT_OF_SERVICE_COLOR = "#dde0e6"    # a line with no circuit in service
+GEN_SHADE = 0.25  # a bus with a generator, coloured by its group: its group's colour this much of the way to DARK_COLOR
+DARK_COLOR = "#1b212c"  # what colours are darkened towards (group names, buses with a generator)
+PLAIN_BUS_COLOR = "#6f7b8f"  # a bus when no colour says anything (a case without groups)
+NO_VALUE_COLOR = "#c6cbd3"  # a bus or a line with no value, or with zero
+LINE_COLOR = "#b3bac5"  # a line within a group
+TIE_COLOR = "#7d8696"  # a line between two groups
+OUT_OF_SERVICE_COLOR = "#dde0e6"  # a line with no circuit in service
 # one hue from light to dark, for an amount (load, generation, flow)
-AMOUNT_RAMP = ["#9ec5f4", "#86b6ef", "#6da7ec", "#5598e7", "#3987e5", "#2a78d6", "#256abf", "#1c5cab", "#184f95", "#104281", "#0d366b"]
+AMOUNT_RAMP = [
+    "#9ec5f4",
+    "#86b6ef",
+    "#6da7ec",
+    "#5598e7",
+    "#3987e5",
+    "#2a78d6",
+    "#256abf",
+    "#1c5cab",
+    "#184f95",
+    "#104281",
+    "#0d366b",
+]
 # two hues around a grey middle, for a voltage below and above 1 pu
 LOW_RAMP = ["#d9d9d5", "#9ec5f4", "#3987e5", "#184f95"]
 HIGH_RAMP = ["#d9d9d5", "#f3a8a0", "#e34948", "#a3171d"]
-VOLTAGE_SPAN = 0.05                 # pu from 1 at which the voltage colours are darkest, at least
-BUS_SIZE = 3.1                      # px, radius of a bus
-GEN_SIZE = 3.6                      # px, half the side of a bus with a generator (drawn as a square)
-BUS_SIZE_MOST = 9.0                 # px, radius of the bus with the largest amount
-LINE_WIDTH = 1.0                    # px
+VOLTAGE_SPAN = 0.05  # pu from 1 at which the voltage colours are darkest, at least
+BUS_SIZE = 3.1  # px, radius of a bus
+GEN_SIZE = 3.6  # px, half the side of a bus with a generator (drawn as a square)
+BUS_SIZE_MOST = 9.0  # px, radius of the bus with the largest amount
+LINE_WIDTH = 1.0  # px
 TIE_WIDTH = 1.3
-LINE_WIDTH_MOST = 5.0               # px, width of the line with the largest flow
-CIRCLE_FILL = 0.07                  # how strongly a circle is filled with its group's colour (0 to 1)
-CIRCLE_AMOUNT_COLOR = "#eb6834"     # a circle filled by an amount: a second hue, so that it is not read with the buses and lines
-CIRCLE_FILL_LEAST = 0.04            # how strongly it is filled for no amount,
-CIRCLE_FILL_MOST = 0.42             # and for the group with the largest amount
+LINE_WIDTH_MOST = 5.0  # px, width of the line with the largest flow
+CIRCLE_FILL = 0.07  # how strongly a circle is filled with its group's colour (0 to 1)
+CIRCLE_AMOUNT_COLOR = (
+    "#eb6834"  # a circle filled by an amount: a second hue, so that it is not read with the buses and lines
+)
+CIRCLE_FILL_LEAST = 0.04  # how strongly it is filled for no amount,
+CIRCLE_FILL_MOST = 0.42  # and for the group with the largest amount
 
 # what the buses, the lines and the circles can be coloured by: key -> (label, unit, value field)
 BUS_VALUES = {
@@ -51,9 +67,9 @@ LINE_VALUES = {
     "p": ("Flow P", "MW", "p_mw"),
     "q": ("Flow Q", "Mvar", "q_mvar"),
 }
-GROUP_VALUES = {key: value for key, value in BUS_VALUES.items() if key != "vm"}      # totals of a group
-LINE_FIELDS = ("p_mw", "q_mvar", "p_to_mw", "q_to_mvar")       # what enters a line at its `from` bus, and at its `to` bus
-RUN_ONLY = {"shed"}                 # values only a run has
+GROUP_VALUES = {key: value for key, value in BUS_VALUES.items() if key != "vm"}  # totals of a group
+LINE_FIELDS = ("p_mw", "q_mvar", "p_to_mw", "q_to_mvar")  # what enters a line at its `from` bus, and at its `to` bus
+RUN_ONLY = {"shed"}  # values only a run has
 
 
 # ==================== The network of a case ====================
@@ -69,7 +85,7 @@ class Network:
         self.lines = reply["lines"]
         self.layouts = reply["layouts"]
         self.group_names = reply["group_names"]
-        self.kinds = [kind for kind in GROUP_KINDS if kind in self.layouts]      # kinds the case has more than one group of
+        self.kinds = [kind for kind in GROUP_KINDS if kind in self.layouts]  # kinds the case has more than one group of
         self.index_of_bus = {bus["bus"]: index for index, bus in enumerate(self.buses)}
         self.index_of_pair = {(line["from"], line["to"]): index for index, line in enumerate(self.lines)}
 
@@ -107,7 +123,7 @@ def find_group_colors(network, kind):
     OTHER_GROUP_COLOR. A group keeps its colour whatever is selected or shown.
     """
     groups = network.find_groups(kind)
-    with_color = sorted(sorted(groups, key=lambda group: (-group[2], group[0]))[:len(GROUP_COLORS)])
+    with_color = sorted(sorted(groups, key=lambda group: (-group[2], group[0]))[: len(GROUP_COLORS)])
     colors = {index: OTHER_GROUP_COLOR for index, _, _ in groups}
     for place, (index, _, _) in enumerate(with_color):
         colors[index] = GROUP_COLORS[place]
@@ -173,7 +189,7 @@ def mix_colors(first, second, share):
     """The colour `share` of the way from `first` to `second` (hex colours, share 0 to 1)."""
     parts = []
     for place in (1, 3, 5):
-        a, b = int(first[place:place + 2], 16), int(second[place:place + 2], 16)
+        a, b = int(first[place : place + 2], 16), int(second[place : place + 2], 16)
         parts.append(round(a + (b - a) * share))
     return "#" + "".join(f"{part:02x}" for part in parts)
 
@@ -212,7 +228,9 @@ def calc_voltage_color(vm, span):
 
 def calc_voltage_span(bus_values):
     """How far from 1 pu the voltage colours reach: the farthest voltage, VOLTAGE_SPAN at least."""
-    return max(VOLTAGE_SPAN, max((abs(bus["vm"] - 1.0) for bus in bus_values if bus.get("vm") is not None), default=0.0))
+    return max(
+        VOLTAGE_SPAN, max((abs(bus["vm"] - 1.0) for bus in bus_values if bus.get("vm") is not None), default=0.0)
+    )
 
 
 # ==================== Text ====================
@@ -236,13 +254,17 @@ def describe_bus(network, bus, kind):
         title += f" · {bus['name']}"
     if bus.get("kv"):
         title += f" · {bus['kv']:g} kV"
-    groups = " · ".join(f"{group_kind} {network.find_group_name(group_kind, bus[group_kind])}" for group_kind in GROUP_KINDS)
+    groups = " · ".join(
+        f"{group_kind} {network.find_group_name(group_kind, bus[group_kind])}" for group_kind in GROUP_KINDS
+    )
     lines = [title, groups, f"Voltage {format_number(bus.get('vm'), 'pu')}"]
     if bus.get("pd_mw") or bus.get("qd_mvar"):
         lines.append(f"Load {format_number(bus['pd_mw'], 'MW')}, {format_number(bus['qd_mvar'], 'Mvar')}")
     if bus.get("gens"):
         units = "1 unit" if bus["gens"] == 1 else f"{bus['gens']} units"
-        lines.append(f"Generation {format_number(bus['pg_mw'], 'MW')}, {format_number(bus['qg_mvar'], 'Mvar')} ({units})")
+        lines.append(
+            f"Generation {format_number(bus['pg_mw'], 'MW')}, {format_number(bus['qg_mvar'], 'Mvar')} ({units})"
+        )
         lines.append(f"Capacity {format_number(bus['pmax_mw'], 'MW')}, {format_number(bus['qmax_mvar'], 'Mvar')}")
     if bus.get("shed_mw"):
         lines.append(f"Shed {format_number(bus['shed_mw'], 'MW')}")
@@ -261,21 +283,30 @@ def describe_line(line):
     if line["in_service"] < len(line["ids"]):
         lines.append(f"{line['in_service']} of {len(line['ids'])} circuits in service")
     if line.get("p_mw") is not None:
-        lines.append(f"P {format_number(abs(line['p_mw']), 'MW')} towards {line['to'] if line['p_mw'] >= 0 else line['from']}")
+        lines.append(
+            f"P {format_number(abs(line['p_mw']), 'MW')} towards {line['to'] if line['p_mw'] >= 0 else line['from']}"
+        )
     for end, p_field, q_field in (("from", "p_mw", "q_mvar"), ("to", "p_to_mw", "q_to_mvar")):
         if line.get(p_field) is not None:
-            lines.append(f"into it at {line[end]}: {format_number(line[p_field], 'MW')}, {format_number(line.get(q_field), 'Mvar')}")
+            lines.append(
+                f"into it at {line[end]}: {format_number(line[p_field], 'MW')}, {format_number(line.get(q_field), 'Mvar')}"
+            )
     return "\n".join(lines)
 
 
 def describe_group(network, kind, index, totals, in_circle, of_group):
     """Tooltip of a circle: its group, how many of the group's buses it holds, and the group's totals."""
     name = network.find_group_name(kind, index)
-    lines = [f"{kind.capitalize()} {name}: {of_group} buses" + ("" if in_circle == of_group else f", {in_circle} of them in this circle")]
+    lines = [
+        f"{kind.capitalize()} {name}: {of_group} buses"
+        + ("" if in_circle == of_group else f", {in_circle} of them in this circle")
+    ]
     group = totals.get(index, {})
     lines.append(f"Load {format_number(group.get('pd_mw'), 'MW')}, {format_number(group.get('qd_mvar'), 'Mvar')}")
     lines.append(f"Generation {format_number(group.get('pg_mw'), 'MW')}, {format_number(group.get('qg_mvar'), 'Mvar')}")
-    lines.append(f"Capacity {format_number(group.get('pmax_mw'), 'MW')}, {format_number(group.get('qmax_mvar'), 'Mvar')}")
+    lines.append(
+        f"Capacity {format_number(group.get('pmax_mw'), 'MW')}, {format_number(group.get('qmax_mvar'), 'Mvar')}"
+    )
     if group.get("shed_mw") is not None:
         lines.append(f"Shed {format_number(group['shed_mw'], 'MW')}")
     return "\n".join(lines)
@@ -368,8 +399,12 @@ def calc_selection_facts(network, bus_values, line_values, buses, boundary):
 
         facts.append(("Buses", f"{len(chosen)}, {sum(1 for bus in chosen if bus.get('gens'))} with generation"))
         facts.append(("Load", f"{format_number(total('pd_mw'), 'MW')}, {format_number(total('qd_mvar'), 'Mvar')}"))
-        facts.append(("Generation", f"{format_number(total('pg_mw'), 'MW')}, {format_number(total('qg_mvar'), 'Mvar')}"))
-        facts.append(("Capacity", f"{format_number(total('pmax_mw'), 'MW')}, {format_number(total('qmax_mvar'), 'Mvar')}"))
+        facts.append(
+            ("Generation", f"{format_number(total('pg_mw'), 'MW')}, {format_number(total('qg_mvar'), 'Mvar')}")
+        )
+        facts.append(
+            ("Capacity", f"{format_number(total('pmax_mw'), 'MW')}, {format_number(total('qmax_mvar'), 'Mvar')}")
+        )
         if total("shed_mw") is not None:
             facts.append(("Shed", format_number(total("shed_mw"), "MW")))
     if boundary:
@@ -394,12 +429,25 @@ def build_graph(network, kind):
         "key": f"{network.case}|{kind if with_groups else 'none'}",
         "nodes": [[x, y, 1 if bus["gens"] else 0] for x, y, bus in zip(layout["x"], layout["y"], network.buses)],
         "links": [[network.index_of_bus[line["from"]], network.index_of_bus[line["to"]]] for line in network.lines],
-        "circles": [[circle["x"], circle["y"], circle["radius"]] for circle in layout["circles"]] if with_groups else [],
+        "circles": (
+            [[circle["x"], circle["y"], circle["radius"]] for circle in layout["circles"]] if with_groups else []
+        ),
     }
 
 
-def build_look(network, kind, bus_values, line_values, *, color_buses="group", color_lines="none", color_circles="group",
-               selected_buses=(), selected_lines=(), selected_group=None):
+def build_look(
+    network,
+    kind,
+    bus_values,
+    line_values,
+    *,
+    color_buses="group",
+    color_lines="none",
+    color_circles="group",
+    selected_buses=(),
+    selected_lines=(),
+    selected_group=None,
+):
     """
     The `look` of the canvas, and the legend that explains it.
 
@@ -426,10 +474,18 @@ def build_look(network, kind, bus_values, line_values, *, color_buses="group", c
             legend.append({"title": f"Buses by {kind}"})
             for index, name, count in network.find_groups(kind):
                 legend.append({"color": group_colors[index], "text": f"{name}  ({count})", "group": index})
+            legend.append({"note": "a square is a bus with a generator"})
     elif color_buses == "vm":
         span = calc_voltage_span(bus_values)
         legend.append({"title": "Buses by voltage (pu)"})
-        legend.append({"ramp": LOW_RAMP[::-1] + HIGH_RAMP[1:], "low": f"{1 - span:.3f}", "middle": "1.000", "high": f"{1 + span:.3f}"})
+        legend.append(
+            {
+                "ramp": LOW_RAMP[::-1] + HIGH_RAMP[1:],
+                "low": f"{1 - span:.3f}",
+                "middle": "1.000",
+                "high": f"{1 + span:.3f}",
+            }
+        )
     else:
         label, unit, field = BUS_VALUES[color_buses]
         most = find_most(bus[field] for bus in bus_values)
@@ -442,12 +498,14 @@ def build_look(network, kind, bus_values, line_values, *, color_buses="group", c
         size = GEN_SIZE if bus["gens"] else BUS_SIZE
         if color_buses == "group":
             color = group_colors.get(bus[kind], PLAIN_BUS_COLOR) if with_groups else PLAIN_BUS_COLOR
+            if bus["gens"]:  # close to its group's buses, but told apart from them
+                color = mix_colors(color, DARK_COLOR, GEN_SHADE)
         elif color_buses == "vm":
             color = calc_voltage_color(bus.get("vm"), span)
         else:
             share = calc_amount_share(bus.get(field), most)
             color = NO_VALUE_COLOR if share is None else pick_from_ramp(AMOUNT_RAMP, share)
-            size = BUS_SIZE * 0.8 if share is None else BUS_SIZE + (BUS_SIZE_MOST - BUS_SIZE) * share ** 0.5
+            size = BUS_SIZE * 0.8 if share is None else BUS_SIZE + (BUS_SIZE_MOST - BUS_SIZE) * share**0.5
         node["color"].append(color)
         node["size"].append(round(size, 1))
         node["mark"].append(1 if bus["bus"] in selected_buses else 0)
@@ -496,8 +554,16 @@ def build_look(network, kind, bus_values, line_values, *, color_buses="group", c
             label, unit, group_field = GROUP_VALUES[color_circles]
             most = find_most(group.get(group_field) for group in totals.values())
             legend.append({"title": f"Circles by {lower_first(label)} of the {kind} ({unit})"})
-            legend.append({"ramp": [mix_colors("#ffffff", CIRCLE_AMOUNT_COLOR, CIRCLE_FILL_LEAST), mix_colors("#ffffff", CIRCLE_AMOUNT_COLOR, CIRCLE_FILL_MOST)],
-                           "low": "0", "high": format_number(most)})
+            legend.append(
+                {
+                    "ramp": [
+                        mix_colors("#ffffff", CIRCLE_AMOUNT_COLOR, CIRCLE_FILL_LEAST),
+                        mix_colors("#ffffff", CIRCLE_AMOUNT_COLOR, CIRCLE_FILL_MOST),
+                    ],
+                    "low": "0",
+                    "high": format_number(most),
+                }
+            )
         for place, item in enumerate(layout["circles"]):
             index = item["group"]
             color = group_colors[index]
@@ -514,8 +580,18 @@ def build_look(network, kind, bus_values, line_values, *, color_buses="group", c
             circle["mark"].append(1 if index == selected_group else 0)
             circle["label"].append(network.find_group_name(kind, index))
             circle["note"].append(note)
-            circle["ink"].append(mix_colors(color, "#1b212c", 0.35))
+            circle["ink"].append(mix_colors(color, DARK_COLOR, 0.35))
             circle["tip"].append(describe_group(network, kind, index, totals, in_circle[place], of_group[index]))
 
-    key = "|".join(str(part) for part in (color_buses, color_lines, color_circles, sorted(selected_buses), sorted(selected_lines), selected_group))
+    key = "|".join(
+        str(part)
+        for part in (
+            color_buses,
+            color_lines,
+            color_circles,
+            sorted(selected_buses),
+            sorted(selected_lines),
+            selected_group,
+        )
+    )
     return {"key": key, "node": node, "link": link, "circle": circle}, legend

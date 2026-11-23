@@ -8,8 +8,10 @@
 // Positions are in line lengths; sizes and widths are in screen pixels, whatever the zoom.
 // A mark is 0 (plain), 1 (selected: an accent ring, or a dashed line with a halo) or 2 (dimmed).
 // It emits "pick" {kind: "node" | "link" | "circle" | "none", index, shift, ctrl} for a click,
-// "box" {nodes, links, ctrl} for a selection box, and "ready" once, when it first has a size on
-// the screen (the page it is on is built with the others, but shown only when its tab is chosen).
+// "context" {kind: "node" | "link", index} for a right click on a bus or a line (elsewhere the
+// browser shows its own menu), "box" {nodes, links, ctrl} for a selection box, and "ready" once,
+// when it first has a size on the screen (the page it is on is built with the others, but shown
+// only when its tab is chosen).
 
 const PADDING = 26;            // px between the drawing and the edge of the canvas when fitted
 const NODE_HIT = 9;            // px around a bus that still count as on it
@@ -42,6 +44,7 @@ export default {
     canvas.addEventListener("mousemove", (event) => this.onMove(event));
     canvas.addEventListener("mouseleave", () => this.setHover(null));
     canvas.addEventListener("dblclick", () => this.fit());
+    canvas.addEventListener("contextmenu", (event) => this.onContext(event));
     this.onWindowMove = (event) => this.onDrag(event);
     this.onWindowUp = (event) => this.onUp(event);
     window.addEventListener("mousemove", this.onWindowMove);
@@ -220,6 +223,14 @@ export default {
         this.box = null;
         this.redraw();
       }
+    },
+
+    onContext(event) {
+      const [x, y] = this.findPlace(event);
+      const hit = this.findHit(x, y);
+      if (!hit || hit.kind === "circle") return;
+      event.preventDefault();
+      this.$emit("context", { kind: hit.kind, index: hit.index });
     },
 
     onMove(event) {
