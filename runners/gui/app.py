@@ -23,8 +23,10 @@ from nicegui import Client, app, ui
 import theme
 from components.log_dialog import LogDialog
 from julia_worker import JuliaWorker
-from pages import history, network, run
+from comparison import CompareList
+from pages import compare, history, network, run
 from presets import PresetStore
+from run_queue import RunQueue
 from session_runs import SessionRuns
 
 # ==================== Settings ====================
@@ -33,7 +35,7 @@ HOST = "127.0.0.1"  # this machine only (decision 1); NiceGUI would listen on ev
 NATIVE_WINDOW = False  # a desktop window would need pywebview (gui_plan.md, decision 1)
 TITLE = "Islanding GUI"
 REPO_ROOT = Path(__file__).resolve().parents[2]
-PAGES = [run, network, history]  # one tab per page module, in this order
+PAGES = [run, network, compare, history]  # one tab per page module, in this order
 JOB_WORDS = {  # what the Julia state pill says Julia is doing for a question of a page
     "list_cases": "reading the case list",
     "case_info": "reading a case",
@@ -55,8 +57,9 @@ QUIT_NOTE = (  # what every open page says once Quit has stopped the app
 
 class AppContext:
     """
-    What the pages share: the Julia worker, the runs of this session, the presets, a state dict
-    (what is cached from Julia: the case list, each case's information and network), and the repo root. What
+    What the pages share: the Julia worker, the runs of this session, the queue of runs that wait,
+    the runs on the Compare page, the presets, a state dict (what is cached from Julia: the case
+    list, each case's information and network), and the repo root. What
     belongs to one browser tab (its Run form, the function that shows one of its pages) is in
     `client_state()`, through which the pages of a tab pass values to each other.
     """
@@ -64,6 +67,8 @@ class AppContext:
     def __init__(self, worker, repo_root):
         self.worker = worker
         self.runs = SessionRuns(worker)
+        self.queue = RunQueue(self.runs, worker)
+        self.compare = CompareList(self.runs)
         self.presets = PresetStore()
         self.state = {}
         self.repo_root = repo_root
@@ -175,6 +180,9 @@ def build_quit():
         text = "The app stops, and Julia with it."
         if running is not None:
             text += f" Run {running['number']} is running: it stops too, without results."
+        waiting = len(ctx.queue.entries)
+        if waiting:
+            text += f" The {waiting} run{'s' if waiting > 1 else ''} in the queue {'are' if waiting > 1 else 'is'} dropped."
         question.text = text
         dialog.open()
 

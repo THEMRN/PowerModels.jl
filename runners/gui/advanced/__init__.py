@@ -75,6 +75,15 @@ class Study:
     def find_load_buses(self):
         return {load["bus"] for load in self.loads}
 
+    def find_load_bus_options(self):
+        """The buses with a load in service, with their load: {bus: "bus  (MW)"}, as the Run form offers them for a penalty."""
+        load_by_bus = {}
+        for load in self.loads:
+            if load["status"] == 0:
+                continue
+            load_by_bus[load["bus"]] = load_by_bus.get(load["bus"], 0.0) + load["pd_mw"]
+        return {bus: f"{bus}  ({load_by_bus[bus]:g} MW)" for bus in sorted(load_by_bus)}
+
     def find_gen_buses(self):
         return {gen["bus"] for gen in self.case_info.get("gens", [])}
 

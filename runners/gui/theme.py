@@ -20,6 +20,13 @@ ACCENT = "#2563eb"
 OK = "#1f9d5b"
 WARN = "#d48a06"
 BAD = "#d1343f"
+# the stylesheet's surface, ink and hairlines, for what is drawn on a canvas (a chart cannot read theme.css)
+SURFACE = "#ffffff"
+INK = "#1b212c"
+INK_2 = "#505a69"
+INK_3 = "#808998"
+LINE = "#e4e7ec"
+LINE_STRONG = "#cdd2da"
 
 # the app's mark, also its browser tab icon: a ring left open, with the island beside it
 MARK = (
@@ -44,6 +51,8 @@ ICONS = {
     "sliders": f"M4 7.5h9M17 7.5h3M4 16.5h3M11 16.5h9M15 5.2v4.6M9 14.2v4.6@@{LINES}",
     "calendar": f"M5.5 6.5h13a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1h-13a1 1 0 0 1-1-1v-11a1 1 0 0 1 1-1zM4.5 10.5h15M8.5 4.5v4M15.5 4.5v4@@{LINES}",
     "power": f"M12 4v7.5M7.2 7.2a6.8 6.8 0 1 0 9.6 0@@{LINES}",
+    "list": f"M5 7h14M5 12h14M5 17h14@@{LINES}",
+    "layers": f"M9 9h10v10H9zM5 15V5h10@@{LINES}",
 }
 BUTTON_KINDS = {"primary": "btn-primary", "default": "btn", "ghost": "btn-ghost", "danger": "btn btn-danger"}
 NO_VALUE = "–"                  # shown for a number that is not there

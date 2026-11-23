@@ -227,6 +227,14 @@ def is_number(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
+def describe_missing_target(kind):
+    """
+    The problem of a zone or area boundary without its zone or area. The batch dialog names the
+    targets itself, so the Run page leaves this one problem out when it opens the dialog.
+    """
+    return f"choose the {kind} the boundary encloses"
+
+
 def validate(settings):
     """
     Readable problems with settings (schema 2); empty when they can be sent to the worker.
@@ -260,7 +268,7 @@ def validate(settings):
         if not boundary.get("bus_pairs"):
             problems.append("the boundary needs at least one bus pair, like 154-3008")
     elif not str(boundary.get("name", "")).strip():
-        problems.append(f"choose the {boundary_kind} the boundary encloses")
+        problems.append(describe_missing_target(boundary_kind))
 
     # load shedding penalties (multiples of lambda): rows in order, a later row over an earlier one
     # where they reach the same load; two rows for the same zone, area or bus are allowed

@@ -96,6 +96,9 @@ runners/gui/
   start_gui.bat          double-click launcher for app.py (passes its arguments on)
   julia_worker.py        Python client for worker.jl
   session_runs.py        the runs of this app session (settings, status, result), shared by all tabs
+  run_queue.py           the runs that wait for the run in progress (RunQueue, ctx.queue): add, cancel, reorder, pause
+  batch.py               a batch of runs as plain data: lists of values, every combination a run with its own tag
+  comparison.py          the runs on the Compare page (CompareList, ctx.compare) and what it says of them, without drawing
   settings.py            settings schema v1: defaults, form values <-> settings, validation, JSON files
   network_view.py        what the Network page shows, as plain data: values, colours, selection, boundary
   theme.py               the look: element defaults, icons, building blocks (panel, sheet, Section, fields, button, State, FoldButton)
@@ -108,8 +111,10 @@ runners/gui/
                          row_list.py (rows to edit, with Add row and remove),
                          network_canvas.py with network_canvas.js (the network drawing: a canvas with zoom and pan),
                          sortable_table.py with sortable_table.js (a table of rows to choose from, sorted in the browser),
-                         preset_bar.py (the presets in the Run page's settings toolbar, with Save as and Delete)
-  pages/                 one file per page, in the order of the tabs: run.py, network.py, history.py
+                         preset_bar.py (the presets in the Run page's settings toolbar, with Save as and Delete),
+                         queue_dialog.py (the run queue: the runs that wait, with cancel, reorder, pause and resume),
+                         batch_dialog.py (a batch: the form's settings with lists of values, and the runs they make)
+  pages/                 one file per page, in the order of the tabs: run.py, network.py, compare.py, history.py
   advanced/              the advanced settings: __init__.py (the tab list, the dialog, what the modifications say),
                          one file per tab (load_scaling.py, loads.py, generators.py) and where.py (a row's zone,
                          area or bus list, shared by load scaling and the generators)
@@ -135,6 +140,8 @@ runners/gui/
   - `ctx.worker`, the `JuliaWorker`;
   - `ctx.presets`, the `PresetStore`: the presets of the app, read from `presets/`, whose listeners keep every open tab's list the same;
   - `ctx.runs`, the `SessionRuns`: one record per run of this session, with its settings, status, the stages it reached with their times, its latest log line, its warnings and its `@@result` summary (the fields are listed in the class's docstring);
+  - `ctx.queue`, the `RunQueue` (since 2026-11-23): the runs that wait for the run in progress. It is kept in Python, and Julia gets one run at a time, so a run that waits can be cancelled or moved and a page's question is answered between two runs;
+  - `ctx.compare`, the `CompareList` (since 2026-11-23): the runs on the Compare page, each a record as the results panel shows one;
   - `ctx.state`, which caches what was read from Julia: `"cases"` (the case list), `"case_infos"` (case path to its `case_info`, or to the error that reading it gave) and `"networks"` (the same for the `network` reply). The worker answers one job at a time, so a question asked during a run would wait for the run to end.
 
 ### Look
@@ -153,6 +160,7 @@ Decision 14. The look lives in `theme.py` and `theme.css` and nowhere else, so e
 - **Buttons** come from `theme.button`: `primary` for the one main action of a page, `default`, `ghost` for secondary actions, `danger`.
 - **No Quasar colours or spacing classes** (`color=...`, `text-grey`, `q-mt-md`, `bg-primary`): they are Material's palette and they carry `!important`. Use the variables and classes of `theme.css`, and add to that file when something is missing.
 - **Not used:** `ui.card`, `ui.expansion`, `ui.switch`, `ui.badge`, `ui.table` (Quasar's Material table; use `theme.data_table`), Material icon names. Use a panel, a `FoldButton`, a checkbox, a `State`, and the icons in `theme.ICONS` (add a path there for a new icon).
+- **No tooltip that explains a control** (the user, 2026-11-23: "you add a lot of useless tooltips, don't do that"). A button or a field with a label says what it is, and a plain close or remove cross needs no words. A tooltip is only for what the page does not show: why a control is off, or the whole of a text that is cut with "...". What needs explaining goes where it is read without hovering (a hint line), or is left out.
 - **A choice of two or three** is a `ui.toggle` (drawn as a segmented control); more options are a `ui.select`.
 - **Rows to edit** (a list the user adds to and removes from) are a `components/row_list.RowList`.
 - **A dialog that changes something** edits a copy and ends with a row of the class `dialog-foot`: what clears on the left, then Cancel and the dialog's own primary button. A click beside it does not close it (`no-backdrop-dismiss`). Its problems show above that row, in the class `problems`.
@@ -451,9 +459,9 @@ History's Load into Run reads it (`results_index.read_result`, never while scann
 ### Run page layout (since phase 9)
 
 ```
-┌ ◉ Islanding GUI   Run | Network | History   [● Julia ready]  ↻ Restart Julia  ⏻ Quit ┐
+┌ ◉ Islanding GUI   Run | Network | Compare | History   [● Julia ready]  ↻ Restart Julia  ⏻ Quit ┐
 ├────────────────────────────────────────────────────────────────────────────────────┤
-│ ▾ Settings  Preset [savnw – island on top ▾] Save as Delete  (note) Advanced (2) [■ Stop] [▶ Run] │
+│ ▾ Settings  Preset [savnw – island on top ▾] Save as Delete  (note) Advanced (2) Batch Queue (3) [■ Stop] [▶ Run] │
 │ NETWORK MODIFICATIONS   loads of zone SPARTANB × 0.7 · load 6 at bus 3005: P 400 MW   Reset │
 │ CASE AND MODEL    │ BOUNDARY    │ LOAD SHEDDING PENALTIES   │ SECURITY AND SIMULATION │ ▴ fold
 ├────────────────────────────────────────────────────────────────────────────────────┤
@@ -468,7 +476,7 @@ History's Load into Run reads it (`results_index.read_result`, never while scann
 └────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-The page tabs are in the top bar. The presets come right of the Settings fold (since phase 12), with "changed" and Reload while the form differs from the chosen preset; the toolbar's text is the preset's note while the sheet is open and the settings on one line while it is folded. Run and Stop are in the toolbar of the settings panel, above the sheet, so they stay in the same place when the sheet is folded or a penalty row is added. The problems that keep the settings from running show between the toolbar and the sheet. Under them, the line of the network modifications shows while there are any, also while the sheet is folded. The results panel is hidden until a run has results, and the last two rows are the status strip, fixed to the bottom of the window.
+The page tabs are in the top bar. The presets come right of the Settings fold (since phase 12), with "changed" and Reload while the form differs from the chosen preset; the toolbar's text is the preset's note while the sheet is open and the settings on one line while it is folded. Run and Stop are in the toolbar of the settings panel, above the sheet, so they stay in the same place when the sheet is folded or a penalty row is added. Since 2026-11-23, Run reads "Add to queue" while a run is in progress (the same button, at the same width), Queue shows how many runs wait and turns amber while the queue is paused, and Batch opens the batch dialog on the form's settings. The problems that keep the settings from running show between the toolbar and the sheet. Under them, the line of the network modifications shows while there are any, also while the sheet is folded. The results panel is hidden until a run has results, and the last two rows are the status strip, fixed to the bottom of the window.
 
 ---
 
@@ -2024,3 +2032,91 @@ Test folder added: `savnw_flow_shed_gui_test_uiux`.
 *What changed:* `components/sortable_table.js` emits `open` with a row's id on a double-click, and with the selected row's id on Enter while the table has the focus (the arrow keys already needed it); the word a double-click selects is cleared. `SortableTable` takes `on_open`. History's `_open_run` selects the run and does what Load into Run does; a run from before settings files gets a note instead, as the button is off for it. The Load into Run button's tooltip and the hint of an empty selection say so.
 
 *How it was verified* (test instance on 8090): a double-click on the ACTIVSg500 run of 2026-11-21 23:45 showed the Run page with its settings and results; a click on the savnw run of 2026-11-22 14:17 then Enter did the same for it; a double-click on the oldest run (savnw, 2026-03-13, no settings file) stayed on History with the note.
+
+**Queue, batch and compare round (2026-11-23), at the user's request:** "I'd like to have a compare page, to be able to add runs to it from the run page or history page ... a run queue [that] I should be able to see and handle in a convenient dialog (view, cancel, reorder, etc) ... a batch run button, where I can edit what I want (like lambda's ...) which leads to a queue". The user also kept the trade-off chart of the proposal ("How much preparation is enough") and asked that the batch offer what `batch_islanding.jl` sweeps. Each item is ticked once it is built and seen working.
+
+- [x] 1. Run queue: Run adds to it while a run is in progress. It is kept in Python and Julia gets one run at a time. Stop ends the run and pauses the queue; a run that fails does not.
+- [x] 2. Queue dialog: the runs that wait, with cancel, clear, up and down, pause and resume.
+- [x] 3. Batch: a button and a dialog that give the form's settings lists of values (what `batch_islanding.jl` sweeps, and the load scaling factors). Every combination is one run in the queue, with its own tag.
+- [x] 4. Compare page: runs as columns, quantities as rows. Runs are added from the runs table of the Run page and from History, and a batch adds its runs as they finish.
+- [x] 5. Trade-off chart on the Compare page: the preemptive shed against the frequency margin and the voltage margin.
+
+Nothing changed in Julia, in `worker.jl` or in the files a run writes. The round is Python only, and the app has to be restarted to get it.
+
+*What changed:*
+- **Queue (`run_queue.py`, `ctx.queue`).**
+  - Run starts a run when nothing is running. While a run is in progress the same button reads "Add to queue" and puts the form's settings, as they are then, at the end of the queue. Its tooltip says which of the two a click does.
+  - The queue is a list in Python. When a run ends, the next one is sent to Julia on the event loop's next turn (not from inside the runs' listeners, which a start would call again). So Julia holds one run at a time, a run that waits can be cancelled or moved, and a page's question (reading a case, placing a network) is answered between two runs.
+  - It pauses by itself when a run does not end by itself and runs wait: Stop, Restart Julia (both leave the run "stopped") and a Julia crash. The runs then wait for Resume. A run that fails in Julia does not pause it. An empty queue is never paused.
+  - While the queue is paused and nothing runs, Run starts its run at once and the queue stays paused.
+  - Each started run takes the results panel, as before, so the panel follows the queue.
+  - Quit's question says how many queued runs are dropped. The queue is not kept when the app stops.
+- **Queue dialog (`components/queue_dialog.py`).** Queue in the settings toolbar shows how many runs wait and is amber while paused. The dialog lists them in the order they start (case, objective, boundary, tag, penalties, when added), with arrows to move a run, a cross to cancel it, Clear queue, and Pause or Resume. It follows the queue while open, in every browser tab.
+- **Batch (`batch.py`, `components/batch_dialog.py`).**
+  - Batch opens on the form's settings, which must be without problems. On the left, each field that may vary: objective, OPF model, flow penalty and target zone or area as checkboxes, and λ, each penalty (× λ: every row, the uniform value, all other loads) and each load scaling factor as a list. A list is numbers with commas, or a range `first:step:last`.
+  - Every combination is one run, in the order `batch_islanding.jl` sweeps (`expand_batch`). On the right, the runs with what each has and its results folder.
+  - Several targets change the boundary only: the penalty rows stay on the zones or areas they name, as the script's penalties do. A hint under the targets says so.
+  - Each run's tag is the prefix ("Tag starts with", the form's output tag or "batch") and one part per field that varies: `lam500`, `pen2.5-1.6` (the penalty rows that vary, joined), `oth5`, `uni0.01`, `load0.7`, the flow penalty, `ac` or `dc`, the target's name. The objective is in the folder's name already.
+  - Each run is checked with `validate` and the advanced tabs' `find_problems`, and two runs may not write to the same folder. A problem several runs share shows once, with the runs it is in. A batch has at most 200 runs (`MAX_RUNS`).
+  - "Open its report" is off unless ticked (PSS®E always opens its own). "Add it to the Compare page" is on.
+  - **λ.** In the form the penalties are multiples of λ, and `flow_shed` minimises λ·flow + Σ (k·λ)·Pd·(1 − z), so λ drops out when every load has a row or "All other loads" has a value. A list of λ alone then gives the same solution. The dialog says so under λ. What moves the trade-off is a penalty.
+- **Compare page (`comparison.py`, `pages/compare.py`, `ctx.compare`).**
+  - A run comes from Compare in the runs table, from Add to compare in History, or from a batch when it finishes. Only a run with final results is taken: status finished, not the first summary, with a settings file. It is known by `folder/settings file`, which is History's row id, so a run added from both pages is there once. The buttons' tooltips say why a run cannot be added.
+  - **Side by side.** One column per run with its name, tag and a cross to take it off. First a line of the settings every run shares, then the settings that differ, then Solution, Load shedding (preemptive, UFLS, both), Boundary flows, Frequency per island (scheduled import, limit, predicted, simulated, margin), Voltage, and the preemptive and UFLS shed by zone or area when the runs are of one case and one kind of group. There is no table by bus. The rows are one block of HTML in a CSS grid; the names stay in view when many runs scroll sideways.
+  - Results kept before a part existed (`ufls`, `frequency_simulation`, `target`, the predicted nadir) show "–" there.
+- **Trade-off (`ui.echart`, bundled with NiceGUI, no new dependency).** Two charts, because the margins have different units.
+  - Frequency margin per island: the simulated nadir above its limit, or the peak below it; a toggle switches to the SFR model's prediction. Islands are series in the first three group colours of `network_view.py` (checked with the dataviz validator), a fourth and later ones grey.
+  - Voltage margin: the indicator threshold (`voltage.details[0].indicator_threshold`) minus the worst indicator. It is predicted, not simulated, and the chart says so.
+  - A line at zero is the limit and the part below it is tinted when a point is in it. A hollow point is a run whose simulation stopped early (frequency) or whose voltage was not verified (voltage). Points are named when there are eight or fewer, and each has a tooltip. Runs without a margin are listed under the chart.
+
+*How it was verified* (test instance on 8090, savnw; the user's GUI untouched):
+- **Pure functions:** lists and ranges and their errors; a 48-run expansion with its tags and folders; a batch over a uniform penalty and a load scaling factor; the DC runs of a batch with voltage security named as problems; the comparison and the chart options on kept results, among them one from before `frequency_simulation` and `target`.
+- **The queue without the app** (a stand-in for the worker and the runs, no event loop): a failed run lets the next start; Julia exiting during a run pauses the queue with its reason, and it stays paused when Julia is back until Resume; a stopped run pauses it; clearing unpauses it; a run added while Julia is stopped waits and starts when Julia is ready.
+- **Queue:** Run during a run added to the queue. A batch of three started its first run and showed "Queue (2)". The second waiting run was moved up, the queue paused by hand held when the run ended, and Resume started the next. A run with bus pair 101-3008 (no such line) failed in the middle of the queue and the next run started by itself. Stop with a run waiting paused the queue, with the note and the amber button; cancelling the waiting run emptied and unpaused it.
+- **A question between runs:** the Network page asked for savnw during run 3 ("Julia is busy with run 3 ...") and was drawn while run 4, the next in the queue, was running.
+- **Batch:** objective flow_shed and opf_shed with "all but zone SECOND" at 1.6 and 0.8 gave four runs in four folders. They ran in order and appeared on the Compare page as each finished, in a second browser tab that showed the same queue.
+- **Compare:** runs added from History; an unfinished run refused with its reason; the same run added twice refused; four columns side by side; both charts with tooltips, the toggle, hollow points and the note of the runs that are not on a chart.
+- **Last pass:** Compare in the runs table put run 5 on the page ("Run 5 is on the Compare page, with 8 runs there now") and refused it the second time; eight runs stood side by side in the page's width; a column's cross took its run off and Clear emptied the page. A batch of twelve (three flow penalties, penalties `1:1:4`) started one run and left eleven waiting, and Clear queue removed them while the run in progress went on.
+- **Console:** no traceback in the test instances' output.
+
+*Seen twice and not explained:* a dialog was open that no action of the test had opened: once the batch dialog, some time after its runs were added, and once the queue dialog, right after Add in the batch dialog. With every click and key of the page logged, the same steps were repeated twice (Batch, tick a flow penalty, Add, with a run in progress): one click per action, the batch dialog closed and none opened. The test tabs were in the user's own Chrome window, and the user's GUI was restarted several times during the tests, so a click by hand is the likely cause, but that was not established.
+
+*Behaviour to know:*
+- The form's settings are copied when a run is queued. A later change to the form does not reach it.
+- On savnw the simulation of the zone SECOND runs stops early (about t = 11.6 s), so their frequency points are hollow.
+- The opf_shed runs of the test are "not verified" with a worst indicator of 0.193, under the threshold: an island could not be checked. Their voltage points are hollow for that reason.
+- Runs that give the same result lie on one point, and only one of their names shows.
+
+*Not done:* the queue and the Compare list are not kept when the app stops (History adds runs to Compare again); reordering the columns of Compare; adding several History runs at once; a field the objective does not read is still varied (an `opf` run for each penalty value is the same run several times, as in `batch_islanding.jl`).
+
+*Not exercised in the app:* ACTIVSg500; an area study; a uniform penalty, load scaling and several targets in a batch (pure functions only); Restart Julia with runs waiting (it leaves the run "stopped", as Stop does); a Julia crash with runs waiting (its own branch, checked only without the app); PSS®E.
+
+Test folders added: `savnw_flow_shed_gui_test_q1` to `_q6`, `savnw_flow_shed_gui_test_fail` (failed before the solve, so empty), `savnw_flow_shed_gui_test_batch_pen1`, `_pen2.5` (stopped) and `_pen4`, `savnw_flow_shed_gui_test_b2_pen0.8` and `_pen1.6`, `savnw_opf_shed_gui_test_b2_pen0.8` and `_pen1.6`, `savnw_flow_shed_gui_test_q6_squared`, `_q6_abs_sum`, `_q6_squared_pen1` and `_q6_squared_pen2`.
+
+**Batch dialog and tooltips (2026-11-23), at the user's request, after trying the round above:** "if I click batch button it says choose the zone, then in the dialog I can change the zone, does not make sense ... there is no way to set shedding penalties in batch ... you add a lot of useless tooltips, don't do that".
+
+*What changed:*
+- **Batch opens without a zone.** The form may have a zone or area boundary without its zone or area: the Run page leaves that one problem out when it opens the dialog (`describe_missing_target` in `settings.py`). No target is ticked then, and the dialog asks for one. Every other problem of the form still keeps the dialog shut.
+- **Penalties are set in the dialog.** They start as the form's and are edited there: "uniform" with one list for every load, or rows as in the Run form (zone or area, all but one, or a bus) that can be added and removed, each with a list of values, and a list for all other loads. Before, the dialog only had a list for each row the form already had, so a form without rows offered nothing but "All other loads". The rows have no arrows: they apply in the order they stand in, and a new row goes to the bottom.
+- **The run list** says "target Spartanb", not "zone Spartanb", so a penalty row on the same zone reads apart from it.
+- **Tooltips.** The rule is under "Look". Taken off, from the round above: what Run does while it can be clicked, Compare in the runs table and Add to compare in History while they can be clicked, Close, Clear queue, Pause and the cancel cross in the queue dialog, the close cross, the tag and the field labels in the batch dialog, Clear, the column crosses and the "?" on the Compare page. The user took off those of Batch and Queue. Kept: why a button is off (Run, Compare, Add to compare, "open its report"), and the whole of a tag or of penalties that are cut.
+
+*How it was verified* (test instance on 8090): Batch on the default form (ACTIVSg500, no zone chosen) opened with "choose at least one target zone"; two targets and one added row with `1:1:3` gave six runs. On savnw the form's two rows came into the dialog, uniform swapped them for one list and back, and a batch of two values of the first row ran both runs to the end, the second with the same objective value as the same settings typed in the form. No tooltip showed on Run. The dialog's reading of targets, rows and uniform was also checked without a browser.
+
+Test folders added: `savnw_flow_shed_gui_test_p_pen1.6` and `_pen0.8`.
+
+**Paired penalties and rows on the target (2026-11-23), at the user's request:** "what if I want 2 instead of 4 runs, one with 2.5 and 0.7 and another with 2.4, 0.8", and, after the two ideas were explained, "do the things that makes my life easier".
+
+*What changed:*
+- **Paired.** A checkbox "paired" beside "uniform" in the batch dialog's penalties. With it, the lists of the penalty rows and of all other loads go together by position: the first values are one run, the second the next, so each run has one whole set of penalties, as an entry of `load_shedding_penalties` has in `batch_islanding.jl`. Every list has the same number of values, or one value that every run gets; lists of different lengths are a problem that names them, and Add stays off. A number written twice stays twice in a paired list, because its place says which run it is for (`parse_values(text, unique=False)`); elsewhere a list still keeps each value once. Only the penalties pair: every other field still multiplies, so two targets with two pairs are four runs. The checkbox is off when the dialog opens and hidden with uniform shedding. A hint line under the rows says what it does while it is ticked.
+- **Rows on the target.** With a zone or area boundary, a penalty row's "Where" also offers "Target zone" and "All but target zone" (or area). Such a row has no zone to choose. In each run it is on that run's target, so "the island's loads at 2.5 λ, the rest at 1.6 λ" holds for every target of a sweep. `batch.py` writes it into each run's settings as an ordinary row that names the run's target (`penalty_follows` in the spec, `set_target`), so the worker, the settings schema, presets and Load into Run know nothing of it. A bus-pair boundary has no target and does not offer it. The Run form does not have these rows.
+- **In `batch.py`,** fields with the same `pair` form one axis (`find_axes`, `calc_axis_length`, `find_combinations`); a run still gets one value per field, so tags and the run list work as before (`pen2.5-0.7`, `pen2.4-0.8`).
+
+*How it was verified:*
+- **Without the app:** a crossed batch of 16 runs gives the same settings, texts and folders as before the change; the user's example paired gives two runs tagged `pen2.5-0.7` and `pen2.4-0.8`; "2.5, 2.5, 2.4" with "0.7, 0.8, 0.8" gives three runs; lists of 3 and 2 values and a list without a value are refused; a pair written twice is named as two runs to one folder; rows on the target take each of three targets' names and pass `validate`, and the settings given are not changed.
+- **In the app** (test instance on 8090, ACTIVSg500, no dynamic simulation): the user's two rows gave four runs, and two with "paired"; a third value in one list showed "paired lists need the same number of values, or one value: penalty row 1 (zone Spartanb) has 2, penalty row 2 (zone Midlands) has 3". With targets Spartanb and Midlands, "Target zone" at "2.5, 2.4" and "All but target zone" at "0.7, 0.8", paired, four runs ran to the end and reached the Compare page; their settings files have zone Spartanb or zone Midlands in both rows, by the run's target, with 2.5 beside 0.7 and 2.4 beside 0.8. Uniform hid "paired". A bus-pair boundary offered Zone, All but zone and Bus only.
+- **Read, not run:** a named row and a row on the target may reach the same zone in one run; `calc_shed_penalties` in `worker.jl` applies rows in order, so the lower row counts, as the hint says.
+
+*Not done:* the dialog starts from the form each time it opens, so its rows, targets and "paired" are not kept from one batch to the next; pairing other fields than the penalties; a cross on each run of the run list to leave it out.
+
+Test folders added: `ACTIVSg500_flow_shed_gui_test_q_spartanb_pen2.5-0.7`, `_spartanb_pen2.4-0.8`, `_midlands_pen2.5-0.7` and `_midlands_pen2.4-0.8`.

@@ -1,7 +1,11 @@
 """
-Run page: a toolbar (fold, presets, Advanced, Run and Stop), the network modifications that are active,
-the settings sheet with its four sections, the results of a run as tables, the runs of this
-session and, fixed to the bottom of the window, the status strip of the run in progress.
+Run page: a toolbar (fold, presets, Advanced, Batch, Queue, Stop and Run), the network modifications
+that are active, the settings sheet with its four sections, the results of a run as tables, the
+runs of this session and, fixed to the bottom of the window, the status strip of the run in progress.
+
+Julia does one run at a time. While a run is in progress, Run puts the form's settings in the
+run queue (`ctx.queue`, run_queue.py), which starts them when that run ends; Batch puts several
+runs there at once, and Queue shows the runs that wait.
 
 The form holds settings schema v1 (settings.py). Zones, areas and load buses come from Julia's
 `case_info`, cached for the session in `ctx.state`, because the worker answers one job at a time
@@ -14,10 +18,13 @@ from nicegui import background_tasks, ui
 
 import advanced
 import theme
+from components.batch_dialog import BatchDialog
 from components.log_dialog import LogDialog
 from components.preset_bar import PresetBar
+from components.queue_dialog import QueueDialog
 from components.results_view import ResultsView, open_folder, open_report
 from components.status_strip import StatusStrip
+from comparison import find_refusal
 from julia_worker import JobError, WorkerError
 from settings import (
     FLOW_MODELS,
@@ -27,6 +34,7 @@ from settings import (
     SIMULATORS,
     build_settings,
     default_settings,
+    describe_missing_target,
     form_values,
     validate,
 )
@@ -82,17 +90,36 @@ def describe_boundary(run_settings):
 
 
 def find_run_block(ctx, form):
-    """Why Run cannot start now, as its tooltip says it, or "" when it can. A run sent while Julia is busy with a question waits for it."""
-    running = ctx.runs.find_running()
+    """
+    Why Run (and Batch) cannot take the form's settings now, as the tooltip says it, or "" when
+    it can. A run in progress does not block it: the new run waits in the queue. A run sent while
+    Julia is busy with a question waits for it.
+    """
     if ctx.worker.state in ("stopped", "crashed"):
         return "Julia is not running: Restart Julia first"
-    if running is not None:
-        return f"Run {running['number']} is running: wait for it to end, or Stop it"
     if not form.cases_loaded:
         return "Waiting for Julia's case list"
     if form.is_waiting():
         return "Waiting for Julia to read the case"
     return ""
+
+
+def is_run_queued(ctx):
+    """True when a click on Run puts the run in the queue instead of starting it: a run is in progress, or runs wait and will start by themselves."""
+    return ctx.runs.find_running() is not None or ctx.queue.is_active()
+
+
+def describe_waiting(count):
+    """ "1 run waits", "3 runs wait"."""
+    return f"{count} run" + (" waits" if count == 1 else "s wait")
+
+
+def describe_queue_button(queue):
+    """The Queue button's text: how many runs wait, and that the queue is paused."""
+    count = len(queue.entries)
+    if not count:
+        return "Queue"
+    return f"Queue ({count}, paused)" if queue.paused else f"Queue ({count})"
 
 
 def find_runs_signature(ctx):
@@ -821,8 +848,12 @@ def build(ctx):
             with summary:
                 summary_tooltip = ui.tooltip()  # all of it, when the line is cut
             advanced_button = theme.button("Advanced", icon="sliders", kind="ghost")
+            batch_button = theme.button("Batch", icon="layers", kind="ghost")
+            queue_button = theme.button("Queue", icon="list", kind="ghost").classes("btn-queue")
             stop_button = theme.button("Stop", icon="stop", kind="danger")
-            run_button = theme.button("Run", icon="play", kind="primary")
+            run_button = theme.button("Run", icon="play", kind="primary").classes("btn-run")
+            with run_button:
+                run_tooltip = ui.tooltip()  # why it is off, when it is
         problems_label = ui.label("").classes("problems")
         with ui.element("div").classes("modifications") as modifications_line:
             theme.eyebrow("Network modifications")
@@ -883,21 +914,47 @@ def build(ctx):
         runs_view()
 
     # -------------------- buttons --------------------
+    queue_dialog = QueueDialog(ctx)
+
     def update_buttons():
+        """Run says what a click does now (start, or wait in the queue), and Queue how many runs wait."""
         block = find_run_block(ctx, form)
+        queued = is_run_queued(ctx)
+        run_button.text = "Add to queue" if queued else "Run"
+        run_button.props["icon"] = theme.ICONS["plus" if queued else "play"]
+        run_button.update()
         run_button.set_enabled(not block)
+        run_tooltip.text = block
+        run_tooltip.set_visibility(bool(block))
+        batch_button.set_enabled(not block)
         stop_button.set_enabled(ctx.runs.find_running() is not None)
+        queue_button.text = describe_queue_button(ctx.queue)
+        if ctx.queue.paused:
+            queue_button.classes(add="queue-paused")
+        else:
+            queue_button.classes(remove="queue-paused")
         preset_bar.update_buttons()  # Save as waits with the form
 
     form.on_wait = update_buttons
 
-    def run_clicked():
-        if find_run_block(ctx, form):  # a click that came before the button was turned off
-            return
+    def read_form():
+        """The form's settings, or None when something keeps them from running: the problems show, with the sheet unfolded."""
         run_settings, problems = form.read()
         show_problems(problems)
         if problems:
             settings_fold.open()  # the problems are about the settings: show them
+            return None
+        return run_settings
+
+    def run_clicked():
+        if find_run_block(ctx, form):  # a click that came before the button was turned off
+            return
+        run_settings = read_form()
+        if run_settings is None:
+            return
+        if is_run_queued(ctx):
+            ctx.queue.add(run_settings)
+            ui.notify(f"Added to the queue: {describe_waiting(len(ctx.queue.entries))}.", position="top")
             return
         try:
             ctx.runs.start(run_settings)  # the runs table and the status strip show it
@@ -905,11 +962,45 @@ def build(ctx):
             problems_label.text = f"• Julia is not running: {error}"
 
     async def stop_clicked():
-        if ctx.runs.find_running() is not None:
-            await ctx.worker.restart()  # kills Julia with its dynamic.py, then starts a fresh one
+        running = ctx.runs.find_running()
+        if running is None:
+            return
+        await ctx.worker.restart()  # kills Julia with its dynamic.py, then starts a fresh one
+        if ctx.queue.paused:  # the runs that wait do not start behind a run that was stopped
+            ui.notify(
+                f"Run {running['number']} was stopped, so the queue is paused: "
+                f"{describe_waiting(len(ctx.queue.entries))}. Resume it in Queue.",
+                position="top",
+            )
+
+    def add_batch(settings_list, compare):
+        """The batch dialog's runs go to the end of the queue; the first starts at once when nothing is running."""
+        ctx.queue.add_many(settings_list, compare)
+        count = len(settings_list)
+        note = f"{count} run{'s' if count > 1 else ''} added to the queue."
+        if ctx.queue.paused:
+            note += " The queue is paused: Resume it in Queue."
+        ui.notify(note, position="top")
+
+    batch_dialog = BatchDialog(on_add=add_batch)
+
+    def batch_clicked():
+        """Open the batch dialog on the form's settings. The form need not name the zone or area of the boundary: the dialog's targets do."""
+        if find_run_block(ctx, form):  # a click that came before the button was turned off
+            return
+        run_settings, problems = form.read()
+        missing_target = describe_missing_target(run_settings["boundary"]["kind"])
+        problems = [problem for problem in problems if problem != missing_target]
+        show_problems(problems)
+        if problems:
+            settings_fold.open()  # the problems are about the settings: show them
+            return
+        batch_dialog.open(run_settings, form.find_study())
 
     run_button.on_click(run_clicked)
     stop_button.on_click(theme.busy_handler(stop_button, stop_clicked))
+    batch_button.on_click(batch_clicked)
+    queue_button.on_click(queue_dialog.open)
 
     async def load_into_form(run_settings, note, result=None):
         """
@@ -953,6 +1044,7 @@ def build(ctx):
     removers = [
         ctx.worker.on_state(state_changed),
         ctx.runs.on_change(runs_changed),
+        ctx.queue.on_change(update_buttons),
     ]
     ui.context.client.on_delete(lambda: [remove() for remove in removers])
     update_buttons()
@@ -960,10 +1052,17 @@ def build(ctx):
 
 
 def build_runs_view(ctx, form, settings_fold, strip, results):
-    """The runs of this session, newest first: what ran, its status, and its report, folder, log, and Load (settings and results)."""
+    """The runs of this session, newest first: what ran, its status, and its report, folder, log, Load (settings and results) and Compare."""
     if not ctx.runs.records:
         ui.label("No run yet. Choose the settings above and press Run.").classes("empty")
         return
+
+    def add_to_compare(record):
+        """The run joins the Compare page, and a note says so, or why not."""
+        refusal = ctx.compare.add(record)
+        count = len(ctx.compare.records)
+        added = f"Run {record['number']} is on the Compare page, with {count} run{'s' if count > 1 else ''} there now."
+        ui.notify(refusal or added, position="top")
 
     async def load_run(record):
         """The run's settings into the form, and its results into the results panel when it has them."""
@@ -1022,3 +1121,10 @@ def build_runs_view(ctx, form, settings_fold, strip, results):
                 theme.button(
                     "Load", kind="ghost", small=True, on_click=lambda record=record: load_run(record), busy=True
                 ).tooltip("Put its settings in the form and show its results")
+                compare_button = theme.button(
+                    "Compare", kind="ghost", small=True, on_click=lambda record=record: add_to_compare(record)
+                )
+                refusal = find_refusal(record)
+                compare_button.set_enabled(not refusal)
+                if refusal:
+                    compare_button.tooltip(refusal)

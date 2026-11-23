@@ -40,7 +40,8 @@ class SessionRuns:
     - `warnings` (the log lines that warn);
     - `summary` (the @@result summary, None without one) and `partial` (True while it is the
       summary sent before the dynamic simulation, which the final one replaces);
-    - `error` (the @@error message, or why Julia stopped).
+    - `error` (the @@error message, or why Julia stopped);
+    - `compare` (True for a run that goes to the Compare page once it finishes, as a batch's do).
 
     The records follow the worker's control lines and log lines. A run that Julia never finishes
     (Stop, Restart Julia, a crash) gets no @@done, so its status comes from the worker's state
@@ -69,7 +70,7 @@ class SessionRuns:
 
         return remove
 
-    def start(self, settings):
+    def start(self, settings, compare=False):
         """Send a run job with these settings and return its record. Raises WorkerError when Julia is not running."""
         settings = copy.deepcopy(settings)
         job_id = self.worker.send({"type": "run", "settings": settings})
@@ -90,6 +91,7 @@ class SessionRuns:
             "summary": None,
             "partial": False,
             "error": None,
+            "compare": compare,
         }
         self.records.append(record)
         call_listeners(self._listeners)

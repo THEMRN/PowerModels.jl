@@ -586,7 +586,7 @@ body:has(#popup[aria-hidden="false"]) .q-page-container {
 /* the runs of the session: one grid per row, same columns in every row */
 .runs-row {
   display: grid;
-  grid-template-columns: 34px 68px minmax(60px, 1.1fr) 84px minmax(80px, 1.2fr) minmax(40px, 1fr) 96px minmax(40px, 2fr) 262px;
+  grid-template-columns: 34px 68px minmax(60px, 1.1fr) 84px minmax(80px, 1.2fr) minmax(40px, 1fr) 96px minmax(40px, 2fr) 334px;
   column-gap: 14px;
   align-items: center;
   min-height: 36px;
@@ -620,6 +620,154 @@ body:has(#popup[aria-hidden="false"]) .q-page-container {
   padding: 14px;
   border-top: 1px solid var(--line);
   color: var(--ink-3);
+}
+
+/* Run and "Add to queue" take the same room, so the buttons beside it stay where they are */
+.q-btn.btn-run {
+  min-width: 124px;
+}
+/* Queue, while the queue is paused: the amber of a state that waits for the user */
+.btn-ghost.btn-queue.queue-paused {
+  background: #fff8e8;
+  color: #875a00;
+  box-shadow: inset 0 0 0 1px #f0d08c;
+}
+
+/* -------------------- run queue dialog (components/queue_dialog.py) -------------------- */
+.dialog.queue-dialog {
+  width: min(980px, 94vw);
+}
+/* why the queue is paused, over the runs that wait */
+.queue-note {
+  padding: 8px 14px;
+  border-bottom: 1px solid #f0d08c;
+  background: #fff8e8;
+  color: #875a00;
+}
+.queue-note:empty {
+  display: none;
+}
+.queue-body {
+  min-height: 190px;            /* a few rows, so the dialog does not jump as runs start and leave */
+  max-height: min(60vh, 560px);
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+/* the runs that wait: one grid per row, same columns in every row */
+.queue-row {
+  display: grid;
+  grid-template-columns: 34px minmax(60px, 1fr) 84px minmax(80px, 1.1fr) minmax(60px, 1.6fr) minmax(60px, 1.6fr) 62px 16px 24px;
+  column-gap: 12px;
+  align-items: center;
+  min-height: 36px;
+  padding: 0 10px 0 14px;
+  border-bottom: 1px solid var(--line);
+}
+.queue-row > .q-field,
+.queue-row > div:not(.move-buttons) {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.queue-row:not(.queue-head):hover {
+  background: var(--well);
+}
+.queue-head {
+  min-height: 30px;
+}
+.queue-row .muted {
+  color: var(--ink-3);
+}
+.queue-empty {
+  padding: 18px 14px;
+  color: var(--ink-3);
+}
+
+/* -------------------- batch dialog (components/batch_dialog.py) -------------------- */
+.batch-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+}
+/* two sides with a line between: what may vary, and the runs that come of it */
+.batch-sides {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+.batch-side {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  height: min(60vh, 560px);     /* the same for every batch, so the dialog does not jump as runs are added */
+  padding-right: 20px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.batch-side + .batch-side {
+  padding: 0 0 0 20px;
+  border-left: 1px solid var(--line);
+}
+.batch-side > .eyebrow,
+.batch-side > .batch-head {
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+/* a section's title with a choice at its right: the penalties and "uniform" */
+.batch-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+/* a penalty row of the batch: where (kind, then zone, area or bus), its list of values, remove */
+.batch-penalty-row {
+  grid-template-columns: 108px minmax(0, 1fr) minmax(0, 1fr) 24px;
+}
+.batch-penalty-row > .wide {
+  grid-column: span 2;
+}
+.batch-penalty-row > .field-label {
+  align-self: center;
+}
+@media (max-width: 900px) {
+  .batch-sides { grid-template-columns: minmax(0, 1fr); }
+  .batch-side { height: auto; padding-right: 0; }
+  .batch-side + .batch-side {
+    margin-top: 12px;
+    padding: 12px 0 0;
+    border-left: 0;
+    border-top: 1px solid var(--line);
+  }
+}
+/* a load scaling's name ("Loads of zone SPARTANB") is longer than a field's label: it takes two lines */
+.fields.batch-fields {
+  grid-template-columns: 124px minmax(0, 1fr);
+}
+.batch-fields .field-label {
+  padding: 5px 0;
+  line-height: 18px;
+  white-space: normal;
+}
+/* the options of a field as checkboxes: several may be ticked */
+.batch-choices {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 18px;
+  min-height: var(--control);
+  max-height: 104px;            /* a case with many zones: its targets scroll */
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+/* the run list takes the height its side has left, and scrolls by itself */
+.table-scroll.batch-runs {
+  flex: 1 1 0;
+  min-height: 120px;
+  max-height: none;
+  overflow-x: auto;
 }
 
 /* -------------------- results panel: the report numbers of one run -------------------- */
@@ -1443,6 +1591,107 @@ input[type="number"]::-webkit-outer-spin-button {
   color: var(--ink-3);
   font-size: 11.5px;
   font-variant-numeric: tabular-nums;
+}
+
+/* ==================== Compare page ==================== */
+.compare-empty {
+  color: var(--ink-2);
+}
+/* runs side by side: one grid for the whole table, a column for the names and one per run. The
+   rows come as one block of HTML (.compare-rows), whose cells take their places in this grid. */
+.compare-grid {
+  display: grid;
+  align-items: stretch;
+  width: 100%;                  /* the columns share the page up to their widest, and scroll sideways once at their narrowest */
+  font-variant-numeric: tabular-nums;
+}
+.compare-rows {
+  display: contents;
+}
+/* the top row: nothing over the names, then each run's name, tag and remove button */
+.compare-corner,
+.compare-run {
+  min-width: 0;
+  padding: 0 0 8px 12px;
+  border-bottom: 1px solid var(--line-strong);
+}
+.compare-run-name {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.compare-run-tag {
+  color: var(--ink-3);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* a section's title, across the grid */
+.compare-section {
+  grid-column: 1 / -1;
+  padding: 18px 0 5px;
+  border-bottom: 1px solid var(--line-strong);
+}
+.compare-name,
+.compare-value {
+  min-width: 0;
+  padding: 5px 0 5px 12px;
+  border-bottom: 1px solid var(--line);
+}
+/* the names stay in view while the runs scroll sideways */
+.compare-name,
+.compare-corner {
+  position: sticky;
+  left: 0;
+  padding-left: 0;
+  background: var(--surface);
+}
+.compare-name {
+  padding-right: 12px;
+  color: var(--ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.compare-value {
+  overflow-wrap: anywhere;      /* a list of bus pairs or of penalties takes the lines it needs */
+}
+.compare-value.bad {
+  color: var(--bad);
+  font-weight: 600;
+}
+.compare-value.muted {
+  color: var(--ink-3);
+}
+/* the trade-off: two charts beside each other, each with its title above and its notes below */
+.tradeoff-charts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 22px 40px;
+}
+.tradeoff-chart {
+  display: flex;
+  flex: 1 1 440px;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  max-width: 780px;
+}
+.tradeoff-plot {
+  width: 100%;
+  height: 340px;
+}
+.tradeoff-none {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 120px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius);
+  color: var(--ink-3);
 }
 
 /* ==================== History page ==================== */

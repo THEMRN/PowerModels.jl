@@ -312,6 +312,9 @@ class HistoryPage:
                     # no ring: it shows the Run page at once, whose form says what it waits for
                     self.load_button = theme.button("Load into Run", kind="primary", on_click=self._load_into_run)
                     self.load_button.tooltip("Or double-click the run, or press Enter")
+                    self.compare_button = theme.button("Add to compare", on_click=self._add_to_compare)
+                    with self.compare_button:
+                        self.compare_tooltip = ui.tooltip()  # why this run cannot be compared, when it cannot
                     with theme.line():
                         self.report_button = theme.button("Open report", kind="ghost", on_click=self._open_report)
                         self.folder_button = theme.button("Open folder", kind="ghost", on_click=self._open_folder)
@@ -435,6 +438,10 @@ class HistoryPage:
         self.report_button.set_enabled(row is not None and bool(row["report"]))
         self.folder_button.set_enabled(row is not None)
         self.load_button.set_enabled(row is not None and row["kind"] == "settings")
+        refusal = self._find_compare_refusal(row)
+        self.compare_button.set_enabled(not refusal)
+        self.compare_tooltip.text = refusal
+        self.compare_tooltip.set_visibility(bool(refusal))
 
     # -------------------- actions --------------------
     def _open_report(self):
@@ -460,6 +467,31 @@ class HistoryPage:
         if summary is None:
             return None, missing
         return build_loaded_record(row["id"], copy.deepcopy(run_settings), summary, row["time_text"]), ""
+
+    def _find_compare_refusal(self, row):
+        """Why the selected run cannot go to the Compare page, for the button's tooltip, or "" when it can: it needs the results a GUI run keeps."""
+        if row is None:
+            return "Select a run first"
+        if row["kind"] != "settings":
+            return "This run is from before runs kept a settings file, so it has no results to compare"
+        if find_session_record(self.ctx.runs.records, row["folder"], row["file"]) is not None or row["result"]:
+            return ""
+        _summary, missing = results_index.read_result(row)       # no results file: the sentence saying why
+        return missing
+
+    def _add_to_compare(self):
+        """Put the selected run on the Compare page: this session's own run when it ran here, otherwise the results it kept."""
+        row = self._find_selected()
+        if row is None or row["kind"] != "settings":
+            return
+        record, missing = self._find_result(row, row["record"].get("gui_settings"))
+        if record is None:
+            ui.notify(missing, position="top")
+            return
+        refusal = self.ctx.compare.add(record)
+        count = len(self.ctx.compare.records)
+        added = f"The run of {row['time_text']} ({row['folder']}) is on the Compare page, with {count} run{'s' if count > 1 else ''} there now."
+        ui.notify(refusal or added, position="top")
 
     async def _open_run(self, row_id):
         """A run double-clicked, or Enter on the selected one: load it into Run, as the Load into Run button does."""
