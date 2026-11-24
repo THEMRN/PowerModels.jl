@@ -182,18 +182,22 @@ function write_run_record(path::AbstractString, record)
     end
 end
 
-"Newest `dynamic_channels_*.html` report in `output_path` modified at or after `since` (Unix time), or `nothing`."
-function find_new_report(output_path::AbstractString, since::Real)
-    newest_report = nothing
+"""
+Name of the newest `<prefix>*<suffix>` file in `output_path` modified at or after `since` (Unix
+time), or `nothing`: the simulation script's report (`dynamic_channels_*.html`) or channels
+(`output_andes_*.csv.gz`), whose names carry the script's own timestamp.
+"""
+function find_new_file(output_path::AbstractString, since::Real, prefix::AbstractString, suffix::AbstractString)
+    newest_file = nothing
     newest_time = since
     for file in readdir(output_path)
-        startswith(file, "dynamic_channels_") && endswith(file, ".html") || continue
+        startswith(file, prefix) && endswith(file, suffix) || continue
         modified = mtime(joinpath(output_path, file))
         modified >= newest_time || continue
-        newest_report = file
+        newest_file = file
         newest_time = modified
     end
-    return newest_report
+    return newest_file
 end
 
 """
@@ -216,7 +220,9 @@ voltage collapse indicator of each island (see voltage.jl); it needs the AC mode
 `simulator` picks the dynamic simulation run after the export: "psse"
 (psse_scripts/dynamic.py) or "andes" (andes_scripts/dynamic.py). `open_report=false`
 passes `--no-open` to the script, so the ANDES report is written but not opened in the
-browser; the PSS®E script ignores it and always opens its report.
+browser; the PSS®E script ignores it and always opens its report. `html_report=false` passes
+`--no-html` to the ANDES script, which then writes no HTML report (the GUI shows the channels
+itself); the PSS®E script never gets it and always writes its report.
 
 `target_zone` or `target_area` names the group the boundary encloses; `selected_buses`
 are its buses (flows are reported into them). An area goes to run_info as
@@ -261,6 +267,7 @@ function run_islanding(network_data;
     voltage_security::Bool=false,
     simulator::AbstractString="psse",
     open_report::Bool=true,
+    html_report::Bool=true,
     progress=nothing,
     activity=nothing,
     on_solved=nothing,
@@ -315,6 +322,7 @@ function run_islanding(network_data;
         run_dynamic_sim=run_dynamic_sim,
         simulator=simulator,
         open_report=open_report,
+        html_report=html_report,
         output_tag=output_tag,
         gui_settings=run_settings,
         files=nothing,
@@ -437,6 +445,7 @@ function run_islanding(network_data;
     # dynamic simulation -------------------------------------------------------------
     raw_file = nothing
     report_file = nothing
+    channels_file = nothing
     simulation_seconds = nothing
     if run_dynamic_sim
         report_stage("export")
@@ -480,9 +489,15 @@ function run_islanding(network_data;
         python_script = joinpath(@__DIR__, "$(simulator)_scripts", "dynamic.py")
         simulation_command = `python $python_script $raw_file $dyr_file $excel_file`
         open_report || (simulation_command = `$simulation_command --no-open`)     # the report is written, not opened
+        if !html_report && simulator == "andes"
+            simulation_command = `$simulation_command --no-html`                 # no report at all
+        end
         simulation_seconds = @elapsed run(simulation_command)
         println("$simulator simulation script finished in $(round(simulation_seconds, digits=1)) s")
-        report_file = find_new_report(output_path, run_started)
+        report_file = find_new_file(output_path, run_started, "dynamic_channels_", ".html")
+        if simulator == "andes"
+            channels_file = find_new_file(output_path, run_started, "output_andes_", ".csv.gz")
+        end
     end
 
     # the outcome of the run, in its settings file (voltage: main results only, not the per-round details)
@@ -495,6 +510,7 @@ function run_islanding(network_data;
         excel=basename(excel_file),
         raw=(raw_file === nothing ? nothing : basename(raw_file)),
         report=report_file,
+        channels=channels_file,
     )
     summary = (
         termination_status=string(result["termination_status"]),

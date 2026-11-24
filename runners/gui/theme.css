@@ -847,6 +847,89 @@ body:has(#popup[aria-hidden="false"]) .q-page-container {
     border-top: 1px solid var(--line);
   }
 }
+/* the Dynamics tab: the simulation's curves, their statistics beside them */
+.dyn-controls {
+  flex-wrap: wrap;
+  gap: 6px 10px;
+}
+.dyn-controls .field-label {
+  margin-left: 6px;
+}
+.dyn-controls .field-label:first-child {
+  margin-left: 0;
+}
+.dyn-buses {
+  width: 190px;
+}
+.dyn-body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 18px 28px;
+}
+.dyn-chart {
+  position: relative;           /* for its wait cover */
+  display: flex;
+  flex: 1 1 520px;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.dyn-plot-box {
+  min-height: 120px;
+}
+.dyn-plot {
+  position: relative;           /* for the box of a zoom being dragged */
+  width: 100%;
+  height: 440px;
+  cursor: crosshair;
+}
+.dyn-zoom-box {
+  position: absolute;
+  z-index: 2;
+  display: none;
+  border: 1px solid var(--accent);
+  background: rgba(37, 99, 235, 0.08);   /* the accent, faint */
+  pointer-events: none;
+}
+.dyn-stats .data-table tbody tr:hover td {
+  background: var(--well);
+}
+.dyn-stats {
+  display: flex;
+  flex: 0 0 480px;              /* its tables are about 460 px wide; the chart takes the rest */
+  flex-direction: column;
+  gap: 8px;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;             /* a narrow window: the tables scroll, not the whole tab */
+}
+.dyn-key-line {
+  min-height: 18px;
+}
+.dyn-key {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  color: var(--ink-2);
+}
+.dyn-hovered {
+  overflow: hidden;
+  color: var(--ink);
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.dyn-key-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.dyn-key-dot {
+  width: 14px;
+  height: 3px;
+  border-radius: 2px;
+}
 /* voltage details: one block per round */
 .dialog-body {
   display: flex;

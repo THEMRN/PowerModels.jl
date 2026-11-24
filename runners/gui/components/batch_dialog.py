@@ -303,7 +303,10 @@ class BatchDialog:
 
     # -------------------- the runs --------------------
     def _show_report_choice(self):
-        """Only the ANDES script can leave its report closed, and a run without a simulation has none."""
+        """
+        Only the ANDES script can leave its report closed, and a run without a simulation, or whose
+        form left "HTML file" unticked, has none (the runs keep the form's `html_report`).
+        """
         settings = self.settings
         if not settings["run_dynamic_sim"]:
             self.open_report.disable()
@@ -312,6 +315,9 @@ class BatchDialog:
             self.open_report.set_value(True)
             self.open_report.disable()
             self.open_report_tooltip.text = "PSS®E always opens its report"
+        elif not settings.get("html_report", False):
+            self.open_report.disable()
+            self.open_report_tooltip.text = "No HTML report: \"HTML file\" is unticked in the Run form"
         else:
             self.open_report_tooltip.set_visibility(False)
 

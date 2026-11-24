@@ -234,6 +234,7 @@ function find_settings_problems(settings)
     settings["lambda"] isa Real && settings["lambda"] > 0 || push!(problems, "lambda must be a positive number")
     settings["output_tag"] isa AbstractString || push!(problems, "output_tag must be text (empty for none)")
     get(settings, "open_report", true) isa Bool || push!(problems, "open_report must be true or false")
+    get(settings, "html_report", false) isa Bool || push!(problems, "html_report must be true or false")
     if settings["voltage_security"] == true && settings["opf_model"] != "AC"
         push!(problems, "voltage security needs the AC model")
     end
@@ -582,6 +583,7 @@ function run_from_settings(settings; progress=stage -> nothing, activity=nothing
         voltage_security=settings["voltage_security"] == true,
         simulator=settings["simulator"],
         open_report=get(settings, "open_report", true),     # optional: settings from before the box open the report
+        html_report=get(settings, "html_report", false),    # optional: the GUI writes no HTML report unless asked
         progress=progress,
         activity=activity,
         on_solved=report_solved,
@@ -1080,13 +1082,14 @@ function calc_files_summary(output_path::AbstractString, run_record)
         "excel" => nothing,
         "raw" => nothing,
         "report" => nothing,
+        "channels" => nothing,
         "result" => nothing,
     )
     run_record === nothing && return files
 
     files["settings"] = run_record.file
-    for name in ("excel", "raw", "report")
-        files[name] = run_record.record["files"][name]
+    for name in ("excel", "raw", "report", "channels")
+        files[name] = get(run_record.record["files"], name, nothing)
     end
     return files
 end

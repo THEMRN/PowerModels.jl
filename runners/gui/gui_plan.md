@@ -1,6 +1,6 @@
 # GUI plan
 
-A local GUI for running islanding scenarios without editing code. It sets the run (case, boundary, objective, penalties, security options, network modifications), runs it in a Julia session that stays warm, shows which stage is running, and shows the information the console reports print (generation, load shedding, boundary flows, frequency and voltage security) as tables. The Plotly report still opens in the browser as it does today.
+A local GUI for running islanding scenarios without editing code. It sets the run (case, boundary, objective, penalties, security options, network modifications), runs it in a Julia session that stays warm, shows which stage is running, and shows the information the console reports print (generation, load shedding, boundary flows, frequency and voltage security) as tables. Phase 13 brings the dynamic simulation's curves into the app and makes the Plotly report optional.
 
 ## How to use this plan (for the implementing agent)
 
@@ -36,6 +36,8 @@ A local GUI for running islanding scenarios without editing code. It sets the ru
 | 10 | History page | 3, 6 | done (2026-11-21) |
 | 11 | Network page | 2, 6 | done (2026-11-21) |
 | 12 | Presets (optional, ask the user first) | 6 | done (2026-11-21) |
+| 13 | Dynamic simulation in the app | 8, 10 | done (2026-11-23) |
+| 14 | Compare: curves of several runs | 13 | planned (2026-11-23) |
 
 Phases 2, 3 and 5 can run in any order once phase 1 is done. The GUI is usable for real runs after phase 6.
 
@@ -70,6 +72,7 @@ These were made by the user. Do not reopen them.
 12. **A load belongs to its bus's zone and area**, never to the zone or area on its own RAW record.
 13. **The PSS®E script (`psse_scripts/dynamic.py`) is no longer updated.** New report features go into the ANDES side only (`andes_scripts/dynamic.py`, `report.py`).
 14. **The look: simple, elegant, compact, and not Material Design.** The user rejected the first look of phases 5 and 6 (NiceGUI's default, which is Quasar's Material Design): wasted space, poor colours, no taste. Every page follows the rules under "Look" below.
+15. **The dynamic simulation in the app (2026-11-23).** The results panel shows the simulation's curves and statistics, read from the channel file the ANDES script already writes (`output_andes_<stamp>.csv.gz`). Time series do not go into Excel; the Excel files keep the steady state. The Plotly HTML report is written only when the Run form's "HTML file" box is ticked, and the box is unticked by default. Script runs (`islanding.jl`, `batch_islanding.jl`) keep writing it, and the PSS®E script, which is frozen, always writes its own.
 
 ## Architecture
 
@@ -101,6 +104,7 @@ runners/gui/
   comparison.py          the runs on the Compare page (CompareList, ctx.compare) and what it says of them, without drawing
   settings.py            settings schema v1: defaults, form values <-> settings, validation, JSON files
   network_view.py        what the Network page shows, as plain data: values, colours, selection, boundary
+  dynamics.py            a run's channel file: reading it, its statistics, its curves as chart options, without drawing (phase 13)
   theme.py               the look: element defaults, icons, building blocks (panel, sheet, Section, fields, button, State, FoldButton)
   theme.css              the look: colours and sizes as variables, the building blocks, Quasar without the Material look
   results_index.py       scans results/psse for the History page: rows, filters, settings from a script's record
@@ -113,7 +117,8 @@ runners/gui/
                          sortable_table.py with sortable_table.js (a table of rows to choose from, sorted in the browser),
                          preset_bar.py (the presets in the Run page's settings toolbar, with Save as and Delete),
                          queue_dialog.py (the run queue: the runs that wait, with cancel, reorder, pause and resume),
-                         batch_dialog.py (a batch: the form's settings with lists of values, and the runs they make)
+                         batch_dialog.py (a batch: the form's settings with lists of values, and the runs they make),
+                         dynamics_view.py (the Dynamics tab of the results panel: curves and statistics, phase 13)
   pages/                 one file per page, in the order of the tabs: run.py, network.py, compare.py, history.py
   advanced/              the advanced settings: __init__.py (the tab list, the dialog, what the modifications say),
                          one file per tab (load_scaling.py, loads.py, generators.py) and where.py (a row's zone,
@@ -164,7 +169,7 @@ Decision 14. The look lives in `theme.py` and `theme.css` and nowhere else, so e
 - **A choice of two or three** is a `ui.toggle` (drawn as a segmented control); more options are a `ui.select`.
 - **Rows to edit** (a list the user adds to and removes from) are a `components/row_list.RowList`.
 - **A dialog that changes something** edits a copy and ends with a row of the class `dialog-foot`: what clears on the left, then Cancel and the dialog's own primary button. A click beside it does not close it (`no-backdrop-dismiss`). Its problems show above that row, in the class `problems`.
-- **Colours that show data** (the Network page) are in `network_view.py`, not in the stylesheet, and follow three rules. Groups get the eight colours of `GROUP_COLORS` in a fixed order, a ninth group and later ones share one grey, and a group is always named as well (on its circle, in the legend, in the tooltip). A bus with a generator (a square) has its group's colour a shade darker (`GEN_SHADE`, lightness only, so the hue stays), to stand apart from the group's other buses. An amount is one hue from light to dark. A value around a middle (a voltage around 1 pu) is two hues with grey in the middle. What is selected is marked by shape (a ring, a dashed line with a white edge), because the colours are already taken.
+- **Colours that show data** (the Network page) are in `network_view.py`, not in the stylesheet, and follow three rules. Groups get the eight colours of `GROUP_COLORS` in a fixed order, a ninth group and later ones share one grey, and a group is always named as well (on its circle, in the legend, in the tooltip). A bus with a generator (a square) has its group's colour a shade darker (`GEN_SHADE` of the way to `DARK_COLOR`), to stand apart from the group's other buses. An amount is one hue from light to dark. A value around a middle (a voltage around 1 pu) is two hues with grey in the middle. What is selected is marked by shape (a ring, a dashed line with a white edge), because the colours are already taken.
 - **Class names:** before adding a class to `theme.css`, check that Quasar and Tailwind do not use the name (`inline`, `row` and `dimmed` are taken).
 - **Anything that waits shows it, and says for what.** Julia answers one job at a time, so a question can wait for a whole run.
   - **A part of a page that waits** (a drawing, a table) gets a `theme.Cover` with a sentence saying what it waits for: Julia starting, run N to end, or the read itself.
@@ -289,6 +294,7 @@ Version 2 since 2026-11-21 (the heading keeps its name, as the phases refer to i
   "run_dynamic_sim": true,
   "simulator": "andes",
   "open_report": true,
+  "html_report": false,
   "output_tag": "spartanb_2.5",
   "modifications": {}
 }
@@ -302,6 +308,7 @@ Version 2 since 2026-11-21 (the heading keeps its name, as the phases refer to i
 | `boundary.kind` | `zone` or `area`: the lines are that group's boundary lines and its buses orient the flows. `bus_pairs`: the lines come from `find_branches_by_bus_pairs` and nothing is oriented |
 | `penalties` | All values are multiples of λ. `uniform` (if not null) applies to every load and ignores the rest. Otherwise the `rows` apply in their order, a later row over an earlier one where they reach the same bus, and `others` goes to the loads no row reaches; `others: null` keeps today's default of 1e4 absolute for them (`add_load_shedding_penalty!`). A row is a `zone` or an `area` (of the study's kind only) or a `bus` (`name` its number); `except: true` on a zone or area row means every bus outside it. Two rows for the same place are allowed: the lower one counts |
 | `open_report` | since 2026-11-21, optional (missing means `true`): `false` makes `run_islanding` pass `--no-open` to the simulation script, so the ANDES report is written but not opened in the browser. The PSS®E script ignores it and always opens its report, so the form greys the box for PSS®E |
+| `html_report` | since 2026-11-23 (phase 13), optional (missing means `false`, the GUI's default, so older settings and presets come in unticked): `false` makes `run_islanding` pass `--no-html` to the ANDES script, which then writes no HTML report (the Dynamics tab draws the channels). The PSS®E script never gets the flag and always writes its report, so the form greys the box for PSS®E and sends `true` |
 | `output_tag` | suffix of the results folder; empty means none |
 | `modifications` | changes to the network made before the boundary and the penalties, filled by the advanced dialog; `{}` means none. See below |
 
@@ -353,15 +360,15 @@ A run that throws leaves `"started"`, and History shows that as incomplete.
   "load_shedding_penalties": {"3005": 1250.0},
   "uniform_shedding": false, "uniform_penalty": 0.0,
   "frequency_security": false, "voltage_security": false,
-  "run_dynamic_sim": true, "simulator": "andes", "open_report": true, "output_tag": "spartanb_2.5",
+  "run_dynamic_sim": true, "simulator": "andes", "open_report": true, "html_report": true, "output_tag": "spartanb_2.5",
   "gui_settings": null,
-  "files": {"excel": "pm_res_flow_shed_<ts>.xlsx", "raw": "...", "report": "dynamic_channels_<ts>.html"},
+  "files": {"excel": "pm_res_flow_shed_<ts>.xlsx", "raw": "...", "report": "dynamic_channels_<now>.html", "channels": "output_andes_<now>.csv.gz"},
   "summary": {"termination_status": "LOCALLY_SOLVED", "objective": 0.0, "preemptive_shed_mw": 0.0, "voltage_security": null},
   "seconds": {"solve": 0.0, "dynamic_sim": 0.0, "total": 0.0}
 }
 ```
 
-The report name is `dynamic.py`'s own `dynamic_channels_<ts>.html`. `run_islanding` finds it after the simulation as the newest such file modified after the run started. `run_info.json` keeps its keys, because the Python report reads them. It gained `target_area` in phase 2 and `group_kind` in phase 4b; the ANDES report uses both.
+The report name is `dynamic.py`'s own `dynamic_channels_<now>.html`, whose stamp is the script's, not the run's. `run_islanding` finds it after the simulation as the newest such file modified after the run started (`find_new_file`), and finds the ANDES channel file `output_andes_<now>.csv.gz` the same way as `files.channels` (since 2026-11-23; `null` for PSS®E and without a simulation). `html_report` is recorded since 2026-11-23; with it `false` the report is `null`. `run_info.json` keeps its keys, because the Python report reads them. It gained `target_area` in phase 2 and `group_kind` in phase 4b; the ANDES report uses both.
 
 ### Preset file
 
@@ -448,7 +455,7 @@ A group's name is its record name, or its number when it has no record, as in `c
 - `network`, for the Network page: `buses` (`bus`, `vm`, `pd_mw`, `qd_mvar`, `pg_mw`, `qg_mvar`, `pmax_mw`, `qmax_mvar`, `gens`) and `lines` (`from`, `to`, `p_mw`, `q_mvar`, `p_to_mw`, `q_to_mvar`), as in the `network` reply but with the run's solution: its voltages, its dispatch and its flows, on the run's network (after its modifications, before its shed). A value the solution does not have (a voltage or a reactive flow of a DC run) is `null`. The shed per bus is in `load_shed.buses`.
 - `files`, from the per-run settings file:
   - `output_path`, the absolute results folder;
-  - the file names in that folder: `settings`, `excel`, `raw`, `report`, `result` (`null` when not written).
+  - the file names in that folder: `settings`, `excel`, `raw`, `report`, `channels` (since 2026-11-23, the ANDES channel file the Dynamics tab reads), `result` (`null` when not written).
 
 ### Kept results (`result_<timestamp>.json`)
 
@@ -466,7 +473,7 @@ History's Load into Run reads it (`results_index.read_result`, never while scann
 │ CASE AND MODEL    │ BOUNDARY    │ LOAD SHEDDING PENALTIES   │ SECURITY AND SIMULATION │ ▴ fold
 ├────────────────────────────────────────────────────────────────────────────────────┤
 │ RESULTS OF [run 3 · savnw · flow_shed · 4 bus pairs · 22:09:03 ▾]                   │
-│ Summary | Generation | Load shedding | Boundary flows | Frequency | Voltage | Files │
+│ Summary | Generation | Load shedding | Boundary flows | Frequency | Voltage | Dynamics | Files │
 │   facts and tables of that run                                                     │
 ├────────────────────────────────────────────────────────────────────────────────────┤
 │ RUNS IN THIS SESSION   run, started, case, ...   Report  Folder  Log  Load          │
@@ -876,7 +883,7 @@ The page tabs are in the top bar. The presets come right of the Settings fold (s
 4. **Values of** the case as read, or of a run of the session on that case.
 5. **Selection** by clicking or typing: a zone or an area, single buses (also by a box, with shift), or lines. Its boundary is drawn dashed in red, and the side panel says what it holds, what leaves it, and which islands opening the boundary leaves.
 6. **To the Run form:** "Use as target" (the group, or the bus pairs of the boundary) and "Set penalty" (the group, or each selected bus with a load).
-7. **Picked:** a right click on a line adds its bus pair, and on a bus its number, to two fields of their own (Bus pairs, Buses), each in the text its Run form field reads, with Copy. The selection does not change. Another case empties them.
+7. **Picked:** a right click on a line adds its bus pair, and on a bus its number, to two fields of their own, each with Copy: Bus pairs in the text of the Run form's bus pairs field, Buses in the text of the bus lists (Advanced, the Buses field of the selection). The selection does not change. Another case empties them.
 
 **Done when:**
 - **Render time.** savnw and ACTIVSg500 show within a few seconds, and zooming ACTIVSg500 is smooth.
@@ -898,6 +905,128 @@ The page tabs are in the top bar. The presets come right of the Settings fold (s
   - ACTIVSg500 SPARTANB.
 
 **Done when:** a saved preset reloads exactly, and the starter presets reproduce their `islanding.jl` scenarios.
+
+## Phase 13: Dynamic simulation in the app
+
+**Goal (decision 15).** See the dynamic simulation's curves and statistics in a Dynamics tab of the results panel, read from the channel file the ANDES script already writes, and write the Plotly HTML report only when the Run form's "HTML file" box is ticked (unticked by default).
+
+**Read first:**
+- **Decisions:** 13 and 15, and "Look".
+- `runners/andes_scripts/dynamic.py`: the command line (`NO_OPEN_FLAG`, `file_arguments`), the channel DataFrame and its file `output_andes_<now>.csv.gz`, `write_frequency_stats_json`, and what follows "Stability metrics and report".
+- `runners/andes_scripts/report.py`: `write_html_report` (what the report plots, its frequency lines), `build_voltage_stats_json` with `calculate_wtvsi`, and `build_frequency_stats_html` with `build_voltage_stats_html` (what its statistics show).
+- `runners/islanding_core.jl`: `open_report`, `find_new_report` and the `files` of the settings file.
+- `runners/gui/worker.jl`: `find_settings_problems`, `run_from_settings`, `calc_files_summary`.
+- `runners/gui/settings.py`, `pages/run.py` (the Report line and its greying in `_changed`), `components/batch_dialog.py` ("open its report"), `components/results_view.py` (`TAB_LABELS`, `_build_summary`, `_build_files`), `results_index.py` (`build_settings_from_record`), and `pages/compare.py` (`build_frequency_chart`, the one `ui.echart` so far).
+
+**Facts measured on 2026-11-23,** to size the steps:
+- **Size.** The ANDES channel file has 3003 samples of every channel (25 s at 1/120 s). ACTIVSg500 has 1522 channels: 500 FREQ, 500 VOLT, 56 POWR, 56 VARS, 205 PLOD and 205 QLOD. Its `csv.gz` is 8.8 MB, against 61 MB for its HTML report; savnw's is 303 KB, against 8.4 MB.
+- **Speed.** pandas reads the whole ACTIVSg500 file in 0.44 s.
+- **Units.** FREQ is the deviation from 60 Hz in pu, and VOLT is in pu. POWR, VARS, PLOD and QLOD are in pu on the system base: a 772 MW unit reads 7.718. The HTML report plots those four as they are under titles in MW, so its P and Q axes are really in pu.
+- **PSS®E** writes its channels as a binary `output_psse_<now>.out`, which the GUI does not read. Its script reads only its three paths and always writes and opens its report (decision 13).
+- **Which file is whose.** `output_andes_<now>.csv.gz` and `dynamic_channels_<now>.html` share the script's own stamp `<now>`, which is not the stamp of the run's settings file. The folder is reused by later runs, so `voltage_stats.json` and `frequency_stats.json` only hold its latest run, and the tab cannot take its statistics from them.
+
+**Files:**
+- `runners/andes_scripts/dynamic.py`, `runners/islanding_core.jl`
+- `runners/gui/worker.jl`, `settings.py`, `results_index.py`, `pages/run.py`, `components/batch_dialog.py`, `components/results_view.py`, `theme.css`
+- `runners/gui/dynamics.py` (new): reads a run's channel file and works out what the tab shows, without drawing
+- `runners/gui/components/dynamics_view.py` (new): the Dynamics tab
+- `CLAUDE.md`
+
+**Steps:**
+1. **`--no-html` in the ANDES script.** `dynamic.py` takes `--no-html` beside `--no-open` (`NO_HTML_FLAG`, filtered out of `file_arguments` the same way). With it, the script writes the channel file, `voltage_stats.json`, `frequency_stats.json` and `ufls_shed.json` as before, skips `write_html_report` and the opening, and says so in its output. `--no-html` implies `--no-open`. Without the flag nothing changes.
+2. **`run_islanding`.**
+   - A keyword `html_report::Bool=true`, so `islanding.jl` and `batch_islanding.jl` keep their report.
+   - With `false` and the ANDES simulator, it adds `--no-html` to the command. The PSS®E script never gets the flag.
+   - It records `html_report` in the settings file beside `open_report`.
+   - It finds the channel file as it finds the report, the newest `output_andes_*.csv.gz` modified at or after the run's start, and records it as `files.channels` (`nothing` for PSS®E and without a simulation). Give `find_new_report` a prefix and a suffix instead of copying it.
+3. **Worker.** `html_report` is an optional setting, a Bool when present, and a missing key means `false`, the GUI's default (step 4). The worker passes it to `run_islanding`. `calc_files_summary` adds `channels` from the settings file, so `@@result` and the kept result name it.
+4. **Settings and the form.**
+   - **`settings.py`:** `"html_report": False` in `DEFAULT_SETTINGS`, and a missing key reads as `false` in `form_values`. So older settings, presets and History loads come in unticked. There is no schema bump: the key is optional, as `open_report` was.
+   - **Run form,** Security and simulation, the Report line: two checkboxes, "HTML file" (unticked) and "open when done". "open when done" is off while "HTML file" is unticked, with the tooltip "No HTML report". Both are off without a simulation, and both are off for PSS®E, which always writes and opens its report; the form then sends `true` for both, as it does for `open_report` now.
+   - **Batch dialog:** the runs keep the form's `html_report`. "open its report" is off with the same tooltip while it is `false`.
+   - **`results_index.build_settings_from_record`** copies `html_report` from a script's record when the record has it.
+5. **A run's channel file** (`dynamics.find_channel_file(files)`): `files.channels` when it is there. For results kept before this phase, the name comes from `files.report` (`dynamic_channels_<now>.html` gives `output_andes_<now>.csv.gz`). The file must be in `files.output_path`; otherwise the tab says it is gone.
+6. **`dynamics.py`,** which draws nothing:
+   - **Reading.** `read_channels(path, kinds)` reads only the columns of the quantities asked for (`usecols`) with pandas. The tab calls it through `nicegui.run.io_bound` under a `theme.Cover` ("Reading the simulation's channels …"), so the event loop is never blocked. Nothing large is kept between reads: a read is fast, and a later view reads again. pandas and numpy are installed for the simulation scripts; they are the phase's only new imports.
+   - **Units.** Frequency in Hz (`60 · (1 + FREQ)`), voltage in pu, and P and Q in MW and Mvar. The base MVA is SBASE in the first record of the run's RAW (`files.raw`), or 100 MVA when the RAW is gone.
+   - **Channels.** The bus number, name and kV come from each channel's name (`FREQ 3005 [NAME 138.000]`, `POWR 9[NAME 13.800]1`). A bus whose voltage is 0 after the trip was de-energized: the script sets its voltage and its frequency deviation to 0 then. It is left out of the curves and the statistics, and the tab says how many buses that is.
+   - **Statistics.**
+     - Frequency, from the trip on as in `frequency_stats.json`: the nadir and the peak (Hz, bus, time), how many buses go below 59 and 57 Hz and above 60.5 and 61.8 Hz (the report's thresholds), and the five buses with the largest deviation from 60 Hz. The report takes these over the whole run, so a case that swings before the trip can differ there; the tab follows `frequency_stats.json`.
+     - Voltage: `report.build_voltage_stats_json`, imported from `runners/andes_scripts/report.py` by its path, so the tab and `voltage_stats.json` never disagree. It gives the minimum and the maximum (pu, bus, time), the buses outside 0.9–1.1 pu, the five with the largest violation, and WTVSI with its top buses. Give it the PLOD channels' buses as `load_buses` (it returns zeros without any), the trip time as `t0` (`frequency_simulation.event_time_s`, or 5 s for results kept before it), and the last sample's time as `t_end`. The script passes `SIM_END_TIME` there, so the two WTVSI agree only for a simulation that did not stop early.
+   - **Thinning.** At most `MAX_POINTS` points per curve (about 600). They are chosen so that each stretch of time keeps its lowest and its highest value, so a nadir or a peak is never cut off. At most `MAX_CURVES` curves are drawn at once (about 60). Check whether ECharts' own `sampling` thins before or after the data crosses the websocket; if after, it does not replace this.
+   - **Chart options** (`build_chart`), built as `compare.py` builds its charts:
+     - time on x, with a line at the trip;
+     - on the frequency chart, the report's lines: 57 and 61.8 Hz in red, 59 and 60.5 Hz in amber, and the UFLS stages 59.5, 59.3 and 59.1 Hz dotted;
+     - on the voltage chart, the 0.9–1.1 pu band;
+     - no legend: a curve's tooltip names its bus and the bus's name, and the hovered curve comes forward.
+7. **The Dynamics tab** (`components/dynamics_view.py`), after Voltage in `TAB_LABELS`:
+   - **Controls on one line:**
+     - Quantity, a `ui.select` of frequency, voltage, generator P, generator Q, load P and load Q;
+     - Where: all buses, or, with a target zone or area, "zone X" and "outside zone X" from `summary["target"]`;
+     - Buses, a text field read by `advanced.where.parse_buses`, in the format the Network page's Picked Buses gives.
+   - **Which curves.**
+     - Without Buses: the curves of the chosen side, those that move most first, up to `MAX_CURVES`, with a line saying how many are not drawn.
+     - Voltage shows only the buses that leave 0.9–1.1 pu, as the report does, unless the checkbox "all buses" is ticked.
+     - With Buses: exactly those buses. A number with no channel of that quantity is named in a line.
+   - **Statistics.** Beside the frequency and the voltage charts, as `theme.facts` and a `theme.data_table`, as the report shows them under its charts. The P and Q charts have none.
+   - **A sentence in place of the chart** when:
+     - the simulation is still running (the run's first `@@result`), with the turning ring;
+     - the run used PSS®E, with Open report;
+     - a run kept before this phase has no report to take the name from, or the channel file is gone, with Open report when there is a report.
+
+     The tab is hidden when the run had no simulation.
+   - **Keeping state.** The tab reads again when it shows another run, and keeps the controls' choices across runs. It keeps what did not change when it is read again ("Look").
+8. **Where a report was taken for granted.** With `files.report` null on an ANDES run whose `html_report` was `false`:
+   - the Summary's Report fact says "not written (HTML file unticked)";
+   - the line shown during the simulation does not say the report comes when it ends;
+   - Open report stays off in the results panel, the runs table and History, as it already does for a null report;
+   - History's "Only with a report" leaves the run out.
+
+   The Files tab lists the channel file as "Channels".
+9. **Contracts and `CLAUDE.md`.**
+   - **Contracts:** `html_report` goes into "Settings schema v1", `html_report` and `files.channels` into "Per-run settings file", and `files.channels` into "Result summary". The Run page layout sketch gets the Dynamics tab.
+   - **`CLAUDE.md`:** the Julia ↔ Python contract gets `--no-html` and `files.channels`, and the GUI paragraph gets the Dynamics tab and the HTML box.
+
+**Done when:**
+- **Numbers.** On fresh ANDES runs of savnw and ACTIVSg500 with frequency and voltage security, the tab's voltage statistics and WTVSI equal that run's `voltage_stats.json`. Its frequency nadir and peak equal the extremes of `frequency_stats.json` over the same buses.
+- **Curves.** One bus's curves in the tab match the same channels in the HTML report of a run with the box ticked: frequency in Hz, and P and Q at the report's values times the base MVA.
+- **A reused folder.** In a folder with two runs, Load into Run of the older run shows its own curves, not the newer run's.
+- **An older run.** A run kept before this phase shows its curves through the name of its report.
+- **The box.**
+  - A GUI run with the box unticked writes no HTML and records `html_report: false`. Its report buttons are off, and "Only with a report" leaves it out.
+  - Ticked, the run writes and opens its report as before.
+  - A preset from before this phase comes in unticked.
+  - An `islanding.jl` run (temporary copy, `gui_test_ref`) still writes and opens its HTML.
+- **Speed.** On ACTIVSg500 the tab draws within about two seconds of being shown, a change of quantity stays responsive, and the page does not lag with the curves on show.
+- **PSS®E.** The tab shows its sentence, and Open report opens the PSS®E report.
+
+**Out of scope:**
+- the curves of several runs on the Compare page (phase 14);
+- the HTML report's P and Q axes, which are in pu under MW titles (in `report.py`; ask the user);
+- statistics the report does not show;
+- PSS®E's `.out` channels.
+
+## Phase 14: Compare: curves of several runs
+
+**Goal.** The dynamic response of the runs on the Compare page on one chart, so the trade-off of "How much preparation is enough" shows in the curves and not only in the nadir.
+
+**Read first:** phase 13's notes and `dynamics.py`; `comparison.py` and `pages/compare.py`.
+
+**Files:** `runners/gui/comparison.py`, `pages/compare.py`, `dynamics.py`, `theme.css`.
+
+**Steps:**
+1. **A section "Dynamic response"** under the trade-off charts, with two controls:
+   - Quantity, a toggle of frequency and voltage;
+   - What: a bus number, or the extreme of a side when the runs share a target ("lowest in zone X", "lowest outside zone X"; for the frequency of a side that exports, the highest). The extreme is taken over the side's buses at each moment, so the lowest point of the "lowest in zone X" curve is that side's simulated nadir.
+2. **One curve per run,** in the colours of `GROUP_COLORS`, named as the run's column and listed in a legend, for at most eight runs. Runs that cannot be drawn are listed under the chart with the reason: another case, no channel file (PSS®E, no simulation, an older run without a report), no channel for that bus, or a ninth run and later.
+3. **Reading.** Each run's channel file is read through `dynamics.read_channels` in `run.io_bound`, one run after another, under a Cover that says which run it reads. It is read again when the runs or the choice change.
+
+**Done when:**
+- Four runs of an ACTIVSg500 batch (paired penalties) show their target side's frequency on one chart.
+- The lowest point of each curve equals that run's simulated nadir in the Frequency rows.
+- A PSS®E run and a run of another case are listed as not drawn.
+
+**Out of scope:** the P and Q of generators and loads, and rows of statistics from the channels on the Compare page; ask the user.
 
 ---
 
@@ -2125,7 +2254,121 @@ Test folders added: `ACTIVSg500_flow_shed_gui_test_q_spartanb_pen2.5-0.7`, `_spa
 **Network page: generator buses and right click (2026-11-23), at the user's request:** "in mode where buses are set to zone/area ... differentiate between their colors. keep the colors close though ... when I right click on a bus or on a line, it should add it's bus pair or bus number in a text box in copy paste ready format, in a format of bus pair input that run page accepts".
 
 *What changed:*
-- **Generator buses.** Coloured by zone or area, a bus with a generator (a square) has its group's colour with its lightness times 0.72 (`GEN_SHADE` = 0.28, `shade_color` in `network_view.py`). Hue and saturation stay, so the square stays in its group's colour and the groups stay apart: ΔE 14 to 30 from its own group's colour, and at least 15.9 from every other group's colour, plain or darker (the closest is the darker orange against the darker red, the eighth group). Mixing towards ink instead greyed the colours and brought the groups closer. The legend says what a square is, and so does "How to use".
+- **Generator buses.** Coloured by zone or area (or with one colour, in a case without groups), a bus with a generator (a square) has its group's colour mixed a quarter of the way to `DARK_COLOR` (`GEN_SHADE` = 0.25 in `network_view.py`, the one number to change for more or less contrast). The square is ΔE 14 to 21 from its own group's colour, and at least 18.4 from every other group's colour, plain or darker. A first version kept hue and saturation and only lowered the lightness (to 0.72 of it): it was 14.5 to 30 from its own group (pink turned magenta) and 15.9 from the closest other group, so the mix is closer to its group and further from the others on both counts, at the price of slightly muted squares. The legend says what a square is, and so does "How to use".
 - **Right click.** `network_canvas.js` sends `context` for a right click on a bus or a line; on a circle or on nothing the browser keeps its own menu. Under Picked in the side panel, a line adds its bus pair to Bus pairs ("297-440, 23-386", as the Run form's bus pairs field reads it) and a bus its number to Buses ("111, 202", as the bus lists of Advanced and the Buses field read it). There are two fields because one text with both would be read by neither. An item already in its field is not added again. Each field can be edited, has Copy, and Clear empties both. Choosing another case empties them, since the numbers belong to the case. The selection does not change.
 
-*How it was verified* (test instance on 8090, ACTIVSg500 fitted; the user's GUI untouched): the squares stand apart from their group's circles at the fitted view. In Zone mode with a zone selected, a right click on bus 111 gave "111", on line 297-440 twice gave it once, on line 23-386 then gave "297-440, 23-386", and on a circle gave nothing; the selection stayed. Copy then Ctrl+V in the Run form's bus pairs field was taken without a problem. `parse_buses` and `parse_bus_pairs` read the two fields. No traceback in the app's output.
+*How it was verified* (test instance on 8090 after a hard reload, ACTIVSg500 fitted): the squares stand apart from their group's circles at the fitted view, with both shadings. In Zone mode with a zone selected, with the canvas's mouse events logged, a right click on bus 111 gave "111", on line 297-440 twice gave it once, on line 23-386 then gave "297-440, 23-386", and on the Midlands circle gave nothing; the selection stayed. Copy then Ctrl+V in the Run form's bus pairs field was taken without a problem. `parse_buses` and `parse_bus_pairs` read the two fields. No traceback in the app's output.
+
+*Not exercised:* choosing another case to empty the fields; savnw and a case without groups; pasting Buses into a bus list of Advanced in the app (the parser only); whether the browser's menu stays shut on a bus or a line (the extension's right click does not show it either way).
+
+*Seen and not explained:* during the first test, the test tab's Bus pairs field held "183-274" before any right click of the test; a right click where the tooltip had just shown line 220-471 added bus 202 instead; then zone Spartanb was selected and the Buses field emptied, none of it by the test. The log then showed mouse moves that were not the test's. Someone was likely using the test tab by hand, as in the queue round. The logged right clicks above are the evidence. Between the two test instances, `network_view.py` was reformatted on disk (a formatter, it seems) and the legend note shortened to "a square is a bus with a generator"; both were kept. The user's GUI on 8080 was running after the first test instance quit and was gone after the second; Quit stops only its own server and its own Julia, and both Quit clicks were in the 8090 tab.
+
+**Phase 13 (2026-11-23), with the HTML report's units fixed at the user's request:** "go for phase 13, and fix the html units too".
+
+*What changed:*
+- **ANDES script.** `andes_scripts/dynamic.py` takes `--no-html` (`NO_HTML_FLAG`) beside `--no-open`. With it the script writes everything as before except the HTML report, opens nothing, and says so: "HTML report not written (--no-html): the channels are in ...".
+- **The HTML report's units.** `report.py`'s `write_html_report` takes `base_mva` and plots POWR, VARS and PLOD times it (`POWER_UNITS`), so generator and load P are in MW and Q in MVar, as the titles always said. Before, those axes were in pu on the system base. The PSS®E script is frozen and keeps its own copy of the function.
+- **`run_islanding`.** It takes `html_report::Bool=true`, so script runs keep their report, and passes `--no-html` with `false` to the ANDES script only. `find_new_report` became `find_new_file(output_path, since, prefix, suffix)`, which finds both the report and the channel file. The settings file records `html_report` and `files.channels`.
+- **Worker.** `html_report` is an optional setting, and a missing key means `false`. `calc_files_summary` adds `channels`.
+- **Settings and forms.**
+  - `settings.py` has `"html_report": False`, and a missing key reads as `false`.
+  - The Run form's Report line has "HTML file" (unticked) and "open when done". "open when done" is off while "HTML file" is unticked. Both are off for PSS®E, which always writes and opens its report, so the form sends `true` for both, and both are off without a simulation. Each says why in its tooltip.
+  - The batch dialog's "open its report" is off while the form's `html_report` is `false`.
+  - `results_index.build_settings_from_record` copies `html_report` from a script's record.
+- **`dynamics.py`** (new, draws nothing):
+  - `find_channel_file` takes `files.channels`, or for results kept before, the name of the report, since both carry the script's stamp.
+  - `load_dynamics` reads one quantity and VOLT with `usecols`. It converts the units, with the base MVA from the RAW's first record, and finds the buses that lost power (`report.is_valid_voltage_profile`).
+  - `find_curves` chooses the curves to draw, `thin_curve` thins them, `calc_frequency_stats` and `calc_voltage_stats` compute the statistics (the voltage ones through `report.build_voltage_stats_json`, report.py loaded by its path), and `build_chart` and `build_view` make the chart.
+- **`components/dynamics_view.py`** (new) is the tab. It reads the file through `run.io_bound` under a Cover, and only once the tab is shown. A newer read or drawing drops an older one, and a tab the panel has rebuilt drops its own.
+- **`results_view.py`.**
+  - `TAB_LABELS` has Dynamics.
+  - `find_tabs` shows it when the summary's `frequency_simulation` or `ufls` is not null.
+  - `describe_report` gives the Summary's Report fact ("not written: HTML file unticked", "not written: no dynamic simulation", "written when the simulation ends").
+  - `describe_partial` names the curves, and the report only when one is written.
+  - The Files tab lists "Simulation channels", found through the report's name for older results. `open_file` takes the name.
+  - The panel keeps the tab's choices from run to run (`dynamics_choice`).
+- **`theme.css`** has the `dyn-*` classes. **`CLAUDE.md`** and **Contracts** (settings schema, per-run settings file, result summary, the layout sketch) say what is new.
+
+*Where it differs from the phase text:*
+- **Hover.** ECharts shows no item tooltip for a hovered line, and its `mouseover` event fires only when the pointer is within about a pixel of a 1.2 px line. A real pointer 2 px off named nothing. So a small script in the browser (`NAME_NEAREST_CURVE_JS` in `dynamics_view.py`, run with `ui.run_javascript` for each new chart) names the nearest curve. At each move of the pointer it finds the curve nearest the cursor at the cursor's time, within `NEAREST_CURVE_PX` (8 px), highlights it, and writes its name in bold above the chart's top right. A plain label has no Vue component, so the script finds it by its DOM id `ng-<id>`. A cross-hair gives the time and the value at the cursor in labels on the two axes.
+- **A sentence about the report.** The UFLS side's "no record" sentence adds "The simulation report may have it." only when the run has a report.
+- **plotly at start.** Importing `report.py` loads plotly when the app starts, about 2 s more. pandas and numpy were the only imports the phase named.
+- **Zoom.** Ctrl + wheel zooms the time and a drag moves it; a plain wheel scrolls the page. A "Whole time" button shows the whole simulation again. The phase text had neither.
+- **Size.** `MAX_POINTS` is 1000, not 600, so a zoomed curve keeps more detail. 60 ACTIVSg500 curves are about 0.9 MB.
+- **Statistics** follow Where (the side), not Buses.
+- **Dead buses.** The load P and Q curves of buses that lost power are kept, because their drop to 0 is the load the dead island loses. Only frequency and voltage leave those buses out.
+- **`parse_buses`** is in `advanced/where.py`; the phase text said `settings.py`.
+- **ECharts' own `sampling`.** NiceGUI's `echart.js` passes the whole options to `setOption` in the browser, so ECharts would thin the data only after it crossed the websocket. The thinning is in Python.
+- **A new chart at each change.** NiceGUI's `update_chart` merges new options into the old ones when the number of series stays the same, so old curves could linger.
+- **Table width.** The statistics tables put the bus and its name in one column so they fit the 480 px column beside the chart.
+
+*How it was verified:*
+- **Pure functions.** These were checked on the savnw run of 16:07 (kept with a report, before this phase), on `ACTIVSg500_flow_shed_spartanb` of 2026-11-21, and on the new runs below.
+  - The tab's minimum, maximum, buses outside the band and WTVSI equal each run's `voltage_stats.json`, and its nadir and peak equal `frequency_stats.json`. For example, on ACTIVSg500: 0.949 pu at bus 142, 1.103 pu at bus 410, 5 of 484, WTVSI 0.000005, nadir 59.537 Hz at bus 438, peak 60.327 Hz at bus 144.
+  - On the GUI run they also equal the Frequency tab's simulated island values: 59.615 Hz at bus 206 and 60.223 Hz at bus 3018.
+  - ACTIVSg500 reads in 0.47 s and its frequency view takes 0.11 s.
+- **Worker** (`send_jobs.py`, three jobs):
+  - savnw with HTML off and "open when done" on wrote no report and opened nothing. Its record has `html_report: false` and `files.channels`.
+  - savnw with HTML on and "open when done" off wrote the report without opening it, in the same folder. Each of the two runs names its own channel file.
+  - ACTIVSg500 with HTML off wrote no report.
+- **Script.** A temporary copy of `islanding.jl` (`gui_test_ref`, with `open_report=false` so no browser tab opened) wrote its HTML, and its record has `html_report: true`.
+- **HTML units.** POWR 211 in the new report starts at 616.25 MW, where the channel file holds 6.1625 pu.
+- **Test instance on 8090:**
+  - The savnw run of 16:07, loaded from History, found its channels through its report's name.
+  - On ACTIVSg500 the tab drew 60 curves 1.3 s after the click, with notes on the 16 buses that lost power and on the 60 of 484 drawn.
+  - Voltage showed the 5 buses outside the band. The buses typed "142, 410, 438, 99999" gave three curves with a legend and "No bus voltage at bus 99999.".
+  - Generator P outside the zone showed in MW, with no statistics.
+  - With the browser's own pointer (its positions corrected for the tool's 2.3 % scale, and read back from the page), the curve was named 5 px from its line ("bus 211 HYDRO_G") and nothing 20 px away.
+  - A real wheel without Ctrl scrolled the page and left the zoom alone. A real drag moved a 20–60 % window to 30–70 %, and Whole time undid a zoom to 20–60 %.
+  - History's "Only with a report" left out the two runs without HTML, and their REPORT column reads "–". The Summary says "not written: HTML file unticked", with Open report off.
+  - In a live GUI run with HTML off: while the simulation ran, the line over the tabs said "UFLS shed, simulated frequency and curves come when it ends", and the tab said its curves would come, with the turning ring. The final results drew the tab without a click.
+  - The form's boxes: at the start "HTML file" is unticked and "open when done" off. Ticking "HTML file" turns "open when done" on. PSS®E greys both. Back on ANDES with "HTML file" unticked, "open when done" is off again.
+  - A preset or older settings without the key come in unticked (pure check).
+- **Console.** No traceback in the three test instances' logs.
+
+*Seen and not explained:*
+- Once, a chart's time axis was zoomed to 8.5–18 s, although the test had not zoomed it.
+- Later, the Quantity list of the test tab changed twice (Bus voltage, then Load Q) with its list open, with no action of the test.
+
+As in earlier rounds, the test tab is in the user's own Chrome, and a hand on it is the likely cause. The later checks were made in a second tab of the test and from code.
+
+*Not exercised:*
+- a PSS®E run (its sentence was checked as a pure function);
+- a simulation that stops early (WTVSI then differs from `voltage_stats.json`, whose script divides by the planned 25 s);
+- a channel file that cannot be read;
+- the batch dialog's "open its report" in the app (read, not clicked);
+- Ctrl + wheel zooming (the browser tool's wheel has no Ctrl). The zoom was set from code, and a drag and Whole time were checked from there.
+
+Test folders added: two runs in the older test folder `savnw_flow_shed_gui_test_dyn`, `savnw_flow_shed_gui_test_dyn_gui`, `ACTIVSg500_flow_shed_gui_test_dyn`, and one run in `ACTIVSg500_flow_shed_gui_test_ref`.
+
+**Dynamics tab round (2026-11-23), at the user's request, after phase 13:** "zoom be like plotly, drag on a vertical line show that vertical section, same for horiz, if drag is like rect, show the section in the rect ... double click on the chart to reset the axis ... connect table row to the chart next to it ... add a all buses checkbox for frequency as well ... I don't see thresholds (UFLS and frqtpat) in frequency charts. we want them."
+
+*What changed (`dynamics.py`, `components/dynamics_view.py`, `theme.css`; nothing in Julia or in what a run writes):*
+- **Zoom as Plotly.** A drag in the chart draws a box (`.dyn-zoom-box`, the accent faint) and zooms what it covers. A drag across, under `MIN_DRAG_PX` (8 px) up or down, zooms the time only. A drag up or down, under 8 px across, zooms the values only. A box zooms both. A double-click shows the whole chart again. A click zooms nothing.
+  - The chart's two dataZoom components (0: time, 1: values, `PROGRAM_ZOOM`) take no mouse input themselves. The browser script `CHART_JS` moves them with `dispatchAction`.
+  - Ctrl + wheel zoom, the drag that moved the time, and the Whole time button are gone; double-click replaces the button.
+  - The numbers on the axes are rounded (`build_axis_labels`), since a zoom puts the edges at any value.
+  - ECharts listens to pointer events, and a pointerdown whose default is prevented (so no text is selected) fires no mouse events after it. So the drag follows `pointermove` and `pointerup` on the document. A first version listened to mouse events and never heard the end of a drag.
+- **A row of the statistics brings its curve forward.** Under the mouse, a row of the frequency, voltage or WTVSI table (its first cell starts with the bus number) highlights that bus's curve, pales the others and names it, as the nearest curve under the cursor does. The row gets the hover background. A bus whose curve is not drawn does nothing. The handlers are properties of the statistics box (`onmouseover`, `onmouseleave`), so each new chart replaces the last one's. A drawing without a chart clears them and the name (`CLEAR_JS`).
+- **"all buses" for frequency too.** For frequency and voltage, the box draws every bus of the chosen side, without the cap of 60 and, for voltage, with the buses inside 0.9–1.1 pu (`all_buses`, in place of `all_voltages`). The P and Q quantities still draw the 60 that move most. Many curves share a budget of `MAX_TOTAL_POINTS` (120,000 points, about 2 MB), with at least `MIN_POINTS` (200) each.
+- **Relay thresholds.** The fixed lines copied from the report (57, 59, 60.5, 61.8 Hz and the three UFLS stages) gave way to the thresholds of the relays in the run's `.dyr` (`<case>_<objective>.dyr` in the results folder, `read_relay_thresholds`). These are the LDSHBL stages (f1, f2 and f3) in amber, and the FRQTPAT trips (FL and FU) in red. A FRQTPAT threshold outside 48–72 Hz never acts (the cases write FL 20 and FU 90) and is left out.
+  - Each line is named at its right end: "UFLS 59.3", "gen trip 61.8", "UFLS, gen trip 59.5".
+  - The y axis is widened to show every line (`build_value_axis_range`, JavaScript `min` and `max`), since lines outside the curves' range do not widen it themselves. That was why they were not seen.
+  - The sentence under the chart names only the kinds of relay the case has.
+  - savnw has 57.8, 59.1, 59.3, 59.5, 60.5 and 61.8 Hz; ACTIVSg500 has the three UFLS stages and no FRQTPAT.
+  - The frequency statistics still count the report's thresholds (59, 57, 60.5 and 61.8 Hz).
+
+*How it was verified* (test instance on 8090, in a tab of the test's own; positions read from the page):
+- **Pure functions.** The thresholds of both cases are as above. savnw's axis runs 57.75–61.85 Hz. "all buses" on ACTIVSg500 frequency makes 484 curves of 218 points, 2.15 MB, in 0.54 s, against 60 curves and 0.91 MB without it.
+- **In the app, on the savnw run of 19:39:**
+  - The relay lines with their labels showed, and the axis ran 57.75–61.85 Hz.
+  - A real drag across from 5 to 15 s gave 5.01–14.99 s with the values unchanged.
+  - A drag down from 60.3 to 59.5 Hz then gave 59.498–60.3 Hz, with the time kept.
+  - A double-click gave back 0–25 s and 57.75–61.85 Hz.
+  - A box zoomed both axes.
+  - A click changed nothing and selected no text.
+  - The row "205 SUB230" named "bus 205 SUB230" and paled the other curves.
+- **In the app, on the ACTIVSg500 run of 19:32:** ticking "all buses" drew 484 curves 1.9 s after the click. A zoom's edges read 60.099, 59.451, 5.12 and 12.99. Naming the nearest of 484 curves takes about 15 ms per move of the pointer.
+- **Console.** No traceback in the test instances' logs.
+
+*Not exercised:* a drag that leaves the chart before it ends (the document's `pointerup` ends it, clamped to the grid; read, not run); a case without relays (its sentence was checked as a pure function).

@@ -2,15 +2,17 @@
 ANDES dynamic simulation of a solved islanding case, the open-source counterpart of
 psse_scripts/dynamic.py with the same command line and outputs:
 
-    python dynamic.py <raw> <dyr> <excel> [--no-open]
+    python dynamic.py <raw> <dyr> <excel> [--no-open] [--no-html]
 
 `--no-open` writes the report without opening it in the browser (the GUI's "open when done" box).
+`--no-html` writes no HTML report at all (the GUI's "HTML file" box unticked; the GUI shows the
+channels itself); everything else is written as before.
 
 Loads the case exported by PowerModels, solves the power flow, trips the lines listed in
 line_outage.json at EVENT_TIME, runs to SIM_END_TIME and writes into the case folder the power
 flow report (andes_res_*.xlsx), the channels (output_andes_*.csv.gz), voltage_stats.json, the
 UFLS shed record (ufls_shed.json) and each bus's frequency extremes (frequency_stats.json), both
-read by the GUI worker, the Plotly HTML report and the ANDES
+read by the GUI worker, the Plotly HTML report (unless --no-html) and the ANDES
 log. An area study (run_info.json "group_kind") reports the UFLS shed by area, any other study by
 zone.
 
@@ -52,6 +54,7 @@ SIM_END_TIME = 25.0  # s
 TIME_STEP = 1 / 120  # s, half a cycle as in PSS®E (the ANDES default of 1/30 s is too coarse for relays)
 TIME_COL = "Time(s)"
 NO_OPEN_FLAG = "--no-open"  # on the command line: write the report, do not open it in the browser
+NO_HTML_FLAG = "--no-html"  # on the command line: write no HTML report (and so open none)
 NOMINAL_FREQUENCY = 60.0  # Hz, the FREQ channels are deviations from it in pu (report.py's base_freq)
 
 
@@ -240,9 +243,10 @@ def calc_bus_mismatches(ss):
 print("-- Starting ANDES dynamic simulation script...")
 print(f"-- Python version: {sys.version.split()[0]}  executable: {sys.executable}  ANDES: {andes.__version__}")
 
-# case file paths, then the flag (the dyr path may be an empty argument: no dynamic data)
-file_arguments = [argument for argument in sys.argv[1:] if argument != NO_OPEN_FLAG]
-open_report = NO_OPEN_FLAG not in sys.argv[1:]
+# case file paths, then the flags (the dyr path may be an empty argument: no dynamic data)
+file_arguments = [argument for argument in sys.argv[1:] if argument not in (NO_OPEN_FLAG, NO_HTML_FLAG)]
+write_html = NO_HTML_FLAG not in sys.argv[1:]
+open_report = write_html and NO_OPEN_FLAG not in sys.argv[1:]
 try:
     raw_file_pth = file_arguments[0]
     dyr_file_pth = file_arguments[1]
@@ -598,18 +602,22 @@ df.to_csv(output_file, index=False, float_format="%.6g")
 voltage_stats = build_voltage_stats_json(df, TIME_COL, load_bus_numbers, EVENT_TIME, SIM_END_TIME)
 write_voltage_stats_json(output_dir, voltage_stats)
 
-print("-- Plotting dynamic simulation channels...")
-plots_path = write_html_report(
-    df,
-    output_dir,
-    now,
-    voltage_stats["wtvsi"],
-    ufls_total_p_mw=ufls_total_p_mw,
-    simulator="ANDES",
-    ufls_by_group=ufls_by_group,
-)
+if write_html:
+    print("-- Plotting dynamic simulation channels...")
+    plots_path = write_html_report(
+        df,
+        output_dir,
+        now,
+        voltage_stats["wtvsi"],
+        ss.config.mva,
+        ufls_total_p_mw=ufls_total_p_mw,
+        simulator="ANDES",
+        ufls_by_group=ufls_by_group,
+    )
 output_time = time.perf_counter() - output_start  # s, channels, CSV, voltage stats and HTML report
-if open_report:
+if not write_html:
+    print(f"-- HTML report not written ({NO_HTML_FLAG}): the channels are in {output_file}")
+elif open_report:
     webbrowser.open(plots_path.resolve().as_uri())
     print(f"-- Interactive Plotly page opened: {plots_path}")
 else:

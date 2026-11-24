@@ -468,6 +468,7 @@ def build_settings_from_record(record, case, load_buses):
         "run_dynamic_sim": bool(record.get("run_dynamic_sim")),
         "simulator": record.get("simulator") or run_settings["simulator"],
         "open_report": record.get("open_report", True),         # recorded since 2026-11-21
+        "html_report": record.get("html_report", False),        # recorded since 2026-11-23; unticked before, as the GUI's default
         "output_tag": record.get("output_tag") or "",
         "modifications": {},
     })

@@ -256,9 +256,13 @@ class RunForm:
                         {name: SIMULATOR_LABELS[name] for name in SIMULATORS}, value="andes", on_change=self._changed
                     )
                     theme.label("Report")
-                    self.open_report = ui.checkbox("open when done", value=True)
-                    with self.open_report:
-                        self.open_report_tooltip = ui.tooltip()
+                    with theme.line():
+                        self.html_report = ui.checkbox("HTML file", value=False, on_change=self._changed)
+                        with self.html_report:
+                            self.html_report_tooltip = ui.tooltip()     # why it is off, when it is
+                        self.open_report = ui.checkbox("open when done", value=True)
+                        with self.open_report:
+                            self.open_report_tooltip = ui.tooltip()     # why it is off, when it is
                     theme.label("Output tag")
                     self.output_tag = ui.input(placeholder="none").tooltip("Added to the name of the results folder")
                 self.dyr_message = theme.hint()
@@ -580,9 +584,9 @@ class RunForm:
             "voltage_security": self.voltage_security.value,
             "run_dynamic_sim": self.run_dynamic_sim.value,
             "simulator": self.simulator.value,
-            "open_report": (
-                self.open_report.value if self.open_report.enabled else True
-            ),  # greyed: PSS®E opens it anyway, or no report
+            # PSS®E always writes and opens its report; without a simulation there is none
+            "open_report": self.open_report.value if self._is_andes_run() else True,
+            "html_report": self.html_report.value if self._is_andes_run() else self._is_psse_run(),
             "output_tag": self.output_tag.value,
             "modifications": self.modifications,
         }
@@ -646,6 +650,7 @@ class RunForm:
             self.run_dynamic_sim.set_value(values["run_dynamic_sim"])
             self.simulator.set_value(values["simulator"])
             self.open_report.set_value(values["open_report"])
+            self.html_report.set_value(values["html_report"])
             self.output_tag.set_value(values["output_tag"])
             self.modifications = values["modifications"]
         finally:
@@ -821,10 +826,29 @@ class RunForm:
             self.dyr_message.text = ""
         self.simulator.set_enabled(bool(self.run_dynamic_sim.value))
 
-        # only the ANDES script can leave its report closed
+        # only the ANDES script can leave its report unwritten or closed
         if not self.run_dynamic_sim.value:
-            self.open_report_tooltip.text = "No dynamic simulation, so no report"
-        self.open_report.set_enabled(bool(self.run_dynamic_sim.value) and self.simulator.value == "andes")
+            html_off_reason = open_off_reason = "No dynamic simulation, so no report"
+        elif not self._is_andes_run():
+            html_off_reason = open_off_reason = "PSS®E always writes and opens its report"
+        else:
+            html_off_reason = ""
+            open_off_reason = "" if self.html_report.value else "No HTML report"
+        self._show_off_reason(self.html_report, self.html_report_tooltip, html_off_reason)
+        self._show_off_reason(self.open_report, self.open_report_tooltip, open_off_reason)
+
+    def _is_andes_run(self):
+        return bool(self.run_dynamic_sim.value) and self.simulator.value == "andes"
+
+    def _is_psse_run(self):
+        return bool(self.run_dynamic_sim.value) and self.simulator.value == "psse"
+
+    @staticmethod
+    def _show_off_reason(checkbox, tooltip, reason):
+        """A checkbox on, or off with the reason in its tooltip."""
+        checkbox.set_enabled(not reason)
+        tooltip.text = reason
+        tooltip.set_visibility(bool(reason))
 
 
 # ==================== The page ====================

@@ -31,6 +31,7 @@ keyword_map = {
     "VOLT": {"title": "Bus Voltage (pu)", "yaxis": "Voltage (pu)"},
     "PLOD": {"title": "Load Active Power (MW)", "yaxis": "Load P (MW)"},
 }
+POWER_UNITS = {"POWR": "MW", "VARS": "MVar", "PLOD": "MW"}  # channels in pu on the system base, plotted in these units
 SHOW_SIGNAL_STATS = True
 SIGNAL_STATS_KEYWORDS = {"FREQ", "VOLT"}
 SIGNAL_STATS_TOP_N = 5
@@ -588,11 +589,14 @@ def build_signal_stats_html(keyword, plotted_series, wtvsi_summary=None):
     return ""
 
 
-def write_html_report(df, output_dir, now, wtvsi_summary, ufls_total_p_mw=None, simulator=None, ufls_by_group=None):
+def write_html_report(
+    df, output_dir, now, wtvsi_summary, base_mva, ufls_total_p_mw=None, simulator=None, ufls_by_group=None
+):
     """
     Plot the FREQ, VOLT, POWR, VARS and PLOD channels of `df` with their stats into
     `dynamic_channels_<now>.html` in `output_dir`, under a header with the run information and
-    the UFLS shed (in total and `ufls_by_group`). Returns the file path.
+    the UFLS shed (in total and `ufls_by_group`). FREQ is plotted in Hz, and POWR, VARS and PLOD
+    (pu on the system base) in MW and MVar with `base_mva`. Returns the file path.
     """
     plot_blocks = []
     plot_count = 0
@@ -623,6 +627,9 @@ def write_html_report(df, output_dir, now, wtvsi_summary, ufls_total_p_mw=None, 
                 if keyword == "FREQ":
                     series_to_plot = base_freq * (df[col] + 1.0)
                     hover_value_fmt = "%{y:.4f} Hz"
+                if keyword in POWER_UNITS:
+                    series_to_plot = base_mva * df[col]
+                    hover_value_fmt = "%{y:.2f} " + POWER_UNITS[keyword]
 
                 if SHOW_SIGNAL_STATS and keyword in SIGNAL_STATS_KEYWORDS:
                     plotted_series.append({"name": col, "values": series_to_plot, "time": df[time_col]})

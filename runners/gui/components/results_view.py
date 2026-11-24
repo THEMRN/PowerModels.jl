@@ -5,8 +5,9 @@ loaded from History, whose summary the worker kept in its results folder (`resul
 
 The summary is in MW and Mvar, already rounded as the console prints, so the panel shows its
 numbers as they are. Tabs: Summary, Generation, Load shedding, Boundary flows, Frequency,
-Voltage and Files; a tab whose part the run does not have (a security check that was off) is
-left out. Load shedding is always there, in two sides: the shed of the optimization before the
+Voltage, Dynamics and Files; a tab whose part the run does not have (a security check, or the
+dynamic simulation, that was off) is left out. Dynamics draws the simulation's curves from the
+run's channel file (components/dynamics_view.py), read only once the tab is shown. Load shedding is always there, in two sides: the shed of the optimization before the
 event and the UFLS relays' shed in the dynamic simulation after it, each with a sentence in its
 place when the run has none. "Results of" switches between the runs: the session's, then those
 loaded from History into this browser tab; Clear empties the panel.
@@ -27,7 +28,9 @@ from pathlib import Path
 from nicegui import ui
 
 import advanced
+import dynamics
 import theme
+from components.dynamics_view import DynamicsView, find_default_choice
 from components.voltage_details import VoltageDetailsDialog, describe_size, name_islands
 
 # ==================== Settings ====================
@@ -38,12 +41,14 @@ TAB_LABELS = {  # tab -> its title, in the order shown
     "boundary_flows": "Boundary flows",
     "frequency": "Frequency",
     "voltage": "Voltage",
+    "dynamics": "Dynamics",
     "files": "Files",
 }
 GROUP_LABELS = {"zone": "Zone", "area": "Area"}
 LIMIT_LABELS = {"rocof": "RoCoF", "qss": "QSS", "nadir": "nadir"}
 FILE_LABELS = {  # key in the summary's `files` -> what the file is
     "report": "Simulation report",
+    "channels": "Simulation channels",
     "excel": "Excel report",
     "raw": "Solved case (RAW)",
     "settings": "Run record",
@@ -83,9 +88,9 @@ def open_folder(files):
     open_path(files["output_path"])
 
 
-def open_file(files, key):
-    """Open one file of the run with the program Windows has for it; the report goes to the browser."""
-    open_path(Path(files["output_path"]) / files[key], in_browser=key == "report")
+def open_file(files, key, name):
+    """Open the file `name` of the run with the program Windows has for it; the report (`key`) goes to the browser."""
+    open_path(Path(files["output_path"]) / name, in_browser=key == "report")
 
 
 # ==================== The runs the panel shows ====================
@@ -122,6 +127,16 @@ def describe_run_name(record):
 
 
 # ==================== What a summary says ====================
+def writes_html_report(run_settings):
+    """
+    Whether a run's simulation writes an HTML report: PSS®E always, ANDES unless "HTML file" was
+    unticked. Settings from before the box have no `html_report`, and those runs wrote one.
+    """
+    if run_settings.get("simulator") == "psse":
+        return True
+    return bool(run_settings.get("html_report", True))
+
+
 def describe_partial(record):
     """
     (text, is_bad) of the line over the tabs of a run whose results are those of its solve only,
@@ -129,16 +144,28 @@ def describe_partial(record):
     """
     if not record.get("partial"):
         return "", False
+    report = writes_html_report(record["settings"])
     if record["status"] == "running":
-        return (
-            "The results of the solve. The dynamic simulation is running: its UFLS shed, simulated frequency and report come when it ends.",
-            False,
-        )
+        to_come = "UFLS shed, simulated frequency, curves and report" if report else "UFLS shed, simulated frequency and curves"
+        return f"The results of the solve. The dynamic simulation is running: its {to_come} come when it ends.", False
     ended = "was stopped" if record["status"] == "stopped" else "failed"
-    return (
-        f"The run {ended} during its dynamic simulation, so these are the results of the solve only: no UFLS shed, simulated frequency or report.",
-        True,
-    )
+    missing = "UFLS shed, simulated frequency, curves or report" if report else "UFLS shed, simulated frequency or curves"
+    return f"The run {ended} during its dynamic simulation, so these are the results of the solve only: no {missing}.", True
+
+
+def describe_report(record):
+    """What the Summary says of the run's HTML report: its name, or why there is none (yet)."""
+    files = record["summary"]["files"]
+    if files["report"]:
+        return files["report"]
+    run_settings = record["settings"]
+    if not run_settings.get("run_dynamic_sim"):
+        return "not written: no dynamic simulation"
+    if not writes_html_report(run_settings):
+        return "not written: HTML file unticked"
+    if record.get("partial") and record["status"] == "running":
+        return "written when the simulation ends"
+    return "not written"
 
 
 def describe_no_results(record):
@@ -180,10 +207,18 @@ def describe_run(record):
 def find_tabs(summary):
     """
     The tabs a summary fills, in order: a frequency or voltage part that is null (the check was
-    off) has no tab. Load shedding is always there, its sides saying when they have nothing.
+    off) has no tab, and Dynamics is there only when the dynamic simulation ran (its
+    `frequency_simulation` or `ufls` part is not null). Load shedding is always there, its sides
+    saying when they have nothing.
     """
-    optional = ("frequency", "voltage")
-    return [tab for tab in TAB_LABELS if tab not in optional or summary.get(tab) is not None]
+    tabs = []
+    for tab in TAB_LABELS:
+        if tab in ("frequency", "voltage") and summary.get(tab) is None:
+            continue
+        if tab == "dynamics" and summary.get("frequency_simulation") is None and summary.get("ufls") is None:
+            continue
+        tabs.append(tab)
+    return tabs
 
 
 def find_generation_table(summary):
@@ -288,7 +323,8 @@ def describe_missing_ufls(summary, running=True):
     if status == "not_reported":
         return "This run used PSS®E, whose script does not pass the UFLS shed to the GUI. The simulation report has it."
     if status == "no_record":
-        return "The simulation left no UFLS record (ufls_shed.json) in the results folder. The simulation report may have it."
+        report = " The simulation report may have it." if summary["files"].get("report") else ""
+        return "The simulation left no UFLS record (ufls_shed.json) in the results folder." + report
     if status == "no_relays":
         return "The case's .dyr file has no UFLS relays (LDSHBL), so the simulation could not shed load."
     if ufls["stages"] == 0:
@@ -466,9 +502,19 @@ def describe_nadir_sources(summary):
 
 
 def find_file_rows(summary):
-    """The run's files as [(key, what it is, file name or None)], the folder not among them."""
+    """
+    The run's files as [(key, what it is, file name or None)], the folder not among them. The
+    channel file of results kept before `files.channels` is found by its report's name.
+    """
     files = summary["files"]
-    return [(key, label, files.get(key)) for key, label in FILE_LABELS.items()]
+    rows = []
+    for key, label in FILE_LABELS.items():
+        name = files.get(key)
+        if key == "channels" and not name and files.get("report"):
+            path, _why = dynamics.find_channel_file(files)
+            name = None if path is None else path.name
+        rows.append((key, label, name))
+    return rows
 
 
 def describe_modifications(record):
@@ -515,6 +561,8 @@ class ResultsView:
         self.tab = "summary"  # the tab on show, kept from run to run
         self.only_shed = True  # the bus table lists only the buses that shed load
         self.only_ufls_shed = True  # the UFLS bus table lists only the buses where a relay acted
+        self.dynamics_choice = find_default_choice()  # the Dynamics tab's quantity, side, buses: kept from run to run
+        self.dynamics_view = None  # the Dynamics tab of the run on show, or None
         self.setting = False  # the selector is being set from code
         self.options = {}  # the runs the selector lists
         self.run_time = None  # label of the whole-run time, which comes after the results
@@ -626,6 +674,7 @@ class ResultsView:
     # -------------------- tabs --------------------
     def _build_body(self):
         self.run_time = None
+        self.dynamics_view = None
         record = self.find_shown()
         self.drawn = find_version(record)
         self.modified.text = "" if record is None else describe_modifications(record)
@@ -652,10 +701,14 @@ class ResultsView:
             for name in names:
                 with ui.tab_panel(name):
                     getattr(self, f"_build_{name}")(record)
+        if self.tab == "dynamics" and self.dynamics_view is not None:
+            self.dynamics_view.start()
 
     def _tab_changed(self, event):
         if event.value:
             self.tab = event.value
+        if event.value == "dynamics" and self.dynamics_view is not None:
+            self.dynamics_view.start()  # the channel file is read the first time the tab is shown
 
     def _build_summary(self, record):
         summary = record["summary"]
@@ -703,12 +756,7 @@ class ResultsView:
                 files = summary["files"]
                 with theme.facts():
                     theme.fact("Folder", Path(files["output_path"]).name).tooltip(files["output_path"])
-                    no_report = (
-                        "written when the simulation ends"
-                        if record.get("partial") and record["status"] == "running"
-                        else "not written"
-                    )
-                    theme.fact("Report", files["report"] or no_report).classes("" if files["report"] else "muted")
+                    theme.fact("Report", describe_report(record)).classes("" if files["report"] else "muted")
                 with theme.line():
                     report_button = theme.button("Open report", on_click=lambda: open_report(files))
                     report_button.set_enabled(bool(files["report"]))
@@ -905,6 +953,13 @@ class ResultsView:
                     "Each round: the islands' state, their largest indicators, the generators at a reactive limit and the sheds sized."
                 )
 
+    def _build_dynamics(self, record):
+        """The simulation's curves; the tab reads the channel file only once it is shown (`_tab_changed`)."""
+        files = record["summary"]["files"]
+        self.dynamics_view = DynamicsView(
+            record, self.dynamics_choice, running=record["status"] == "running", open_report=lambda: open_report(files)
+        )
+
     def _build_files(self, record):
         files = record["summary"]["files"]
         with ui.element("div").classes("tab-body"):
@@ -915,5 +970,7 @@ class ResultsView:
                 for key, label, name in find_file_rows(record["summary"]):
                     theme.fact_label(label)
                     ui.label(name or "not written").classes("file-name" if name else "fact-value muted")
-                    open_button = theme.button("Open", small=True, on_click=lambda key=key: open_file(files, key))
+                    open_button = theme.button(
+                        "Open", small=True, on_click=lambda key=key, name=name: open_file(files, key, name)
+                    )
                     open_button.set_enabled(bool(name))

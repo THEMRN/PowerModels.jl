@@ -35,6 +35,7 @@ DEFAULT_SETTINGS = {
     "run_dynamic_sim": True,
     "simulator": "andes",
     "open_report": True,                        # the ANDES script opens its report in the browser when done
+    "html_report": False,                       # the ANDES script writes its HTML report (the GUI shows the channels itself)
     "output_tag": "",
     "modifications": {},
 }
@@ -124,7 +125,7 @@ def build_settings(form):
     opf_model, flow_model, lambda, boundary_kind, boundary_name, bus_pairs_text, uniform (bool),
     uniform_value, penalty_rows ([{kind: "zone" | "area" | "bus", name, except, times_lambda}], in
     the form's order, which is the order they apply in), others,
-    frequency_security, voltage_security, run_dynamic_sim, simulator, open_report, output_tag, and
+    frequency_security, voltage_security, run_dynamic_sim, simulator, open_report, html_report, output_tag, and
     modifications (as in the settings: the advanced dialog keeps them in that shape).
 
     With uniform shedding the penalty rows and `others` are left out, because the run ignores them.
@@ -178,6 +179,7 @@ def build_settings(form):
         "run_dynamic_sim": bool(form["run_dynamic_sim"]),
         "simulator": form["simulator"],
         "open_report": bool(form["open_report"]),
+        "html_report": bool(form["html_report"]),
         "output_tag": str(form["output_tag"] or "").strip(),
         "modifications": clean_modifications(form.get("modifications")),
     }
@@ -217,6 +219,7 @@ def form_values(settings):
         "run_dynamic_sim": settings["run_dynamic_sim"],
         "simulator": settings["simulator"],
         "open_report": settings.get("open_report", True),       # settings from before the box opened the report
+        "html_report": settings.get("html_report", False),      # settings from before the box come in unticked
         "output_tag": settings.get("output_tag", ""),
         "modifications": clean_modifications(settings.get("modifications")),
     }
@@ -258,6 +261,8 @@ def validate(settings):
         problems.append("λ must be a positive number")
     if settings.get("voltage_security") and settings.get("opf_model") != "AC":
         problems.append("voltage security needs the AC model")
+    if not isinstance(settings.get("html_report", False), bool):
+        problems.append("html_report must be true or false")
 
     # boundary
     boundary = settings.get("boundary", {})
