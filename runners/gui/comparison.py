@@ -16,11 +16,16 @@ proposal's trade-off ("How much preparation is enough"):
   simulation delivered, the SFR model's the margin that was predicted;
 - the voltage margin is the indicator threshold minus the worst indicator of the predicted
   island state (voltage.jl); it does not come from the simulation.
+
+The dynamic response (gui_plan.md, phase 14) puts one curve per run on a chart: which runs can be
+drawn and why the others cannot, and which of a side's buses each run's curve follows, are
+decided here; the curves themselves are read by dynamics.load_run_curve.
 """
 
 from pathlib import Path
 
 import advanced
+import dynamics
 import results_index
 from components.results_view import (
     SOLVED_STATUSES,
@@ -30,12 +35,15 @@ from components.results_view import (
     find_frequency_names,
 )
 from julia_worker import call_listeners
+from network_view import GROUP_COLORS
 from settings import format_bus_pairs, upgrade_settings
 
 # ==================== Settings ====================
 NO_VALUE = "–"
 MARGIN_SOURCES = {"simulated": "simulated_hz", "predicted": "predicted_hz"}     # source -> the island's key in the summary
 SHED_TOLERANCE = 0.005          # MW, a group whose shed is below this in every run is left out of the tables by group
+CURVE_QUANTITIES = {"frequency": "Frequency", "voltage": "Voltage"}     # what the chart of the dynamic response shows
+MAX_CURVE_RUNS = len(GROUP_COLORS)  # runs on that chart, one group colour each (8)
 
 
 # ==================== The list ====================
@@ -455,3 +463,143 @@ def find_tradeoff(records, source="simulated"):
         "no_frequency": no_frequency,
         "no_voltage": no_voltage,
     }
+
+
+# ==================== The dynamic response ====================
+def find_curve_refusal(record, case=None):
+    """
+    Why a run's curve cannot go on the chart of the dynamic response, in a few words, or "" when
+    it can: the chart shows runs of one case (`case`, not checked when None) whose ANDES
+    simulation left a channel file.
+    """
+    run_settings = upgrade_settings(record["settings"])
+    files = record["summary"].get("files") or {}
+    run_case = Path(run_settings["case"]).name
+    if case is not None and run_case != case:
+        return f"another case ({run_case})"
+    if not run_settings.get("run_dynamic_sim"):
+        return "no dynamic simulation"
+    if run_settings.get("simulator") == "psse":
+        return "PSS®E, whose channels the GUI does not read"
+    path, _why = dynamics.find_channel_file(files)
+    if path is None:
+        if files.get("channels") or files.get("report"):
+            return "its channel file is not in the results folder any more"
+        return "kept before the GUI read the channels, with no report to name its channel file"
+    return ""
+
+
+def find_curve_names(records):
+    """
+    The name of each run on the chart, all different, since the legend tells the curves apart by
+    name: its column's title, with its tag when another run has the same title (runs from
+    History started in the same minute), and a number when they still match.
+    """
+    titles = [describe_title(record) for record in records]
+    names = []
+    for record, title in zip(records, titles):
+        names.append(title if titles.count(title) == 1 else f"{title} · {describe_subtitle(record)}")
+    unique, seen = [], {}
+    for name in names:
+        seen[name] = seen.get(name, 0) + 1
+        unique.append(name if names.count(name) == 1 else f"{name} ({seen[name]})")
+    return unique
+
+
+def find_curve_runs(records):
+    """
+    (drawn, not_drawn): the runs whose curves go on the chart, each {"record", "name", "color",
+    "path"} (`find_curve_names`, a group colour, its channel file), and the others as (name,
+    reason). The chart's case is that of the first run that could be drawn; at most
+    MAX_CURVE_RUNS runs are drawn, in the order of the page.
+    """
+    case = next((Path(record["settings"]["case"]).name for record in records if not find_curve_refusal(record)), None)
+    drawn, not_drawn = [], []
+    for record, name in zip(records, find_curve_names(records)):
+        reason = find_curve_refusal(record, case)
+        if not reason and len(drawn) >= MAX_CURVE_RUNS:
+            reason = f"the chart shows {MAX_CURVE_RUNS} runs at most"
+        if reason:
+            not_drawn.append((name, reason))
+            continue
+        path, _why = dynamics.find_channel_file(record["summary"]["files"])
+        drawn.append({"record": record, "name": name, "color": GROUP_COLORS[len(drawn)], "path": path})
+    return drawn, not_drawn
+
+
+def find_shared_target(records):
+    """
+    The target zone or area every run has, as the first run's summary has it ({"kind", "name",
+    "buses"}); None otherwise. Targets are the same when they hold the same buses: a zone's name
+    may be spelt as its record ("Spartanb") or as a script wrote it ("SPARTANB").
+    """
+    targets = set()
+    for record in records:
+        target = record["summary"].get("target")
+        if not target:
+            return None
+        targets.add((target["kind"], frozenset(target["buses"])))
+    if len(targets) != 1:
+        return None
+    return records[0]["summary"]["target"]
+
+
+def find_curve_places(target):
+    """The choices of Where, {key: name}: the inside and the outside of the runs' shared target, when they share one, then a bus."""
+    places = {}
+    if target:
+        group = f"{target['kind']} {target['name']}"
+        places["inside"] = group
+        places["outside"] = f"outside {group}"
+    places["bus"] = "a bus"
+    return places
+
+
+def find_side_extreme(summary, where, quantity):
+    """
+    Which of a side's buses a run's curve follows: "lowest", or "highest" for the frequency of a
+    side that exports in that run (it rises when the lines open). The side's islands with
+    frequency limits say which (a nadir in any of them makes it "lowest"); without them, the net
+    boundary flow does (positive leaving the target). Always "lowest" for voltage.
+    """
+    if quantity != "frequency" or where == "bus":
+        return "lowest"
+    target_buses = set(summary["target"]["buses"])
+    inside = where == "inside"
+    extremes = []
+    for island in summary.get("frequency") or []:
+        if island.get("extreme") and (island["island_bus"] in target_buses) == inside:
+            extremes.append(island["extreme"])
+    if extremes:
+        return "lowest" if "nadir" in extremes else "highest"
+    net_leaving = summary["boundary_flows"]["net"]["p_mw"]
+    exports = net_leaving > 0 if inside else net_leaving < 0
+    return "highest" if exports else "lowest"
+
+
+def describe_curves(quantity, where, places, bus_text, run_count, highest_runs, dead):
+    """
+    What each run's curve is, in a sentence or two: a bus's frequency or voltage, or the lowest
+    (the highest in `highest_runs`, of `run_count` runs drawn) of a side's buses at each moment.
+    `dead` says whether some run lost buses on that side, which are left out.
+    """
+    what = CURVE_QUANTITIES[quantity].lower()
+    if where == "bus":
+        return f"Each run's {what} at bus {bus_text}."
+    side = places[where] if where == "outside" else f"in {places[where]}"
+    if len(highest_runs) == run_count:
+        sentences = [
+            f"That side exports in every run, so each run's curve is the highest bus frequency {side} "
+            "at each moment, and its top is the run's simulated peak there."
+        ]
+    else:
+        lowest = f"Each run's curve is the lowest bus {what} {side} at each moment"
+        if quantity == "frequency":
+            lowest += ", so its lowest point is the run's simulated nadir there"
+        sentences = [lowest + "."]
+    if highest_runs and len(highest_runs) < run_count:
+        runs = ", ".join(highest_runs)
+        sentences.append(f"In {runs} that side exports, so the curve is its highest bus frequency and its top the simulated peak.")
+    if dead:
+        sentences.append("Buses left without power when the lines opened are left out.")
+    return " ".join(sentences)

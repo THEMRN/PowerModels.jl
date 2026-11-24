@@ -37,7 +37,7 @@ A local GUI for running islanding scenarios without editing code. It sets the ru
 | 11 | Network page | 2, 6 | done (2026-11-21) |
 | 12 | Presets (optional, ask the user first) | 6 | done (2026-11-21) |
 | 13 | Dynamic simulation in the app | 8, 10 | done (2026-11-23) |
-| 14 | Compare: curves of several runs | 13 | planned (2026-11-23) |
+| 14 | Compare: curves of several runs | 13 | done (2026-11-23) |
 
 Phases 2, 3 and 5 can run in any order once phase 1 is done. The GUI is usable for real runs after phase 6.
 
@@ -101,10 +101,10 @@ runners/gui/
   session_runs.py        the runs of this app session (settings, status, result), shared by all tabs
   run_queue.py           the runs that wait for the run in progress (RunQueue, ctx.queue): add, cancel, reorder, pause
   batch.py               a batch of runs as plain data: lists of values, every combination a run with its own tag
-  comparison.py          the runs on the Compare page (CompareList, ctx.compare) and what it says of them, without drawing
+  comparison.py          the runs on the Compare page (CompareList, ctx.compare) and what it says of them, without drawing; which runs its dynamic response draws (phase 14)
   settings.py            settings schema v1: defaults, form values <-> settings, validation, JSON files
   network_view.py        what the Network page shows, as plain data: values, colours, selection, boundary
-  dynamics.py            a run's channel file: reading it, its statistics, its curves as chart options, without drawing (phase 13)
+  dynamics.py            a run's channel file: reading it, its statistics, its curves as chart options, without drawing (phase 13); one curve per run for the Compare page (phase 14)
   theme.py               the look: element defaults, icons, building blocks (panel, sheet, Section, fields, button, State, FoldButton)
   theme.css              the look: colours and sizes as variables, the building blocks, Quasar without the Material look
   results_index.py       scans results/psse for the History page: rows, filters, settings from a script's record
@@ -2344,12 +2344,13 @@ Test folders added: two runs in the older test folder `savnw_flow_shed_gui_test_
 **Dynamics tab round (2026-11-23), at the user's request, after phase 13:** "zoom be like plotly, drag on a vertical line show that vertical section, same for horiz, if drag is like rect, show the section in the rect ... double click on the chart to reset the axis ... connect table row to the chart next to it ... add a all buses checkbox for frequency as well ... I don't see thresholds (UFLS and frqtpat) in frequency charts. we want them."
 
 *What changed (`dynamics.py`, `components/dynamics_view.py`, `theme.css`; nothing in Julia or in what a run writes):*
-- **Zoom as Plotly.** A drag in the chart draws a box (`.dyn-zoom-box`, the accent faint) and zooms what it covers. A drag across, under `MIN_DRAG_PX` (8 px) up or down, zooms the time only. A drag up or down, under 8 px across, zooms the values only. A box zooms both. A double-click shows the whole chart again. A click zooms nothing.
+- **Zoom as Plotly.** A drag in the chart greys what it will zoom (`.dyn-zoom-box`): a drag across, the time between two vertical lines over the whole height; a drag up or down, the values between two horizontal lines over the whole width; a box, the box. On release it zooms what it covered. A drag across, under `MIN_DRAG_PX` (8 px) up or down, zooms the time only. A drag up or down, under 8 px across, zooms the values only. A box zooms both. A double-click shows the whole chart again. A click zooms nothing.
   - The chart's two dataZoom components (0: time, 1: values, `PROGRAM_ZOOM`) take no mouse input themselves. The browser script `CHART_JS` moves them with `dispatchAction`.
   - Ctrl + wheel zoom, the drag that moved the time, and the Whole time button are gone; double-click replaces the button.
   - The numbers on the axes are rounded (`build_axis_labels`), since a zoom puts the edges at any value.
   - ECharts listens to pointer events, and a pointerdown whose default is prevented (so no text is selected) fires no mouse events after it. So the drag follows `pointermove` and `pointerup` on the document. A first version listened to mouse events and never heard the end of a drag.
-- **A row of the statistics brings its curve forward.** Under the mouse, a row of the frequency, voltage or WTVSI table (its first cell starts with the bus number) highlights that bus's curve, pales the others and names it, as the nearest curve under the cursor does. The row gets the hover background. A bus whose curve is not drawn does nothing. The handlers are properties of the statistics box (`onmouseover`, `onmouseleave`), so each new chart replaces the last one's. A drawing without a chart clears them and the name (`CLEAR_JS`).
+  - ECharts stops the moves of a drag that starts in the grid before they reach the document, so the document hears them in the capture phase. Before that the box moved only while the pointer was off the chart, and the user saw none (fixed 2026-11-23).
+- **A row of the statistics brings its curve forward.** Under the mouse, a row of the frequency, voltage or WTVSI table (its first cell starts with the bus number) shows that bus's curve alone, the others hidden, and names it (the nearest curve under the cursor only pales the others; the user asked for hidden on 2026-11-23). The row gets the hover background. A bus whose curve is not drawn does nothing. The handlers are properties of the statistics box (`onmouseover`, `onmouseleave`), so each new chart replaces the last one's. A drawing without a chart clears them and the name (`CLEAR_JS`).
 - **"all buses" for frequency too.** For frequency and voltage, the box draws every bus of the chosen side, without the cap of 60 and, for voltage, with the buses inside 0.9–1.1 pu (`all_buses`, in place of `all_voltages`). The P and Q quantities still draw the 60 that move most. Many curves share a budget of `MAX_TOTAL_POINTS` (120,000 points, about 2 MB), with at least `MIN_POINTS` (200) each.
 - **Relay thresholds.** The fixed lines copied from the report (57, 59, 60.5, 61.8 Hz and the three UFLS stages) gave way to the thresholds of the relays in the run's `.dyr` (`<case>_<objective>.dyr` in the results folder, `read_relay_thresholds`). These are the LDSHBL stages (f1, f2 and f3) in amber, and the FRQTPAT trips (FL and FU) in red. A FRQTPAT threshold outside 48–72 Hz never acts (the cases write FL 20 and FU 90) and is left out.
   - Each line is named at its right end: "UFLS 59.3", "gen trip 61.8", "UFLS, gen trip 59.5".
@@ -2372,3 +2373,69 @@ Test folders added: two runs in the older test folder `savnw_flow_shed_gui_test_
 - **Console.** No traceback in the test instances' logs.
 
 *Not exercised:* a drag that leaves the chart before it ends (the document's `pointerup` ends it, clamped to the grid; read, not run); a case without relays (its sentence was checked as a pure function).
+
+**Phase 14 (2026-11-23):** "go for the next phase".
+
+*What changed:*
+- **`dynamics.py`.**
+  - `build_chart` is split in two. `build_curve_series` makes one curve, and `build_chart_options` makes the axes, the zoom components and the lines. So the Compare page passes its own curves, and the Dynamics tab draws as before.
+  - `load_run_curve` reads one run's curve. That is a bus's frequency or voltage, or at each sample the lowest or the highest of the live buses on one side of the run's target. The extreme is taken over every sample before the curve is thinned, so the lowest point of a "lowest" curve is the side's simulated nadir.
+- **`comparison.py`** decides, without drawing:
+  - which runs are drawn (`find_curve_runs`, at most eight, in the group colours) and why the others are not (`find_curve_refusal`);
+  - whether the runs share a target (`find_shared_target`), by its buses and not its name, because one run spells the zone "SPARTANB" and another "Spartanb";
+  - the choices of Where (`find_curve_places`);
+  - whether a run's curve follows a side's lowest or highest bus (`find_side_extreme`). The side's islands with frequency limits decide this, and a nadir in any of them makes it the lowest. Without frequency security, the sign of the net boundary flow decides. Voltage always follows the lowest bus;
+  - the sentence above the chart (`describe_curves`).
+- **`pages/compare.py`.** A "Dynamic response" section sits under the trade-off charts.
+  - Its controls are Quantity (Frequency or Voltage), Where ("zone X", "outside zone X" or "a bus") and a bus number. Runs that share no target get only the bus field.
+  - The section reads nothing until the Trade-off tab has been shown. Then it reads the runs one after another through `run.io_bound`, under a Cover that names the run being read. It reads again when the runs or the choices change, and a newer read drops an older one.
+  - The chart has a legend of the runs. It also has the trip line, the relay lines of the first drawn run's `.dyr` for frequency (or the 0.9–1.1 pu band for voltage), and the Dynamics tab's zoom and curve naming (`CHART_JS`).
+  - The runs that are not drawn are listed under the chart, each with its reason.
+- **`CHART_JS`** (`components/dynamics_view.py`), which the Dynamics tab shares:
+  - A chart drawn while another page was shown now gets its zoom and naming. NiceGUI keeps such a chart, with its label, out of the document until its page is shown. The script used to find the chart but not the label, and stopped. It now waits until the chart is in the document, for as long as the chart is among NiceGUI's elements (`mounted_app.elements`). The Dynamics tab uses the same script, so a run that ends while the Run page is hidden should be covered too; that case was reasoned, not reproduced.
+  - A curve hidden through the legend is no longer named under the cursor (`legendselectchanged`).
+  - `build_script` takes no statistics box.
+- **`theme.css`** has `.curves-section`, `.curves-chart`, `.compare-bus` and `.curves-missing`.
+
+*Where it differs from the phase text:*
+- **Lines.** The chart draws the relay thresholds and the voltage band, as the Dynamics tab does, following the user's request of the last round that frequency charts show the thresholds.
+- **Lowest or highest, per run.** A side can import in one run and export in another, so each run follows its own direction. The sentence above the chart names the runs whose side exports. When every run exports, it says that each curve is the highest bus frequency.
+- **The case** is that of the first run that can be drawn, so a PSS®E run first on the page does not hide the others. The eight-run limit counts only runs that can be drawn.
+- **More reasons.** Besides those the phase text named, a run can be "kept before the GUI read the channels, with no report to name its channel file", or its channel file "could not be read".
+- **Names.** A curve is named as its run's column, but History names a run by the minute it started, and several runs often share one. The legend tells curves apart by name, so a repeated name gets the run's tag, and a number if it still repeats (`find_curve_names`).
+- **Where is kept.** When the runs on show share no target, Where shows only the bus field. The page keeps the choice made before, so runs that share a zone, added later, open on that zone again.
+- **Files.** `components/dynamics_view.py` changed as well, for `CHART_JS`.
+
+*How it was verified:*
+- **Pure functions, on kept runs.**
+  - savnw, zone SECOND: three runs from 19:30 to 19:39 have their lowest point inside the zone at 59.615 Hz and their highest outside it at 60.223 Hz. The run of 16:07 has 59.445 and 60.283 Hz. These are the runs' simulated nadirs and peaks in the Frequency rows.
+  - ACTIVSg500, zone SPARTANB, two older runs: 59.537 and 60.327 Hz, with the 6 and 10 buses that lost power left out. Each run reads in about 0.45 s.
+- **Four new ACTIVSg500 runs.** These were made with `send_jobs.py` from paired settings written by hand, not from the Batch dialog. Zone SPARTANB has penalties of 0.5, 1.5, 2.5 and 4 × λ, all other loads 2, 1.5, 1 and 0.5 × λ, with frequency security and ANDES, without HTML.
+  - Inside the zone, the curves' lowest points are 59.586, 59.576 and 59.569 Hz, equal to the simulated nadirs.
+  - In the run with 0.5 and 2 the zone exports, and its curve tops at 60.512 Hz, its simulated peak.
+  - Outside the zone, the peaks are 60.163, 60.201, 60.162 and 60.122 Hz.
+- **In the app** (test instance on 8090, in a tab of its own), seven runs were added from History:
+  - Five savnw runs were drawn. "2026-11-23 16:31: no dynamic simulation" and "2026-11-23 19:32: another case (ACTIVSg500)" were listed. The curves' lowest points read from the chart equal the nadirs above, and outside the zone each curve followed the highest bus.
+  - A drag across gave 5.70–11.37 s, and a double-click showed the whole chart again.
+  - On voltage outside the zone, the run of 16:06 falls to 0 pu at 11.59 s. That is in its file: its outside island collapsed (bus 154 reaches -0.004 pu), and its simulation stopped there.
+  - "a bus" with 3005 gave "Each run's voltage at bus 3005 WEST." With 99999, every run was listed with "no channel at bus 99999".
+  - The four new ACTIVSg500 runs showed on one chart, with the UFLS lines and the sentence naming the run of 20:24 as exporting.
+  - A box zoom gave 7.57–15.14 s and 59.450–59.914 Hz.
+  - With a run hidden through the legend, its curve was not named under the cursor. Shown again, it was.
+- **A redraw while the page was hidden.** A run was added from History while Compare was hidden. Before the fix, the chart came back with the new run but without zoom. After it, the zoom box was there and a box zoom worked.
+- **After the advisor's review** (a new test instance):
+  - With only a run without a simulation on the page, the section said "No run here has curves to draw." and listed that run. Two SPARTANB runs added after it opened on "zone SPARTANB".
+  - Adding a SPARTANB run kept on 2026-11-21, whose results have no target yet, left only the Bus field. Bus 438 then drew in all three runs ("Each run's frequency at bus 438 CHESNEE 2 10."), with the zoom.
+  - The two savnw runs that started at 16:06 showed as "2026-11-23 16:06 · gui_test_b2_pen1.6" and "2026-11-23 16:06 · gui_test_b2_pen0.8", in two colours.
+- **The Dynamics tab after the split** (the savnw run of 19:39): 23 curves, the trip line and six relay lines, the zoom, the row "205 SUB230" naming "bus 205 SUB230", and a drag up or down zooming the values to 58.76–60.96 Hz.
+- **Reasons, as pure functions:** PSS®E, no dynamic simulation, a channel file that is gone, and an older run with nothing to name its file. With ten runs, eight were drawn and two were listed as "the chart shows 8 runs at most".
+- **Console.** There was no traceback in the test instances' logs.
+
+*Not exercised:*
+- a GUI batch whose runs join the page as they finish (the redraw on a change of the list was exercised through Add to compare);
+- runs of the app session itself: every run on the page came from History;
+- a live PSS®E run (checked as a pure function);
+- a channel file that cannot be read;
+- a side made of several islands.
+
+Test folders added: `ACTIVSg500_flow_shed_gui_test_cmp_pen0.5-2`, `_pen1.5-1.5`, `_pen2.5-1` and `_pen4-0.5`.

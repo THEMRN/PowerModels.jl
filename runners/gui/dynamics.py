@@ -1,7 +1,8 @@
 """
 The dynamic simulation of one run as the Dynamics tab of the results panel shows it
 (gui_plan.md, phase 13), without drawing: where the run's channel file is, what is read from it,
-the curves to draw (thinned, as ECharts options) and the statistics beside them.
+the curves to draw (thinned, as ECharts options) and the statistics beside them. The Compare
+page takes one curve of each run from here too (`load_run_curve`, phase 14).
 
 The channel file is `output_andes_<stamp>.csv.gz`, written by andes_scripts/dynamic.py with
 PSS®E channel names and units: "Time(s)", then FREQ (deviation from 60 Hz, pu) and VOLT (pu)
@@ -674,36 +675,46 @@ def build_value_axis_range(data):
     return {":min": f"value => Math.min(value.min, {low})", ":max": f"value => Math.max(value.max, {high})"}
 
 
+def build_curve_series(name, color, times, values, digits, max_points, width=1.2):
+    """One curve of a chart: a thin line through its samples thinned for the browser (`thin_curve`), that comes forward when it is named."""
+    keep = thin_curve(values, max_points)
+    points = [[round(float(times[i]), 4), round(float(values[i]), digits)] for i in keep if np.isfinite(values[i])]
+    return {
+        "type": "line",
+        "name": name,
+        "data": points,
+        "showSymbol": False,
+        "symbolSize": 6,
+        "color": color,
+        "lineStyle": {"width": width},
+        "emphasis": {"focus": "series", "lineStyle": {"width": 2 * width}},     # the curve named under the mouse (dynamics_view.py)
+        "blur": {"lineStyle": {"opacity": 0.12}},
+    }
+
+
 def build_chart(data, positions, colors, show_legend):
-    """
-    The ECharts options of the curves at `positions`: time on x, the quantity on y (not from
-    zero, widened to the relay lines of a frequency chart), one thin line per curve, thinned for
-    the browser (`thin_curve`, fewer points each when many are drawn), and a cross-hair whose
-    labels give the time and the value at the cursor. The two dataZoom components take no mouse
-    input themselves: the tab zooms through them as Plotly does (a drag across, up or down, or a
-    box; a double-click goes back), and names the curve nearest the cursor (dynamics_view.py).
-    """
+    """The ECharts options of the curves at `positions` of what was read (`build_chart_options`), fewer points each when many are drawn."""
     quantity = QUANTITIES[data["quantity"]]
-    digits = quantity["digits"]
-    times = data["times"]
     points_per_curve = calc_points_per_curve(len(positions))
     series = []
     for position, color in zip(positions, colors):
-        values = data["values"][:, position]
-        keep = thin_curve(values, points_per_curve)
-        points = [[round(float(times[i]), 4), round(float(values[i]), digits)] for i in keep if np.isfinite(values[i])]
-        series.append({
-            "type": "line",
-            "name": describe_channel(data["channels"][position]),
-            "data": points,
-            "showSymbol": False,
-            "symbolSize": 6,
-            "color": color,
-            "lineStyle": {"width": 1.2},
-            "emphasis": {"focus": "series", "lineStyle": {"width": 2.4}},     # the curve the tab names (dynamics_view.py)
-            "blur": {"lineStyle": {"opacity": 0.12}},
-        })
-    series.append(build_guide_series(data))
+        name = describe_channel(data["channels"][position])
+        series.append(build_curve_series(name, color, data["times"], data["values"][:, position], quantity["digits"], points_per_curve))
+    return build_chart_options(series, data, show_legend)
+
+
+def build_chart_options(series, data, show_legend):
+    """
+    The ECharts options of a chart of curves (`build_curve_series`): time on x up to
+    `data["end_time"]`, the quantity on y (not from zero, widened to the relay lines of a
+    frequency chart), the lines of `build_guide_series` last, and a cross-hair whose labels give
+    the time and the value at the cursor. The two dataZoom components take no mouse input
+    themselves: the page zooms through them as Plotly does (a drag across, up or down, or a box; a
+    double-click goes back), and names the curve nearest the cursor (dynamics_view.py).
+    """
+    quantity = QUANTITIES[data["quantity"]]
+    digits = quantity["digits"]
+    series = series + [build_guide_series(data)]
     axis = {
         "axisLine": {"show": True, "lineStyle": {"color": theme.LINE_STRONG}},
         "axisTick": {"show": False},
@@ -777,3 +788,44 @@ def build_key_html(key):
     """The key of the curves' colours as HTML: a dot and a name each, the names escaped."""
     items = [f'<span class="dyn-key-item"><span class="dyn-key-dot" style="background:{color}"></span>{escape(name)}</span>' for color, name in key]
     return "".join(items)
+
+
+# ==================== A run's curve on the Compare page ====================
+def load_run_curve(path, files, summary, quantity, where, bus, extreme):
+    """
+    One run's curve on the Compare page (gui_plan.md, phase 14), read from its channel file:
+    the frequency (Hz) or the voltage (pu) of `bus` (`where` "bus"), or at each moment the lowest
+    (`extreme` "lowest") or the highest of the live buses on a side of the run's target
+    ("inside", "outside"), so the lowest point of the lowest is the side's simulated nadir. The
+    extreme is taken over every sample, before any thinning. Returns {"times", "values",
+    "event_time", "end_time", "relay_thresholds", "bus_name", "dead_count"}, or None when the
+    run has no channel at that bus or no live bus on that side. It reads the files, so call it
+    off the event loop; only the curve comes back.
+    """
+    data = load_dynamics(path, quantity, files, summary)
+    target = summary.get("target")
+    if where == "bus":
+        positions = [position for position, channel in enumerate(data["channels"]) if channel["bus"] == bus]
+        dead_count = 0
+    else:
+        positions = find_side_positions(data, target, where)
+        dead_count = len(find_side_positions(data, target, where, keep_dead=True)) - len(positions)
+    if not positions:
+        return None
+
+    values = data["values"][:, positions]
+    if where == "bus":
+        curve = values[:, 0]
+    elif extreme == "lowest":
+        curve = np.nanmin(values, axis=1)
+    else:
+        curve = np.nanmax(values, axis=1)
+    return {
+        "times": data["times"],
+        "values": curve,
+        "event_time": data["event_time"],
+        "end_time": data["end_time"],
+        "relay_thresholds": data["relay_thresholds"],
+        "bus_name": data["channels"][positions[0]]["bus_name"] if where == "bus" else "",
+        "dead_count": dead_count,
+    }

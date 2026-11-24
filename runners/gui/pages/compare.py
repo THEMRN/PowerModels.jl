@@ -10,18 +10,23 @@ comparison.py), so every browser tab shows the same runs.
   shed by zone or area.
 - Trade-off: each run is a point, its preemptive shed against its frequency margin (per
   island) and against its voltage margin, the figure of the proposal's "How much preparation
-  is enough". The two margins have different units, so they are two charts.
+  is enough". The two margins have different units, so they are two charts. Under them, the
+  dynamic response: one curve per run on one chart, a bus's frequency or voltage or the lowest
+  of a side's buses, read from the runs' channel files once the tab is shown.
 
 What the page says is comparison.py's business (`find_*`, `calc_*`), which draws nothing; this
-module draws it. The charts' colours are the group colours of the Network page.
+module draws it. The charts' colours are the group colours of the Network page. The chart of the
+dynamic response is built and zoomed as the Dynamics tab's (dynamics.py, dynamics_view.py).
 """
 
 from html import escape
 
-from nicegui import ui
+from nicegui import background_tasks, run, ui
 
 import comparison
+import dynamics
 import theme
+from components.dynamics_view import CHART_JS, CLEAR_JS, ZOOM_NOTE, build_script
 from network_view import GROUP_COLORS, OTHER_GROUP_COLOR
 
 # ==================== Settings ====================
@@ -43,6 +48,7 @@ NOT_VERIFIED_NOTE = (
     "A hollow point is a run whose voltage was not verified. Above the limit line, that is a run with an island "
     "that could not be checked, so its margin is that of the other islands only."
 )
+CURVE_WIDTH = 1.6                   # px, a run's curve on the chart of the dynamic response
 
 
 # ==================== The side by side table ====================
@@ -229,6 +235,29 @@ def describe_missing(names, what):
     return f"Not on this chart, {what}: {', '.join(names)}."
 
 
+# ==================== The dynamic response ====================
+def find_guide(curves, quantity):
+    """What the chart's lines come from: the trip and the relays' thresholds of the first run (the runs are of one case), and the latest end of a simulation."""
+    first = curves[0]
+    return {
+        "quantity": quantity,
+        "event_time": first["event_time"],
+        "end_time": max(curve["end_time"] for curve in curves),
+        "relay_thresholds": first["relay_thresholds"],
+    }
+
+
+def build_curves_chart(curves, guide):
+    """The options of the chart of the dynamic response: one curve per run in its colour, named in a legend, with the lines of the trip and the relays."""
+    digits = dynamics.QUANTITIES[guide["quantity"]]["digits"]
+    series = []
+    for curve in curves:
+        series.append(dynamics.build_curve_series(
+            curve["name"], curve["color"], curve["times"], curve["values"], digits, dynamics.MAX_POINTS, width=CURVE_WIDTH
+        ))
+    return dynamics.build_chart_options(series, guide, show_legend=True)
+
+
 # ==================== The page ====================
 class ComparePage:
     """The Compare page of one browser tab. It is drawn again whenever the list of runs changes."""
@@ -238,6 +267,11 @@ class ComparePage:
         self.compare = ctx.compare
         self.tab = "table"              # the tab on show
         self.source = "simulated"       # where the frequency margin comes from
+        self.curve_choice = {"quantity": "frequency", "where": "inside", "bus_text": ""}   # the dynamic response's choices, kept while the runs change
+        self.curve_runs = []            # the runs on its chart (comparison.find_curve_runs)
+        self.curve_refused = []         # the others, as (name, reason)
+        self.curves_started = False     # whether the curves of the runs on show were read
+        self.curve_reads = 0            # reads asked for; an older read that ends late is dropped
 
     def build(self):
         with theme.panel():
@@ -275,10 +309,14 @@ class ComparePage:
                 self._build_table(records)
             with ui.tab_panel("tradeoff"):
                 self._build_tradeoff(records)
+        if self.tab == "tradeoff":
+            self._start_curves()
 
     def _tab_changed(self, event):
         if event.value:
             self.tab = event.value
+        if self.tab == "tradeoff":
+            self._start_curves()
 
     # -------------------- side by side --------------------
     def _build_table(self, records):
@@ -322,6 +360,7 @@ class ComparePage:
                 theme.label("Frequency from the")
                 ui.toggle(SOURCE_LABELS, value=self.source, on_change=lambda event: self._source_changed(event, charts))
             charts()
+            self._build_curves(records)
 
     def _source_changed(self, event, charts):
         if event.value and event.value != self.source:
@@ -360,6 +399,130 @@ class ComparePage:
                     "The indicator threshold minus the worst indicator of the predicted island state. "
                     "It is the optimization's own check, not a result of the simulation."
                 )
+
+    # -------------------- the dynamic response --------------------
+    def _build_curves(self, records):
+        """The section Dynamic response: its choices, then one curve per run on one chart, read once the tab is shown (`_start_curves`)."""
+        drawn, not_drawn = comparison.find_curve_runs(records)
+        self.curve_runs, self.curve_refused = drawn, not_drawn
+        self.curves_started = False
+        self.curve_reads += 1           # a read of the runs before is dropped
+        self.places = comparison.find_curve_places(comparison.find_shared_target([entry["record"] for entry in drawn]))
+        where = self.curve_choice["where"] if self.curve_choice["where"] in self.places else next(iter(self.places))    # the choice stays for later runs
+        with ui.element("div").classes("curves-section"):
+            theme.eyebrow("Dynamic response")
+            if not drawn:
+                ui.label("No run here has curves to draw.").classes("tradeoff-none")
+                for name, reason in not_drawn:
+                    theme.hint(f"Not drawn, {name}: {reason}.")
+                return
+            with theme.line().classes("dyn-controls"):
+                theme.label("Quantity")
+                ui.toggle(comparison.CURVE_QUANTITIES, value=self.curve_choice["quantity"], on_change=self._curve_quantity_changed)
+                theme.label("Where" if len(self.places) > 1 else "Bus")
+                self.curve_where = ui.toggle(self.places, value=where, on_change=self._curve_where_changed)
+                self.curve_where.set_visibility(len(self.places) > 1)
+                self.curve_bus = ui.input(value=self.curve_choice["bus_text"], placeholder="bus number", on_change=self._curve_bus_changed)
+                self.curve_bus.props("debounce=500 clearable").classes("compare-bus")
+                self.curve_bus.set_visibility(where == "bus")
+            self.curve_note = theme.hint()
+            with ui.element("div").classes("curves-chart"):
+                self.curve_hovered = ui.label().classes("dyn-hovered dyn-key-line")     # the curve under the cursor
+                self.curve_box = ui.element("div").classes("dyn-plot-box")
+                self.curve_lines = theme.hint()
+                self.curve_cover = theme.Cover()
+            self.curve_missing = ui.element("div").classes("curves-missing")
+
+    def _start_curves(self):
+        """Read the runs' curves, the first time the Trade-off tab shows them."""
+        if self.curves_started or not self.curve_runs:
+            return
+        self.curves_started = True
+        self._read_curves()
+
+    def _read_curves(self):
+        self.curve_reads += 1
+        background_tasks.create(self._load_curves(self.curve_reads), name="read the runs' curves")
+
+    async def _load_curves(self, read):
+        """Read each run's curve off the event loop, one run after another, then draw them on one chart."""
+        quantity = self.curve_choice["quantity"]
+        where = self.curve_where.value
+        bus = None
+        if where == "bus":
+            text = (self.curve_bus.value or "").strip()
+            if not text:
+                self._draw_curves([], quantity, "Type a bus number to see its curve in every run.", self.curve_refused)
+                return
+            try:
+                bus = int(text)
+            except ValueError:
+                self._draw_curves([], quantity, "Bus: type one bus number.", self.curve_refused, bad=True)
+                return
+
+        curves, not_drawn, highest_runs, dead = [], list(self.curve_refused), [], False
+        for place, entry in enumerate(self.curve_runs):
+            self.curve_cover.show(f"Reading the channels of {entry['name']} ({place + 1} of {len(self.curve_runs)}) …")
+            summary = entry["record"]["summary"]
+            extreme = comparison.find_side_extreme(summary, where, quantity)
+            try:
+                curve = await run.io_bound(dynamics.load_run_curve, entry["path"], summary["files"], summary, quantity, where, bus, extreme)
+                reason = f"no channel at bus {bus}" if where == "bus" else "no bus on that side kept its power"
+            except Exception as error:      # a file cut short or not a channel file
+                curve, reason = None, f"its channel file could not be read ({error})"
+            if read != self.curve_reads or self.curve_box.is_deleted:
+                return
+            if curve is None:
+                not_drawn.append((entry["name"], reason))
+                continue
+            curves.append(dict(curve, name=entry["name"], color=entry["color"]))
+            if extreme == "highest":
+                highest_runs.append(entry["name"])
+            dead = dead or curve["dead_count"] > 0
+
+        note = ""
+        if curves:
+            bus_text = f"{bus} {curves[0]['bus_name']}".strip() if where == "bus" else ""
+            note = comparison.describe_curves(quantity, where, self.places, bus_text, len(curves), highest_runs, dead)
+        self._draw_curves(curves, quantity, note or "No run has a curve for this choice.", not_drawn)
+
+    def _draw_curves(self, curves, quantity, note, not_drawn, bad=False):
+        """The chart of `curves` (a new one each time) with `note` above it, or `note` alone without curves, and the runs not drawn under it."""
+        self.curve_cover.hide()
+        theme.show_hint(self.curve_note, note, bad=bad)
+        self.curve_box.clear()
+        self.curve_hovered.text = ""
+        self.curve_lines.text = ""
+        with self.curve_box:
+            if curves:
+                guide = find_guide(curves, quantity)
+                chart = ui.echart(build_curves_chart(curves, guide)).classes("dyn-plot")
+                ui.run_javascript(build_script(CHART_JS, chart, self.curve_hovered))
+                self.curve_lines.text = " ".join(text for text in (dynamics.describe_lines(guide), ZOOM_NOTE) if text)
+            else:
+                ui.run_javascript(build_script(CLEAR_JS, None, self.curve_hovered))
+        self.curve_missing.clear()
+        with self.curve_missing:
+            for name, reason in not_drawn:
+                theme.hint(f"Not drawn, {name}: {reason}.")
+
+    def _curve_quantity_changed(self, event):
+        if event.value is None or event.value == self.curve_choice["quantity"]:
+            return
+        self.curve_choice["quantity"] = event.value
+        self._read_curves()
+
+    def _curve_where_changed(self, event):
+        if event.value is None:
+            return
+        self.curve_choice["where"] = event.value
+        self.curve_bus.set_visibility(event.value == "bus")
+        self._read_curves()
+
+    def _curve_bus_changed(self, event):
+        self.curve_choice["bus_text"] = event.value or ""
+        if self.curve_where.value == "bus":
+            self._read_curves()
 
 
 def build(ctx):

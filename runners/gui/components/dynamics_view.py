@@ -30,15 +30,20 @@ MIN_DRAG_PX = 8                 # px, a drag shorter than this along an axis doe
 # the chart's last series holds the lines, not a curve):
 # - the curve nearest the cursor at its time (within NEAREST_PX) comes forward, the others pale,
 #   and its name goes into the label; ECharts names a curve only under an exact hover;
-# - a row of the statistics brings its bus's curve forward the same way;
+# - a row of the statistics shows its bus's curve alone, the others hidden rather than pale;
 # - a drag zooms as Plotly does: across the time, up or down the values, a box both (a side
 #   shorter than MIN_DRAG does not zoom its axis), through the chart's dataZoom 0 (time) and 1
-#   (values); a double-click shows the whole chart again.
+#   (values); while dragging, what it will zoom is greyed, between the lines of the edges it
+#   zooms; a double-click shows the whole chart again.
 CHART_JS = """
 (async () => {
+  // a drawing made while another page was shown is kept out of the document (with its label)
+  // until that page and its tab are on show, which may be much later: wait for it there, while
+  // the chart is among NiceGUI's elements
   let chart = null;
-  for (let attempt = 0; attempt < 100 && !chart; attempt++) {
-    await new Promise(resolve => setTimeout(resolve, 50));
+  for (let attempt = 0; !chart?.getDom().isConnected; attempt++) {
+    if (attempt >= 100 && !(CHART in mounted_app.elements)) return;      // drawn over, or never came
+    await new Promise(resolve => setTimeout(resolve, attempt < 100 ? 50 : 250));
     chart = getElement(CHART)?.chart;
   }
   const label = document.getElementById('ng-LABEL');      // plain elements: no Vue component to ask
@@ -48,19 +53,29 @@ CHART_JS = """
   const zr = chart.getZr();
   const curves = chart.getOption().series.slice(0, -1);
 
-  // one curve forward (-1: none), the others pale, and its name in the label
+  // one curve forward (-1: none), the others pale or hidden, and its name in the label
   let shown = -1;
-  const show = index => {
-    if (chart.isDisposed() || index === shown) return;
+  let hidden = false;     // the others hidden rather than pale
+  const pale = curves[0]?.blur?.lineStyle?.opacity;
+  let selected = {};      // curve name -> false while the legend hides it
+  const show = (index, hide = false) => {
+    if (chart.isDisposed() || (index === shown && (index < 0 || hide === hidden))) return;
     if (shown >= 0) chart.dispatchAction({type: 'downplay', seriesIndex: shown});
+    // the others' look changes only when a curve comes forward the other way (a redraw of every curve)
+    if (index >= 0 && hide !== hidden) {
+      chart.setOption({series: curves.map(() => ({blur: {lineStyle: {opacity: hide ? 0 : pale}}}))});
+      hidden = hide;
+    }
     if (index >= 0) chart.dispatchAction({type: 'highlight', seriesIndex: index});
     shown = index;
     label.textContent = index >= 0 ? curves[index].name : '';
   };
+  chart.on('legendselectchanged', params => { selected = params.selected; show(-1); });
   const findNearest = (x, y) => {
     const time = chart.convertFromPixel({gridIndex: 0}, [x, y])[0];
     let nearest = -1, nearestDistance = NEAREST_PX;
     curves.forEach((curve, index) => {
+      if (selected[curve.name] === false) return;
       const points = curve.data;
       let low = 0, high = points.length - 1;
       if (high < 1 || time < points[0][0] || time > points[high][0]) return;
@@ -73,12 +88,12 @@ CHART_JS = """
     return nearest;
   };
 
-  // a row of the statistics: its bus's curve forward (the first cell starts with the bus number)
+  // a row of the statistics: its bus's curve alone (the first cell starts with the bus number)
   if (stats) {
     stats.onmouseover = event => {
       const row = event.target.closest('tbody tr');
       const bus = row ? parseInt(row.cells[0].textContent, 10) : NaN;
-      show(curves.findIndex(curve => curve.name === 'bus ' + bus || curve.name.startsWith('bus ' + bus + ' ')));
+      show(curves.findIndex(curve => curve.name === 'bus ' + bus || curve.name.startsWith('bus ' + bus + ' ')), true);
     };
     stats.onmouseleave = () => show(-1);
   }
@@ -106,11 +121,13 @@ CHART_JS = """
   const onMove = event => {
     const box = findBox(findPoint(event));
     band.style.display = box.across || box.upDown ? 'block' : 'none';
+    band.classList.toggle('across', box.across);      // the lines at the edges it zooms
+    band.classList.toggle('up-down', box.upDown);
     Object.assign(band.style, {left: box.left + 'px', top: box.top + 'px', width: (box.right - box.left) + 'px', height: (box.bottom - box.top) + 'px'});
   };
   const onUp = event => {
-    document.removeEventListener('pointermove', onMove);
-    document.removeEventListener('pointerup', onUp);
+    document.removeEventListener('pointermove', onMove, true);
+    document.removeEventListener('pointerup', onUp, true);
     band.style.display = 'none';
     const box = findBox(findPoint(event));
     start = null;
@@ -123,12 +140,13 @@ CHART_JS = """
   zr.on('mousedown', event => {
     if (event.event.button !== 0 || !chart.containPixel({gridIndex: 0}, [event.offsetX, event.offsetY])) return;
     // no text selected on the page while dragging; ECharts listens to pointer events, and a
-    // prevented pointerdown fires no mouse events after it, so the drag follows pointer events
+    // prevented pointerdown fires no mouse events after it, so the drag follows pointer events;
+    // in the capture phase, since ECharts stops the moves of a drag over the chart on their way up
     event.event.preventDefault();
     start = [event.offsetX, event.offsetY];
     show(-1);
-    document.addEventListener('pointermove', onMove);
-    document.addEventListener('pointerup', onUp);
+    document.addEventListener('pointermove', onMove, true);
+    document.addEventListener('pointerup', onUp, true);
   });
   zr.on('dblclick', () => {
     chart.dispatchAction({type: 'dataZoom', dataZoomIndex: 0, start: 0, end: 100});
@@ -149,12 +167,12 @@ CLEAR_JS = """
 """
 
 
-def build_script(script, chart, label, stats):
-    """A script above with the NiceGUI ids of the chart, the name label and the statistics, and its settings, filled in."""
+def build_script(script, chart, label, stats=None):
+    """A script above with the NiceGUI ids of the chart, the name label and the statistics (a chart may have none), and its settings, filled in."""
     replacements = {
         "CHART": str(chart.id) if chart is not None else "",
         "LABEL": str(label.id),
-        "STATS": str(stats.id),
+        "STATS": str(stats.id) if stats is not None else "",
         "NEAREST_PX": str(NEAREST_CURVE_PX),
         "MIN_DRAG": str(MIN_DRAG_PX),
     }
@@ -305,7 +323,7 @@ class DynamicsView:
                         theme.fact(name, text)
                 theme.eyebrow("Furthest from 60 Hz")
                 theme.data_table(*dynamics.find_frequency_table(stats))
-                theme.hint("From the trip on, as the Frequency tab's simulated nadir. A row under the mouse brings its bus's curve forward.")
+                theme.hint("From the trip on, as the Frequency tab's simulated nadir. A row under the mouse shows its bus's curve alone.")
                 return
             with theme.facts():
                 for name, text in dynamics.find_voltage_facts(stats):
@@ -318,7 +336,7 @@ class DynamicsView:
                 theme.data_table(*dynamics.find_wtvsi_table(stats))
             theme.hint(
                 "Over the whole simulation, as voltage_stats.json and the report have them. "
-                "A row under the mouse brings its bus's curve forward."
+                "A row under the mouse shows its bus's curve alone."
             )
 
     # -------------------- the choices --------------------

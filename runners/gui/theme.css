@@ -884,13 +884,22 @@ body:has(#popup[aria-hidden="false"]) .q-page-container {
   height: 440px;
   cursor: crosshair;
 }
-.dyn-zoom-box {
+.dyn-zoom-box {                /* what a drag will zoom, greyed as Plotly does */
   position: absolute;
   z-index: 2;
   display: none;
-  border: 1px solid var(--accent);
-  background: rgba(37, 99, 235, 0.08);   /* the accent, faint */
+  box-sizing: border-box;
+  border: 0 solid var(--ink-2);
+  background: rgba(27, 33, 44, 0.15);    /* the ink, faint */
   pointer-events: none;
+}
+.dyn-zoom-box.across {          /* the time it zooms, between two vertical lines */
+  border-left-width: 1px;
+  border-right-width: 1px;
+}
+.dyn-zoom-box.up-down {         /* the values it zooms, between two horizontal lines */
+  border-top-width: 1px;
+  border-bottom-width: 1px;
 }
 .dyn-stats .data-table tbody tr:hover td {
   background: var(--well);
@@ -1778,6 +1787,30 @@ input[type="number"]::-webkit-outer-spin-button {
   border: 1px dashed var(--line-strong);
   border-radius: var(--radius);
   color: var(--ink-3);
+}
+/* the dynamic response under the trade-off: one curve per run, built and zoomed as the Dynamics tab's (.dyn-*) */
+.curves-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+.curves-chart {
+  position: relative;           /* for its wait cover */
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.compare-bus {
+  width: 130px;
+}
+.curves-missing {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 /* ==================== History page ==================== */
