@@ -312,7 +312,7 @@ class HistoryPage:
                     # no ring: it shows the Run page at once, whose form says what it waits for
                     self.load_button = theme.button("Load into Run", kind="primary", on_click=self._load_into_run)
                     self.load_button.tooltip("Or double-click the run, or press Enter")
-                    self.compare_button = theme.button("Add to compare", on_click=self._add_to_compare)
+                    self.compare_button = theme.button("Add to compare", kind="soft", on_click=self._add_to_compare)
                     with self.compare_button:
                         self.compare_tooltip = ui.tooltip()  # why this run cannot be compared, when it cannot
                     with theme.line():

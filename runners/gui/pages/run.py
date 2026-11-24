@@ -871,9 +871,9 @@ def build(ctx):
             summary = theme.toolbar_text()
             with summary:
                 summary_tooltip = ui.tooltip()  # all of it, when the line is cut
-            advanced_button = theme.button("Advanced", icon="sliders", kind="ghost")
-            batch_button = theme.button("Batch", icon="layers", kind="ghost")
-            queue_button = theme.button("Queue", icon="list", kind="ghost").classes("btn-queue")
+            advanced_button = theme.button("Advanced", icon="sliders", kind="soft")
+            batch_button = theme.button("Batch", icon="layers", kind="soft", tone="violet")
+            queue_button = theme.button("Queue", icon="list", kind="soft", tone="teal").classes("btn-queue")
             stop_button = theme.button("Stop", icon="stop", kind="danger")
             run_button = theme.button("Run", icon="play", kind="primary").classes("btn-run")
             with run_button:

@@ -758,9 +758,9 @@ class ResultsView:
                     theme.fact("Folder", Path(files["output_path"]).name).tooltip(files["output_path"])
                     theme.fact("Report", describe_report(record)).classes("" if files["report"] else "muted")
                 with theme.line():
-                    report_button = theme.button("Open report", on_click=lambda: open_report(files))
+                    report_button = theme.button("Open report", kind="soft", on_click=lambda: open_report(files))
                     report_button.set_enabled(bool(files["report"]))
-                    theme.button("Open folder", on_click=lambda: open_folder(files))
+                    theme.button("Open folder", kind="soft", on_click=lambda: open_folder(files))
 
     def _build_frequency_facts(self, summary):
         """Per island: the scheduled import against the limit that binds."""
@@ -865,7 +865,7 @@ class ResultsView:
             theme.show_hint(theme.hint(), missing, waiting=pending)
             if ufls is not None and ufls["status"] in ("not_reported", "no_record") and files["report"]:
                 with theme.line():
-                    theme.button("Open report", on_click=lambda: open_report(files))
+                    theme.button("Open report", kind="soft", on_click=lambda: open_report(files))
             return
 
         kind = ufls["group_kind"]
@@ -946,7 +946,7 @@ class ResultsView:
                     theme.fact("Indicator threshold", str(voltage["details"][0]["indicator_threshold"]))
             with theme.line():
                 details_button = theme.button(
-                    "Details", on_click=lambda: self.details.open(record, describe_run_name(record))
+                    "Details", kind="soft", on_click=lambda: self.details.open(record, describe_run_name(record))
                 )
                 details_button.set_enabled(bool(voltage["details"]))
                 theme.hint(
@@ -966,11 +966,11 @@ class ResultsView:
             with ui.element("div").classes("file-list"):
                 theme.fact_label("Folder")
                 ui.label(files["output_path"]).classes("file-name")
-                theme.button("Open", small=True, on_click=lambda: open_folder(files))
+                theme.button("Open", kind="soft", small=True, on_click=lambda: open_folder(files))
                 for key, label, name in find_file_rows(record["summary"]):
                     theme.fact_label(label)
                     ui.label(name or "not written").classes("file-name" if name else "fact-value muted")
                     open_button = theme.button(
-                        "Open", small=True, on_click=lambda key=key, name=name: open_file(files, key, name)
+                        "Open", kind="soft", small=True, on_click=lambda key=key, name=name: open_file(files, key, name)
                     )
                     open_button.set_enabled(bool(name))

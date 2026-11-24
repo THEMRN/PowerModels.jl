@@ -1,9 +1,10 @@
 /*
 Look of the Islanding GUI (see theme.py and gui_plan.md, "Look").
 
-A quiet, compact, light page: neutral greys, hairline borders, one accent colour, and green,
-amber and red only for state. NiceGUI draws with Quasar (Material Design); the second half of
-this file takes the Material look off the Quasar parts the GUI uses.
+A quiet, compact, light page: neutral greys, hairline borders, one accent colour with its soft
+tints, two more soft tones for a few buttons, and green, amber and red only for state. NiceGUI
+draws with Quasar (Material Design); the second half of this file takes the Material look off
+the Quasar parts the GUI uses.
 
 NiceGUI puts Quasar's rules in CSS layers, and this file is not in a layer, so a rule here wins
 over Quasar's whatever its selector. Only Quasar's `!important` rules need the `overrides`
@@ -25,10 +26,32 @@ layer, at the end of the file.
   --accent-hover: #1d4fd7;
   --accent-pressed: #1a44bd;
   --accent-ring: rgba(37, 99, 235, 0.18);
+  --accent-soft: #edf3fe;       /* soft tints of the accent: a soft button, an info line */
+  --accent-soft-hover: #e1ebfd;
+  --accent-soft-line: #cddbf8;
+  --accent-ink: #2350bd;        /* text on a soft tint, the chosen tab or segment */
+  --violet-soft: #f2effc;       /* two more soft tones, for buttons only (theme.button `tone`) */
+  --violet-soft-hover: #e9e4fa;
+  --violet-soft-line: #ddd5f6;
+  --violet-ink: #5a43b0;
+  --teal-soft: #e9f6f4;
+  --teal-soft-hover: #dcf0ec;
+  --teal-soft-line: #c5e6df;
+  --teal-ink: #136b5e;
   --ok: #1f9d5b;                /* state colours */
   --warn: #d48a06;
   --bad: #d1343f;
   --off: #a3aab5;
+  --ok-soft: #ebf7f0;           /* soft tints of the state colours: a pill, a note, a danger button */
+  --ok-line: #c3e5d0;
+  --ok-ink: #17703f;
+  --warn-soft: #fff8e8;
+  --warn-line: #f0d08c;
+  --warn-ink: #875a00;
+  --bad-soft: #fdf3f3;
+  --bad-soft-hover: #fbe7e8;
+  --bad-line: #f3cdd0;
+  --bad-ink: #a4232c;
   --control: 28px;              /* height of a field, a button, a segmented control */
   --radius: 6px;
   --font: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
@@ -479,24 +502,29 @@ body:has(#popup[aria-hidden="false"]) .q-page-container {
 .pill.clickable:hover {
   border-color: var(--line-strong);
 }
+.pill[data-state="ready"] {
+  background: var(--ok-soft);
+  border-color: var(--ok-line);
+  color: var(--ok-ink);
+}
 .pill[data-state="busy"] {
-  background: #fff8e8;
-  border-color: #f0d08c;
-  color: #875a00;
+  background: var(--warn-soft);
+  border-color: var(--warn-line);
+  color: var(--warn-ink);
 }
 .pill[data-state="crashed"] {
-  background: #fdf1f1;
-  border-color: #f1bfc3;
-  color: #a4232c;
+  background: var(--bad-soft);
+  border-color: var(--bad-line);
+  color: var(--bad-ink);
 }
 
 /* -------------------- Run page -------------------- */
 /* why the settings cannot run, under the toolbar */
 .problems {
   padding: 8px 14px;
-  border-top: 1px solid #f3cdd0;
-  background: #fdf3f3;
-  color: #a4232c;
+  border-top: 1px solid var(--bad-line);
+  background: var(--bad-soft);
+  color: var(--bad-ink);
   white-space: pre-line;
 }
 .problems:empty {
@@ -574,8 +602,8 @@ body:has(#popup[aria-hidden="false"]) .q-page-container {
   gap: 10px;
   min-height: 34px;
   padding: 3px 8px 3px 14px;
-  border-top: 1px solid var(--line);
-  background: var(--well);
+  border-top: 1px solid var(--accent-soft-line);
+  background: var(--accent-soft);
 }
 .modifications-text {
   flex: 1 1 0;
@@ -626,11 +654,12 @@ body:has(#popup[aria-hidden="false"]) .q-page-container {
 .q-btn.btn-run {
   min-width: 124px;
 }
-/* Queue, while the queue is paused: the amber of a state that waits for the user */
-.btn-ghost.btn-queue.queue-paused {
-  background: #fff8e8;
-  color: #875a00;
-  box-shadow: inset 0 0 0 1px #f0d08c;
+/* Queue, while the queue is paused: the amber of a state that waits for the user, in place of its tone */
+.btn-soft.btn-queue.queue-paused {
+  --tone-bg: var(--warn-soft);
+  --tone-bg-hover: #fdefcc;
+  --tone-line: var(--warn-line);
+  --tone-ink: var(--warn-ink);
 }
 
 /* -------------------- run queue dialog (components/queue_dialog.py) -------------------- */
@@ -640,9 +669,9 @@ body:has(#popup[aria-hidden="false"]) .q-page-container {
 /* why the queue is paused, over the runs that wait */
 .queue-note {
   padding: 8px 14px;
-  border-bottom: 1px solid #f0d08c;
-  background: #fff8e8;
-  color: #875a00;
+  border-bottom: 1px solid var(--warn-line);
+  background: var(--warn-soft);
+  color: var(--warn-ink);
 }
 .queue-note:empty {
   display: none;
@@ -787,8 +816,8 @@ body:has(#popup[aria-hidden="false"]) .q-page-container {
 /* a line over the tabs: the results are those of the solve, the simulation's come later */
 .results-note {
   padding: 8px 14px;
-  border-top: 1px solid var(--line);
-  background: var(--well);
+  border-top: 1px solid var(--accent-soft-line);
+  background: var(--accent-soft);
 }
 .results-tabs,
 .dialog-tabs {
@@ -1084,7 +1113,7 @@ body:has(#popup[aria-hidden="false"]) .q-page-container {
   white-space: nowrap;
 }
 .strip-warnings:not(.disabled) {
-  color: #8a5a00;
+  color: var(--warn-ink);
 }
 .strip-warnings .q-btn__content::before {
   content: "";
@@ -1191,18 +1220,57 @@ body:has(#popup[aria-hidden="false"]) .q-page-container {
   color: var(--ink-2);
 }
 .btn-ghost:not(.disabled):hover {
-  background: var(--hover);
-  color: var(--ink);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
 }
 .btn-ghost:not(.disabled):active {
-  background: var(--line);
+  background: var(--accent-soft-hover);
 }
+/* a soft button: a pale tint with dark text of the same hue, the accent's or a `tone-*` class's.
+   Only while it can be clicked: off, it is a plain outlined button, faded. */
+.btn-soft {
+  --tone-bg: var(--accent-soft);
+  --tone-bg-hover: var(--accent-soft-hover);
+  --tone-line: var(--accent-soft-line);
+  --tone-ink: var(--accent-ink);
+}
+.tone-violet {
+  --tone-bg: var(--violet-soft);
+  --tone-bg-hover: var(--violet-soft-hover);
+  --tone-line: var(--violet-soft-line);
+  --tone-ink: var(--violet-ink);
+}
+.tone-teal {
+  --tone-bg: var(--teal-soft);
+  --tone-bg-hover: var(--teal-soft-hover);
+  --tone-line: var(--teal-soft-line);
+  --tone-ink: var(--teal-ink);
+}
+.btn-soft:not(.disabled) {
+  background: var(--tone-bg);
+  color: var(--tone-ink);
+  box-shadow: inset 0 0 0 1px var(--tone-line);
+}
+.btn-soft:not(.disabled):hover {
+  background: var(--tone-bg-hover);
+  box-shadow: inset 0 0 0 1px var(--tone-line);
+}
+.btn-soft:not(.disabled):active {
+  background: var(--tone-bg-hover);
+  box-shadow: inset 0 0 0 1px var(--tone-ink);
+}
+/* danger: soft red while it can be clicked (Stop during a run), plain while it is off */
 .btn-danger:not(.disabled) {
-  color: var(--bad);
+  background: var(--bad-soft);
+  color: var(--bad-ink);
+  box-shadow: inset 0 0 0 1px var(--bad-line);
 }
 .btn-danger:not(.disabled):hover {
-  background: #fdf3f3;
+  background: var(--bad-soft-hover);
   box-shadow: inset 0 0 0 1px var(--bad);
+}
+.btn-danger:not(.disabled):active {
+  background: var(--bad-soft-hover);
 }
 .btn-icon {
   width: var(--control);
@@ -1250,7 +1318,7 @@ body:has(#popup[aria-hidden="false"]) .q-page-container {
 }
 .q-btn-toggle .q-btn[aria-pressed="true"] {
   background: var(--surface);
-  color: var(--ink);
+  color: var(--accent-ink);
   box-shadow: 0 0 0 1px rgba(16, 24, 40, 0.05), 0 1px 2px rgba(16, 24, 40, 0.14);
 }
 
@@ -1405,9 +1473,11 @@ input[type="number"]::-webkit-outer-spin-button {
 .q-header .q-tab {
   min-height: 44px;             /* the page tabs fill the top bar */
 }
-.q-tab:hover,
-.q-tab--active {
+.q-tab:hover {
   color: var(--ink);
+}
+.q-tab.q-tab--active {
+  color: var(--accent-ink);
 }
 .q-tab__label {
   font-size: 13px;

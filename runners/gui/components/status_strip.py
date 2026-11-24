@@ -185,7 +185,7 @@ class StatusStrip:
                 self.clock = ui.label().classes("strip-clock num")
                 self.warnings_button = theme.button("0 warnings", kind="ghost", small=True, on_click=self.open_warnings)
                 self.warnings_button.classes("strip-warnings").tooltip("Show the warning lines of this run")
-                theme.button("Full log", small=True, on_click=lambda: self.open_log()).tooltip("The whole raw output of this run")
+                theme.button("Full log", kind="soft", small=True, on_click=lambda: self.open_log()).tooltip("The whole raw output of this run")
             with theme.offstage():
                 self.timer = ui.timer(REFRESH_SECONDS, self._tick, active=False)
         self.room = ui.element("div").classes("strip-room")

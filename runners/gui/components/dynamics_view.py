@@ -213,7 +213,7 @@ class DynamicsView:
                 theme.show_hint(theme.hint(), missing, waiting=waiting)
                 if self.files.get("report"):
                     with theme.line():
-                        theme.button("Open report", on_click=open_report)
+                        theme.button("Open report", kind="soft", on_click=open_report)
                 return
 
             with theme.line().classes("dyn-controls"):

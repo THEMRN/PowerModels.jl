@@ -155,14 +155,14 @@ Decision 14. The look lives in `theme.py` and `theme.css` and nowhere else, so e
 
 **What it is:**
 - **Light and quiet.** A grey page, white panels with a hairline border, no shadows.
-- **One accent colour** (blue) for the main action, the chosen option and the focus ring. Green, amber and red only show a state.
+- **One accent colour** (blue) for the main action, the chosen option (a tab, a segment) and the focus ring, and its **soft tints** (a pale fill with dark text of the same hue) for the other actions of a panel or a toolbar and for a line that informs. Two more soft tones, violet and teal, only on buttons, tell the Run toolbar's tools apart. Green, amber and red only show a state, also as soft tints (the Julia pill, the problems line, a danger button). Colour stays a little: soft, never saturated, and not on row actions or crosses.
 - **Compact.** Text is 13 px in the system font (Segoe UI). Fields and buttons are 28 px high. A label stands left of its control, not above it and not floating inside it.
 - **Nothing leaves the machine.** No web font, no CDN.
 - **One bar on top:** the mark, the title, the page tabs, the Julia state pill, Restart Julia and Quit.
 
 **Rules for a page:**
 - **Build with the blocks of `theme.py`:** `panel`, `toolbar`, `sheet` and `Section`, `fields` with `label`, `stack`, `line`, `hint`, `eyebrow`, `button`, `State`, `FoldButton`, `dialog` (a dialog and its white box), `offstage` (a holder for timers, so they take no room), `data_table` (a table of numbers, as one element), `facts` with `fact` (a name and its value), `help_mark` (a "?" whose tooltip says how to use a page), `dim_unused` (settings the current choice does not read: dimmed, still editable), and for waiting `Cover`, `grey_out` and `show_hint(..., waiting=True)`. Plain `ui.select`, `ui.number`, `ui.input`, `ui.textarea`, `ui.checkbox` and `ui.toggle` get the look from the defaults set in `theme.setup()`. Give them no label argument; put a `theme.label` beside them.
-- **Buttons** come from `theme.button`: `primary` for the one main action of a page, `default`, `ghost` for secondary actions, `danger`.
+- **Buttons** come from `theme.button`: `primary` for the one main action of a page; `soft` (the accent's tint, or with `tone="violet"` or `"teal"`) for the other actions of a panel or a toolbar; `default` (plain, outlined) for Cancel and Pause beside a dialog's primary, where a tint would read as a second action; `ghost` for small and row actions and crosses (a soft blue on hover); `danger` (soft red). A soft or danger button has its colour only while it can be clicked; off, it is a plain button, faded. The results panel's Clear keeps its own soft yellow.
 - **No Quasar colours or spacing classes** (`color=...`, `text-grey`, `q-mt-md`, `bg-primary`): they are Material's palette and they carry `!important`. Use the variables and classes of `theme.css`, and add to that file when something is missing.
 - **Not used:** `ui.card`, `ui.expansion`, `ui.switch`, `ui.badge`, `ui.table` (Quasar's Material table; use `theme.data_table`), Material icon names. Use a panel, a `FoldButton`, a checkbox, a `State`, and the icons in `theme.ICONS` (add a path there for a new icon).
 - **No tooltip that explains a control** (the user, 2026-11-23: "you add a lot of useless tooltips, don't do that"). A button or a field with a label says what it is, and a plain close or remove cross needs no words. A tooltip is only for what the page does not show: why a control is off, or the whole of a text that is cut with "...". What needs explaining goes where it is read without hovering (a hint line), or is left out.
@@ -2439,3 +2439,23 @@ Test folders added: two runs in the older test folder `savnw_flow_shed_gui_test_
 - a side made of several islands.
 
 Test folders added: `ACTIVSg500_flow_shed_gui_test_cmp_pen0.5-2`, `_pen1.5-1.5`, `_pen2.5-1` and `_pen4-0.5`.
+
+**Soft colour (2026-11-23), at the user's request:** "a bit of coloring can help the app. like for buttons or other places, not too much though and also I like soft colors."
+
+*What changed:*
+- **Tokens (`theme.css`).** The accent has soft tints (`--accent-soft`, `--accent-soft-hover`, `--accent-soft-line`, `--accent-ink`), and two soft tones serve buttons only (`--violet-*`, `--teal-*`). The soft tints of the state colours (`--ok-*`, `--warn-*`, `--bad-*`) replace the values that were written out three or four times (the Julia pill, the problems line, the queue note, the paused Queue button). The recipe is that of the results panel's yellow Clear: a pale fill, dark text of the same hue and a 1 px line of the same hue.
+- **Buttons.** `theme.button` has the kind `soft` and the argument `tone` (`"violet"`, `"teal"`). A soft button reads its colours from `--tone-*`, which `.btn-soft` sets to the accent's and a `tone-*` class to its own. The paused Queue sets them to amber.
+  - Soft: the Run toolbar's Advanced (blue), Batch (violet) and Queue (teal), Open report and Open folder in the results panel and the Dynamics tab, the Files tab's Open, Details (voltage), Full log, Copy in the log dialog, Add to compare in History and Set penalty on the Network page.
+  - `danger` is soft red while it can be clicked (Stop during a run, Delete and Quit in their dialogs). Before, only its text was red.
+  - `ghost` turns soft blue on hover instead of grey.
+  - `default` stays plain for Cancel and the queue's Pause. A tinted Cancel beside the dialog's primary read as a second action.
+  - A soft or danger button that is off is a plain button, faded, so colour means "can be clicked".
+- **Other places.** The Julia pill is soft green when Julia is ready. The chosen tab (page tabs, results tabs, dialog tabs) and the chosen segment of a toggle have the accent's text. The line of network modifications and the note over the results tabs are soft blue.
+
+*How it was verified* (test instance on 8090, in a tab of its own): the values were tried by injecting a stylesheet into the page, then written and read after a restart.
+- **Run page.** Toolbar at rest and during a run (Stop soft red, Run turned "Add to queue"). The paused Queue's computed colours were the amber ones (`rgb(255, 248, 232)`, text `rgb(135, 90, 0)`). The results panel: the off Open report was plain, Open folder soft blue. The Files tab: soft Open on files that exist and plain on the others. Full log in the strip. A runs-table action turned blue on hover.
+- **Batch dialog.** Cancel stayed plain beside "Add 1 run to the queue".
+- **History.** Load into Run solid, Add to compare soft blue, the Julia pill soft green, the busy pill amber.
+- **Network.** Set penalty plain while nothing is selected and soft blue with zone SECOND selected.
+
+Test folder added: `savnw_flow_shed_gui_test_colors`.

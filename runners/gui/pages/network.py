@@ -108,7 +108,7 @@ class NetworkPage:
             self.clear_button = theme.button("Clear", kind="ghost", on_click=self._clear_selection)
         with theme.line():
             self.penalty_value = ui.number(placeholder="× λ", min=0).classes("field-penalty")
-            self.penalty_button = theme.button("Set penalty", on_click=self._set_penalty, busy=True)
+            self.penalty_button = theme.button("Set penalty", kind="soft", on_click=self._set_penalty, busy=True)
             with self.penalty_button:
                 self.penalty_tooltip = ui.tooltip()
 

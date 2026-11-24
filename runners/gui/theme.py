@@ -54,7 +54,14 @@ ICONS = {
     "list": f"M5 7h14M5 12h14M5 17h14@@{LINES}",
     "layers": f"M9 9h10v10H9zM5 15V5h10@@{LINES}",
 }
-BUTTON_KINDS = {"primary": "btn-primary", "default": "btn", "ghost": "btn-ghost", "danger": "btn btn-danger"}
+BUTTON_KINDS = {
+    "primary": "btn-primary",
+    "soft": "btn btn-soft",
+    "default": "btn",
+    "ghost": "btn-ghost",
+    "danger": "btn btn-danger",
+}
+BUTTON_TONES = ("violet", "teal")   # soft tones besides the accent's (theme.css, "tone-*")
 NO_VALUE = "–"                  # shown for a number that is not there
 BUSY_DELAY = 0.2                # s, a button's work shorter than this shows no turning ring (theme.css waits as long)
 
@@ -81,12 +88,15 @@ def apply_colors():
 
 
 # ==================== Building blocks ====================
-def button(text="", *, icon=None, kind="default", small=False, on_click=None, busy=False):
+def button(text="", *, icon=None, kind="default", tone=None, small=False, on_click=None, busy=False):
     """
-    A button. `kind`: "primary" (the main action of a page, one at most), "default" (outlined),
-    "ghost" (text only, for secondary actions) or "danger". `icon` is a name in ICONS. Without
-    text it is a square icon button, which needs a tooltip. `busy`: the click may take a while
-    (it waits for Julia), so the button turns into a ring while `on_click` runs (`busy_handler`).
+    A button. `kind`: "primary" (the main action of a page, one at most), "soft" (a pale tint of
+    the accent, for the other actions of a panel or a toolbar), "default" (outlined, plain: Cancel
+    and the other buttons beside a dialog's primary), "ghost" (text only, for small and row
+    actions) or "danger" (soft red). `tone` gives a soft button another hue, one of BUTTON_TONES.
+    A soft or danger button has its colour only while it can be clicked. `icon` is a name in ICONS.
+    Without text it is a square icon button. `busy`: the click may take a while (it waits for
+    Julia), so the button turns into a ring while `on_click` runs (`busy_handler`).
     """
     if busy and on_click is not None:
         element = ui.button(text, icon=ICONS[icon] if icon else None, color=None)
@@ -94,6 +104,10 @@ def button(text="", *, icon=None, kind="default", small=False, on_click=None, bu
     else:
         element = ui.button(text, icon=ICONS[icon] if icon else None, color=None, on_click=on_click)
     element.classes(BUTTON_KINDS[kind])
+    if tone is not None:
+        if kind != "soft" or tone not in BUTTON_TONES:
+            raise ValueError(f"tone {tone!r} needs kind 'soft' and one of {BUTTON_TONES}")
+        element.classes(f"tone-{tone}")
     if not text:
         element.classes("btn-icon")
     if small:

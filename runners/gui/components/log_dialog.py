@@ -29,7 +29,7 @@ class LogDialog:
                 self.count = theme.toolbar_text()
                 self.search = ui.input(placeholder="Only lines containing...", on_change=self._show_again)
                 self.search.props("debounce=250").classes("log-search")
-                theme.button("Copy", on_click=self._copy).tooltip("Copy the lines shown")
+                theme.button("Copy", kind="soft", on_click=self._copy).tooltip("Copy the lines shown")
                 theme.button(icon="close", kind="ghost", on_click=self.dialog.close)
             # the view starts at the end of the log and stays there while lines are added
             with ui.element("div").classes("log-view"):
